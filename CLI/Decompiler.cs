@@ -1422,7 +1422,7 @@ namespace CLI
             return highestByShader.Values.Select(x => x.FilePath).ToHashSet();
         }
 
-        private static void DumpContentFile(string path, ContentFile contentFile, bool dumpSubFiles = true)
+        private void DumpContentFile(string path, ContentFile contentFile, bool dumpSubFiles = true)
         {
             if (contentFile.Data != null)
             {
@@ -1431,20 +1431,39 @@ namespace CLI
 
             foreach (var additionalFile in contentFile.AdditionalFiles)
             {
-                DumpContentFile(Path.Combine(Path.GetDirectoryName(path)!, Path.GetFileName(additionalFile.FileName)), additionalFile);
+                DumpContentFile(ResolveContentOutputPath(additionalFile.FileName), additionalFile, dumpSubFiles);
             }
 
             if (dumpSubFiles)
             {
+                var relativeFolder = Path.GetDirectoryName(contentFile.FileName?.Replace('\\', '/')) ?? string.Empty;
+
                 foreach (var contentSubFile in contentFile.SubFiles)
                 {
                     var data = contentSubFile.Extract?.Invoke();
                     if (data != null)
                     {
-                        DumpFile(Path.Combine(Path.GetDirectoryName(path)!, contentSubFile.FileName), data);
+                        var subFileRelativeName = string.IsNullOrEmpty(relativeFolder)
+                            ? contentSubFile.FileName
+                            : $"{relativeFolder}/{contentSubFile.FileName}";
+
+                        DumpFile(ResolveContentOutputPath(subFileRelativeName), data);
                     }
                 }
             }
+        }
+
+        /// <summary>
+        /// Resolves where a content-relative asset path (e.g. "materials/default/foo.vtex") should be
+        /// written, relative to the output root, so that references inside the parent file stay valid.
+        /// </summary>
+        private string ResolveContentOutputPath(string contentRelativeName)
+        {
+            var baseFolder = Directory.Exists(OutputFile)
+                ? OutputFile!
+                : Path.GetDirectoryName(Path.GetFullPath(OutputFile!)) ?? OutputFile!;
+
+            return FileExtract.CombineOutputFolder(baseFolder, contentRelativeName).FullPath;
         }
 
         private static void DumpFile(string path, ReadOnlySpan<byte> data)

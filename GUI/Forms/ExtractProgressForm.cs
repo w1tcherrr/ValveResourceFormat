@@ -483,14 +483,14 @@ namespace GUI.Forms
                             fileNameOut = Path.GetFileName(fileNameOut);
                         }
 
-                        var outPath = CombineAssetFolder(path, fileNameOut);
-                        var outPathDirectory = Path.GetDirectoryName(outPath.Full);
+                        var outPath = FileExtract.CombineOutputFolder(path, fileNameOut);
+                        var outPathDirectory = Path.GetDirectoryName(outPath.FullPath);
                         if (outPathDirectory != null)
                         {
                             Directory.CreateDirectory(outPathDirectory);
                         }
-                        SetProgress($" + {outPath.Partial}");
-                        await File.WriteAllBytesAsync(outPath.Full, additionalFile.Data, cancellationTokenSource.Token).ConfigureAwait(false);
+                        SetProgress($" + {outPath.RelativePath}");
+                        await File.WriteAllBytesAsync(outPath.FullPath, additionalFile.Data, cancellationTokenSource.Token).ConfigureAwait(false);
                     }
 
                     var contentRelativeFolder = flatSubfiles ? string.Empty : Path.GetDirectoryName(fileNameOut) ?? string.Empty;
@@ -528,15 +528,15 @@ namespace GUI.Forms
             {
                 cancellationTokenSource.Token.ThrowIfCancellationRequested();
                 contentSubFile.FileName = Path.Combine(contentRelativeFolder, contentSubFile.FileName).Replace(Path.DirectorySeparatorChar, '/');
-                var outPath = CombineAssetFolder(path, contentSubFile.FileName);
+                var outPath = FileExtract.CombineOutputFolder(path, contentSubFile.FileName);
 
                 if (extractedFiles.Contains(contentSubFile.FileName))
                 {
-                    SetProgress($"  - {outPath.Partial}");
+                    SetProgress($"  - {outPath.RelativePath}");
                     continue;
                 }
 
-                var outPathDirectory = Path.GetDirectoryName(outPath.Full);
+                var outPathDirectory = Path.GetDirectoryName(outPath.FullPath);
                 if (outPathDirectory != null)
                 {
                     Directory.CreateDirectory(outPathDirectory);
@@ -564,32 +564,11 @@ namespace GUI.Forms
 
                 if (subFileData.Length > 0)
                 {
-                    SetProgress($"  + {outPath.Partial}");
+                    SetProgress($"  + {outPath.RelativePath}");
                     extractedFiles.Add(contentSubFile.FileName);
-                    await File.WriteAllBytesAsync(outPath.Full, subFileData, cancellationTokenSource.Token).ConfigureAwait(false);
+                    await File.WriteAllBytesAsync(outPath.FullPath, subFileData, cancellationTokenSource.Token).ConfigureAwait(false);
                 }
             }
-        }
-
-        private static (string Full, string Partial) CombineAssetFolder(string userFolder, string assetName)
-        {
-            var assetFolders = assetName.Split('/')[..^1];
-            var userFolders = userFolder.Split(Path.DirectorySeparatorChar);
-
-            var leftChop = 0;
-
-            foreach (var i in Enumerable.Range(0, assetFolders.Length))
-            {
-                if (Enumerable.SequenceEqual(
-                    assetFolders.Reverse().Skip(i),
-                    userFolders.Reverse().Take(assetFolders.Length - i)
-                ))
-                {
-                    leftChop = assetFolders.Reverse().Skip(i).Sum(static x => x.Length + 1);
-                }
-            }
-
-            return (Path.Combine(userFolder, assetName[leftChop..]), assetName[leftChop..]);
         }
 
         private void CancelButton_Click(object sender, EventArgs e)

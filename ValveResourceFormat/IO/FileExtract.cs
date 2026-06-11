@@ -1,4 +1,5 @@
 using System.IO;
+using System.Linq;
 using System.Text;
 using ValveKeyValue;
 using ValveResourceFormat.CompiledShader;
@@ -155,6 +156,37 @@ namespace ValveResourceFormat.IO
     /// </summary>
     public static class FileExtract
     {
+        /// <summary>
+        /// Combines an output folder with a content-relative asset path (e.g. "materials/default/foo.png"),
+        /// collapsing any overlap between the tail of the output folder and the head of the asset path.
+        /// Used when writing a <see cref="ContentFile"/> and its additional/sub files so their content-relative
+        /// folder structure is preserved on disk.
+        /// </summary>
+        /// <param name="outputFolder">The output folder to write into.</param>
+        /// <param name="assetName">The content-relative asset path.</param>
+        /// <returns>The full path to write to, and the content-relative portion that was appended.</returns>
+        public static (string FullPath, string RelativePath) CombineOutputFolder(string outputFolder, string assetName)
+        {
+            assetName = assetName.Replace('\\', '/');
+
+            var assetFolders = assetName.Split('/')[..^1];
+            var userFolders = outputFolder.Split(Path.DirectorySeparatorChar);
+
+            var leftChop = 0;
+            foreach (var i in Enumerable.Range(0, assetFolders.Length))
+            {
+                if (Enumerable.SequenceEqual(
+                    assetFolders.Reverse().Skip(i),
+                    userFolders.Reverse().Take(assetFolders.Length - i)))
+                {
+                    leftChop = assetFolders.Reverse().Skip(i).Sum(static x => x.Length + 1);
+                }
+            }
+
+            var relativePath = assetName[leftChop..];
+            return (Path.Combine(outputFolder, relativePath), relativePath);
+        }
+
         /// <summary>
         /// Extract content file from a compiled resource.
         /// </summary>

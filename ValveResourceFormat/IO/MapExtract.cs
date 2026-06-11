@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -1222,19 +1223,19 @@ public sealed class MapExtract
     }
 
     #region Entities
-    private void GatherEntitiesFromLump(EntityLump entityLump)
+    private List<CMapEntity> GatherEntitiesFromLump(EntityLump entityLump, EntityTransform? parentTransform = null)
     {
-        var lumpName = entityLump.Name;
-
-        foreach (var childLumpName in entityLump.GetChildEntityNames())
+        var childEntityLumps = new Dictionary<string, EntityLump>();
+        foreach (var childEntityName in entityLump.GetChildEntityNames())
         {
-            using var entityLumpResource = FileLoader.LoadFileCompiled(childLumpName);
-            if (entityLumpResource != null && entityLumpResource.DataBlock != null)
+            using var entityLumpResource = FileLoader.LoadFileCompiled(childEntityName);
+            if (entityLumpResource?.DataBlock is EntityLump childEntityLump)
             {
-                GatherEntitiesFromLump((EntityLump)entityLumpResource.DataBlock);
+                childEntityLumps.TryAdd(childEntityLump.Name, childEntityLump);
             }
         }
 
+        var addedEntities = new List<CMapEntity>();
         Dictionary<int, CMapSelectionSet> lineageSelectionSets = [];
 
         foreach (var compiledEntity in entityLump.GetEntities())
@@ -1260,6 +1261,19 @@ public sealed class MapExtract
 
             var mapEntity = new CMapEntity();
             var entityLineage = AddProperties(className, compiledEntity, mapEntity);
+            var entityTransform = EntityTransform.FromEntity(compiledEntity);
+            if (parentTransform is { } parent)
+            {
+                entityTransform = entityTransform.ComposeWith(parent);
+                ApplyTransform(mapEntity, entityTransform);
+
+                if (TryDeduplicateTemplateChild(mapEntity, entityTransform, out var existingEntity))
+                {
+                    addedEntities.Add(existingEntity);
+                    continue;
+                }
+            }
+
             if (entityLineage.Length > 1)
             {
                 for (var i = 0; i < entityLineage.Length; i++)
@@ -1299,6 +1313,20 @@ public sealed class MapExtract
                 }
             }
 
+            if (className == "point_template")
+            {
+                var entityLumpName = compiledEntity.GetStringProperty("entitylumpname");
+                if (entityLumpName != null && childEntityLumps.TryGetValue(entityLumpName, out var childEntityLump))
+                {
+                    var childEntities = GatherEntitiesFromLump(childEntityLump, entityTransform);
+                    AddTemplateEntityReferences(mapEntity, childEntities);
+                }
+                else
+                {
+                    ProgressReporter?.Report($"Failed to find child entity lump with name {entityLumpName}.");
+                }
+            }
+
             var rawModelName = compiledEntity.GetStringProperty("model");
             string? modelName = null;
             if (!string.IsNullOrEmpty(rawModelName))
@@ -1316,7 +1344,7 @@ public sealed class MapExtract
                         $"model = {modelName} {className} != {otherClass}");
                 }
 
-                ExtractEntityModel(mapEntity, compiledEntity, modelName);
+                ExtractEntityModel(mapEntity, modelName, entityTransform);
 
                 ReadOnlySpan<char> entityIdFull = Path.GetFileNameWithoutExtension(modelName);
                 var nameCutoff = entityIdFull.Length;
@@ -1351,10 +1379,117 @@ public sealed class MapExtract
             }
 
             MapDocument.World.Children.Add(mapEntity);
+            addedEntities.Add(mapEntity);
+        }
+
+        return addedEntities;
+    }
+
+    private static void ApplyTransform(MapNode mapNode, in EntityTransform transform)
+    {
+        mapNode.Origin = transform.Origin;
+        mapNode.Angles = ModelExtract.ToEulerAngles(transform.Rotation);
+        mapNode.Scales = transform.Scales;
+    }
+
+    private readonly Dictionary<string, List<(CMapEntity Entity, EntityTransform Transform)>> TemplateChildEntities = [];
+
+    /// <summary>
+    /// An entity referenced by multiple point_templates is cloned by the compiler into each
+    /// template's child entity lump. Such clones share their name and keyvalues, and their
+    /// lump-relative transforms compose back to the same world transform, so they can be
+    /// collapsed into the single entity the map was authored with.
+    /// </summary>
+    private bool TryDeduplicateTemplateChild(CMapEntity mapEntity, in EntityTransform transform, [NotNullWhen(true)] out CMapEntity? existingEntity)
+    {
+        existingEntity = null;
+
+        if (!mapEntity.EntityProperties.TryGetValue("targetname", out var targetnameValue)
+            || targetnameValue is not string targetname
+            || targetname.Length == 0)
+        {
+            return false;
+        }
+
+        if (!TemplateChildEntities.TryGetValue(targetname, out var candidates))
+        {
+            candidates = [];
+            TemplateChildEntities[targetname] = candidates;
+        }
+
+        foreach (var (candidate, candidateTransform) in candidates)
+        {
+            if (TransformsAlmostEqual(transform, candidateTransform) && EntityPropertiesEqual(candidate, mapEntity))
+            {
+                existingEntity = candidate;
+                return true;
+            }
+        }
+
+        candidates.Add((mapEntity, transform));
+        return false;
+    }
+
+    private static bool TransformsAlmostEqual(in EntityTransform a, in EntityTransform b)
+        => Vector3.Distance(a.Origin, b.Origin) < 0.01f
+            && Vector3.Distance(a.Scales, b.Scales) < 0.001f
+            && MathF.Abs(Quaternion.Dot(a.Rotation, b.Rotation)) > 0.999999f;
+
+    private static bool EntityPropertiesEqual(CMapEntity a, CMapEntity b)
+    {
+        if (a.EntityProperties.Count != b.EntityProperties.Count
+            || a.ConnectionsData.Count != b.ConnectionsData.Count)
+        {
+            return false;
+        }
+
+        foreach (var (key, value) in a.EntityProperties)
+        {
+            if (!b.EntityProperties.TryGetValue(key, out var otherValue) || !Equals(value, otherValue))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    internal readonly record struct EntityTransform(Vector3 Scales, Quaternion Rotation, Vector3 Origin)
+    {
+        public static EntityTransform FromEntity(Entity entity)
+        {
+            EntityTransformHelper.DecomposeTransformationMatrix(entity, out var scales, out var rotationMatrix, out var origin);
+            return new(scales, Quaternion.CreateFromRotationMatrix(rotationMatrix), origin);
+        }
+
+        /// <summary>
+        /// Composes this local transform with a parent transform component-wise, so the result is
+        /// always representable as origin/angles/scales on a map node. The shear that a non-uniform
+        /// parent scale would introduce on a rotated child cannot be represented and is dropped.
+        /// </summary>
+        public EntityTransform ComposeWith(in EntityTransform parent) => new(
+            Scales * parent.Scales,
+            Quaternion.Concatenate(Rotation, parent.Rotation),
+            Vector3.Transform(Origin * parent.Scales, parent.Rotation) + parent.Origin);
+    }
+
+    private static void AddTemplateEntityReferences(CMapEntity pointTemplate, List<CMapEntity> childEntities)
+    {
+        var templateIndex = 1;
+        foreach (var childEntity in childEntities)
+        {
+            if (!childEntity.EntityProperties.TryGetValue("targetname", out var targetName)
+                || targetName is not string targetNameString
+                || string.IsNullOrEmpty(targetNameString))
+            {
+                continue;
+            }
+
+            pointTemplate.EntityProperties[$"Template{templateIndex++:00}"] = targetNameString;
         }
     }
 
-    private void ExtractEntityModel(CMapEntity mapEntity, Entity compiledEntity, string modelName)
+    private void ExtractEntityModel(CMapEntity mapEntity, string modelName, in EntityTransform entityTransform)
     {
         using var model = FileLoader.LoadFileCompiled(modelName);
         if (model is null || model.DataBlock is null)
@@ -1373,7 +1508,7 @@ public sealed class MapExtract
 
         if (EntitiesToHammerMesh)
         {
-            var offset = EntityTransformHelper.CalculateTransformationMatrix(compiledEntity).Translation;
+            var offset = entityTransform.Origin;
 
             if (isJustPhysics)
             {

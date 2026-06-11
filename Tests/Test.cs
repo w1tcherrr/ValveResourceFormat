@@ -202,6 +202,7 @@ namespace Tests
         [
             "dota.vmap_c",
             "empty_data.vjs_c",
+            "point_template_test.vmap_c",
             "sbox_visualize_quad_overdraw.shader_c",
         ];
 
