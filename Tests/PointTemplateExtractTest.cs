@@ -198,8 +198,12 @@ namespace Tests
             AssertAngles((Datamodel.QAngle)crate["angles"]!, 0, 30, 0);
             AssertVector((Vector3)crate["scales"]!, Vector3.One);
 
+            // the authored Template01 keyvalue survives compilation (lowercased on export)
+            // and must remain the only template reference key
             var template = FindEntity("template_offset");
-            Assert.That(Properties(template)["Template01"], Is.EqualTo("crate_offset"));
+            var properties = Properties(template);
+            Assert.That(properties["template01"], Is.EqualTo("crate_offset"));
+            Assert.That(properties.Select(p => p.Key), Has.None.EqualTo("Template01"));
         }
 
         [Test]
@@ -218,18 +222,16 @@ namespace Tests
         }
 
         [Test]
-        public void NonUniformlyScaledTemplateExportsRepresentableTransform()
+        public void NonUniformlyScaledTemplateChildPlacementIsRestored()
         {
-            // composing the rotated child with the non-uniformly scaled template produces a
-            // sheared matrix that Matrix4x4.Decompose rejects; the export must not fail on it.
-            // The compiler stores the child offset without inverse-scaling it, while the export
-            // (like the renderer and gltf exporter) applies the full template transform,
-            // which is why the expected origin is not the authored (10, 20, 30)
+            // the compiler stores child transforms relative by template origin and rotation only,
+            // never by its scale, so composing must ignore the parent scale to restore the
+            // authored placement (a full TRS product would also shear, which Decompose rejects)
             var crate = FindEntity("crate_sheared");
 
-            AssertVector((Vector3)crate["origin"]!, new Vector3(10, 40, 30));
+            AssertVector((Vector3)crate["origin"]!, new Vector3(10, 20, 30));
             AssertAngles((Datamodel.QAngle)crate["angles"]!, 0, 45, 0);
-            AssertVector((Vector3)crate["scales"]!, new Vector3(1, 2, 1));
+            AssertVector((Vector3)crate["scales"]!, Vector3.One);
         }
 
         [Test]
@@ -244,8 +246,8 @@ namespace Tests
             AssertVector((Vector3)crates[0]["origin"]!, new Vector3(25, 25, 25));
             AssertAngles((Datamodel.QAngle)crates[0]["angles"]!, 0, 15, 0);
 
-            Assert.That(Properties(FindEntity("template_shared_a"))["Template01"], Is.EqualTo("crate_shared"));
-            Assert.That(Properties(FindEntity("template_shared_b"))["Template01"], Is.EqualTo("crate_shared"));
+            Assert.That(Properties(FindEntity("template_shared_a"))["template01"], Is.EqualTo("crate_shared"));
+            Assert.That(Properties(FindEntity("template_shared_b"))["template01"], Is.EqualTo("crate_shared"));
         }
 
         [Test]
@@ -255,19 +257,19 @@ namespace Tests
             AssertVector((Vector3)FindEntity("crate_multi_b")["origin"]!, new Vector3(310, -10, 0));
 
             var properties = Properties(FindEntity("template_multi"));
-            Assert.That(properties["Template01"], Is.EqualTo("crate_multi_a"));
-            Assert.That(properties["Template02"], Is.EqualTo("crate_multi_b"));
+            Assert.That(properties["template01"], Is.EqualTo("crate_multi_a"));
+            Assert.That(properties["template02"], Is.EqualTo("crate_multi_b"));
         }
 
         [Test]
-        public void ComposeWithMatchesMatrixProductWhenRepresentable()
+        public void ComposeWithMatchesMatrixProductForUnscaledParent()
         {
             var child = new MapExtract.EntityTransform(
                 new Vector3(0.5f),
                 Quaternion.CreateFromAxisAngle(Vector3.UnitZ, float.DegreesToRadians(30)),
                 new Vector3(10, 20, 30));
             var parent = new MapExtract.EntityTransform(
-                new Vector3(2f),
+                Vector3.One,
                 Quaternion.CreateFromAxisAngle(Vector3.UnitZ, float.DegreesToRadians(90)),
                 new Vector3(100, 0, 0));
 
@@ -287,25 +289,24 @@ namespace Tests
         }
 
         [Test]
-        public void ComposeWithNeverProducesShear()
+        public void ComposeWithIgnoresParentScale()
         {
+            // mirrors the compiler convention: child lump transforms are relative by the
+            // template's origin and rotation only, so parent scale must not leak into the child
             var child = new MapExtract.EntityTransform(
-                Vector3.One,
+                new Vector3(2, 2, 2),
                 Quaternion.CreateFromAxisAngle(Vector3.UnitZ, float.DegreesToRadians(45)),
                 new Vector3(64, 0, 0));
             var parent = new MapExtract.EntityTransform(
                 new Vector3(1, 2, 1),
-                Quaternion.Identity,
+                Quaternion.CreateFromAxisAngle(Vector3.UnitZ, float.DegreesToRadians(90)),
                 new Vector3(100, 200, 0));
-
-            var matrixProduct = TrsMatrix(child) * TrsMatrix(parent);
-            Assert.That(Matrix4x4.Decompose(matrixProduct, out _, out _, out _), Is.False);
 
             var composed = child.ComposeWith(parent);
 
-            AssertVector(composed.Origin, matrixProduct.Translation);
-            AssertVector(composed.Scales, new Vector3(1, 2, 1));
-            AssertVector(Vector3.Transform(Vector3.UnitX, composed.Rotation), new Vector3(0.7071f, 0.7071f, 0));
+            AssertVector(composed.Origin, new Vector3(100, 264, 0));
+            AssertVector(composed.Scales, new Vector3(2, 2, 2));
+            AssertVector(Vector3.Transform(Vector3.UnitX, composed.Rotation), new Vector3(-0.7071f, 0.7071f, 0));
         }
 
         private static Matrix4x4 TrsMatrix(MapExtract.EntityTransform transform)

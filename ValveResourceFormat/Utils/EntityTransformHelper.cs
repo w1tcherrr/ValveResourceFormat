@@ -56,6 +56,20 @@ namespace ValveResourceFormat.Utils
         }
 
         /// <summary>
+        /// Calculates the transformation matrix an entity passes on to template children.
+        /// Template child lumps store transforms relative to the template's origin and rotation
+        /// only — the template's scale never propagates.
+        /// </summary>
+        /// <param name="entity">The entity.</param>
+        /// <returns>The transformation matrix without the entity's scale.</returns>
+        public static Matrix4x4 CalculateRigidTransformationMatrix(Entity entity)
+        {
+            DecomposeTransformationMatrix(entity, out _, out var rotationMatrix, out var positionVector);
+
+            return rotationMatrix * Matrix4x4.CreateTranslation(positionVector);
+        }
+
+        /// <summary>
         /// Parses a string representation of a Vector2.
         /// </summary>
         /// <param name="input">The input string.</param>

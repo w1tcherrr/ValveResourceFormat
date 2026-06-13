@@ -96,7 +96,7 @@ namespace ValveResourceFormat.Renderer.World
                     {
                         Transform = matrix,
                         Tint = tintColor,
-                        LayerName = layerIndex > -1 ? LayerNames[layerIndex] : "No layer",
+                        LayerName = layerIndex > -1 ? LayerNames[layerIndex] : WorldLoader.NoLayerName,
                         Name = renderableModel,
                         LightingOrigin = lightingOrigin == defaultLightingOrigin ? null : lightingOrigin,
                         OverlayRenderOrder = overlayRenderOrder,
@@ -125,7 +125,7 @@ namespace ValveResourceFormat.Renderer.World
                     {
                         Transform = matrix,
                         Tint = tintColor,
-                        LayerName = layerIndex > -1 ? LayerNames[layerIndex] : "No layer",
+                        LayerName = layerIndex > -1 ? LayerNames[layerIndex] : WorldLoader.NoLayerName,
                         Name = renderable,
                         CubeMapPrecomputedHandshake = cubeMapPrecomputedHandshake,
                         LightProbeVolumePrecomputedHandshake = lightProbeVolumePrecomputedHandshake,

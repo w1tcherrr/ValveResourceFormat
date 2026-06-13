@@ -348,10 +348,12 @@ namespace ValveResourceFormat.IO
             ExportPhysicsIfAny(resourceName, fileName);
         }
 
-        private void LoadEntityMeshes(ModelRoot exportedModel, Scene scene, VEntityLump entityLump, Matrix4x4 parentTransform)
+        private void LoadEntityMeshes(ModelRoot exportedModel, Scene scene, VEntityLump entityLump, Matrix4x4 parentTransform,
+            Dictionary<string, VEntityLump>? childEntityLumps = null)
         {
+            // shared across the recursion: a nested template's child lump can be registered on an outer lump
+            childEntityLumps ??= [];
             var childEntities = entityLump.GetChildEntityNames();
-            var childEntityLumps = new Dictionary<string, VEntityLump>(childEntities.Length);
 
             foreach (var childEntityName in childEntities)
             {
@@ -365,7 +367,7 @@ namespace ValveResourceFormat.IO
                 var childLump = (VEntityLump)newResource.DataBlock!;
                 var childName = childLump.Name;
 
-                childEntityLumps.Add(childName, childLump);
+                childEntityLumps.TryAdd(childName, childLump);
             }
 
             foreach (var entity in entityLump.GetEntities())
@@ -402,15 +404,20 @@ namespace ValveResourceFormat.IO
                     }
                     else if (className == "point_template")
                     {
+                        // empty when the template has no compiled children (no slots, or unresolved references)
                         var entityLumpName = entity.GetStringProperty("entitylumpname");
 
-                        if (entityLumpName != null && childEntityLumps.TryGetValue(entityLumpName, out var childLump))
+                        if (!string.IsNullOrEmpty(entityLumpName))
                         {
-                            LoadEntityMeshes(exportedModel, scene, childLump, transform);
-                        }
-                        else
-                        {
-                            ProgressReporter?.Report($"Failed to find child entity lump with name {entityLumpName}.");
+                            if (childEntityLumps.TryGetValue(entityLumpName, out var childLump))
+                            {
+                                var childLumpTransform = EntityTransformHelper.CalculateRigidTransformationMatrix(entity) * parentTransform;
+                                LoadEntityMeshes(exportedModel, scene, childLump, childLumpTransform, childEntityLumps);
+                            }
+                            else
+                            {
+                                ProgressReporter?.Report($"Failed to find child entity lump with name {entityLumpName}.");
+                            }
                         }
                     }
 

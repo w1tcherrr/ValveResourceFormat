@@ -37,7 +37,7 @@ namespace ValveResourceFormat.Renderer.World
         public WorldNode? MainWorldNode { get; private set; }
 
         /// <summary>Layer names that should be visible by default, populated during loading.</summary>
-        public HashSet<string> DefaultEnabledLayers { get; } = ["No layer", "Entities", "Particles"];
+        public HashSet<string> DefaultEnabledLayers { get; } = [NoLayerName, EntitiesLayerName, ParticlesLayerName, TemplateEntitiesLayerName];
 
         /// <summary>Names of info_camera_link entities found in the world.</summary>
         public List<string> CameraNames { get; } = [];
@@ -214,7 +214,7 @@ namespace ValveResourceFormat.Renderer.World
                     continue;
                 }
 
-                LoadEntitiesFromLump(entityLump, "Entities", Matrix4x4.Identity);
+                LoadEntitiesFromLump(entityLump, EntitiesLayerName, Matrix4x4.Identity);
             }
 
             Action<List<SceneLight>> lightEntityStore = (scene.LightingInfo.LightmapVersionNumber, scene.LightingInfo.LightmapGameVersionNumber) switch
@@ -416,11 +416,18 @@ namespace ValveResourceFormat.Renderer.World
             || cls == "point_camera";
 
         internal const string ToolEntitiesLayerName = "Tool Entities";
+        internal const string TemplateEntitiesLayerName = "Template Entities";
+        internal const string NoLayerName = "No layer";
+        internal const string EntitiesLayerName = "Entities";
+        internal const string DisabledEntitiesLayerName = "Disabled Entities";
+        internal const string ParticlesLayerName = "Particles";
 
-        private void LoadEntitiesFromLump(EntityLump entityLump, string originalLayerName, Matrix4x4 parentTransform)
+        private void LoadEntitiesFromLump(EntityLump entityLump, string originalLayerName, Matrix4x4 parentTransform,
+            Dictionary<string, EntityLump>? childEntityLumps = null)
         {
+            // shared across the recursion: a nested template's child lump can be registered on an outer lump
+            childEntityLumps ??= [];
             var childEntities = entityLump.GetChildEntityNames();
-            var childEntityLumps = new Dictionary<string, EntityLump>(childEntities.Length);
 
             foreach (var childEntityName in childEntities)
             {
@@ -440,7 +447,7 @@ namespace ValveResourceFormat.Renderer.World
 
                 var childName = childLump.Name;
 
-                childEntityLumps.Add(childName, childLump);
+                childEntityLumps.TryAdd(childName, childLump);
             }
 
             static bool IsCubemapOrProbe(string cls)
@@ -484,9 +491,9 @@ namespace ValveResourceFormat.Renderer.World
                     disabled = !entity.GetBooleanProperty("enabled", true);
                 }
 
-                if (disabled && layerName == "Entities")
+                if (disabled && layerName == EntitiesLayerName)
                 {
-                    layerName = "Disabled Entities";
+                    layerName = DisabledEntitiesLayerName;
                 }
 
                 if (classname == "info_world_layer")
@@ -514,15 +521,20 @@ namespace ValveResourceFormat.Renderer.World
                 }
                 else if (classname == "point_template")
                 {
+                    // empty when the template has no compiled children (no slots, or unresolved references)
                     var entityLumpName = entity.GetStringProperty("entitylumpname");
 
-                    if (entityLumpName != null && childEntityLumps.TryGetValue(entityLumpName, out var childLump))
+                    if (!string.IsNullOrEmpty(entityLumpName))
                     {
-                        LoadEntitiesFromLump(childLump, entityLumpName, transformationMatrix);
-                    }
-                    else
-                    {
-                        RendererContext.Logger.LogWarning("Failed to find child entity lump with name {EntityLumpName}", entityLumpName);
+                        if (childEntityLumps.TryGetValue(entityLumpName, out var childLump))
+                        {
+                            var childLumpTransform = EntityTransformHelper.CalculateRigidTransformationMatrix(entity) * parentTransform;
+                            LoadEntitiesFromLump(childLump, TemplateEntitiesLayerName, childLumpTransform, childEntityLumps);
+                        }
+                        else
+                        {
+                            RendererContext.Logger.LogWarning("Failed to find child entity lump with name {EntityLumpName}", entityLumpName);
+                        }
                     }
                 }
                 else if (classname == "env_sky" || classname == "env_global_light")
@@ -926,7 +938,7 @@ namespace ValveResourceFormat.Renderer.World
                             {
                                 Name = particle,
                                 Transform = Matrix4x4.CreateTranslation(origin),
-                                LayerName = "Particles",
+                                LayerName = ParticlesLayerName,
                                 EntityData = entity,
                             };
 
@@ -1250,7 +1262,7 @@ namespace ValveResourceFormat.Renderer.World
 
             foreach (var node in SkyboxScene.AllNodes)
             {
-                if (node.LayerName == "Tool Entities")
+                if (node.LayerName == ToolEntitiesLayerName)
                 {
                     node.Transform *= offsetTransform;
                 }
