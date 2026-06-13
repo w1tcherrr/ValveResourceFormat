@@ -1242,7 +1242,7 @@ public sealed class MapExtract
         }
     }
 
-    private void GatherEntitiesFromLump(EntityLump entityLump, EntityTransform? parentTransform)
+    private void GatherEntitiesFromLump(EntityLump entityLump, Matrix4x4? parentTransform)
     {
         foreach (var childEntityName in entityLump.GetChildEntityNames())
         {
@@ -1278,11 +1278,15 @@ public sealed class MapExtract
 
             var mapEntity = new CMapEntity();
             var entityLineage = AddProperties(className, compiledEntity, mapEntity);
-            var entityTransform = EntityTransform.FromEntity(compiledEntity);
-            if (parentTransform is { } parent)
+            var localTransform = EntityTransformHelper.CalculateTransformationMatrix(compiledEntity);
+            var worldTransform = parentTransform is { } parent ? localTransform * parent : localTransform;
+            if (parentTransform is not null)
             {
-                entityTransform = entityTransform.ComposeWith(parent);
-                ApplyTransform(mapEntity, entityTransform);
+                // the composed parent is rigid (origin + rotation only), so this never shears and decompose always succeeds
+                _ = Matrix4x4.Decompose(worldTransform, out var scales, out var rotation, out var translation);
+                mapEntity.Origin = translation;
+                mapEntity.Angles = ModelExtract.ToEulerAngles(rotation);
+                mapEntity.Scales = scales;
 
                 if (TryDeduplicateTemplateChild(compiledEntity))
                 {
@@ -1337,7 +1341,8 @@ public sealed class MapExtract
                 {
                     if (ChildEntityLumps.Remove(entityLumpName, out var childEntityLump))
                     {
-                        GatherEntitiesFromLump(childEntityLump, entityTransform);
+                        var childLumpTransform = EntityTransformHelper.CalculateRigidTransformationMatrix(compiledEntity) * (parentTransform ?? Matrix4x4.Identity);
+                        GatherEntitiesFromLump(childEntityLump, childLumpTransform);
                     }
                     else
                     {
@@ -1363,7 +1368,7 @@ public sealed class MapExtract
                         $"model = {modelName} {className} != {otherClass}");
                 }
 
-                ExtractEntityModel(mapEntity, modelName, entityTransform);
+                ExtractEntityModel(mapEntity, modelName, worldTransform.Translation);
 
                 ReadOnlySpan<char> entityIdFull = Path.GetFileNameWithoutExtension(modelName);
                 var nameCutoff = entityIdFull.Length;
@@ -1401,13 +1406,6 @@ public sealed class MapExtract
         }
     }
 
-    private static void ApplyTransform(MapNode mapNode, in EntityTransform transform)
-    {
-        mapNode.Origin = transform.Origin;
-        mapNode.Angles = ModelExtract.ToEulerAngles(transform.Rotation);
-        mapNode.Scales = transform.Scales;
-    }
-
     private readonly HashSet<string> TemplateChildEntities = [];
 
     /// <summary>
@@ -1426,26 +1424,7 @@ public sealed class MapExtract
         return !TemplateChildEntities.Add(hammerUniqueId);
     }
 
-    internal readonly record struct EntityTransform(Vector3 Scales, Quaternion Rotation, Vector3 Origin)
-    {
-        public static EntityTransform FromEntity(Entity entity)
-        {
-            EntityTransformHelper.DecomposeTransformationMatrix(entity, out var scales, out var rotationMatrix, out var origin);
-            return new(scales, Quaternion.CreateFromRotationMatrix(rotationMatrix), origin);
-        }
-
-        /// <summary>
-        /// Composes this local transform with a parent transform the way the map compiler stores
-        /// template children: relative by origin and rotation only. The parent scale does not
-        /// affect the child's origin or scales, so the authored placement round-trips exactly.
-        /// </summary>
-        public EntityTransform ComposeWith(in EntityTransform parent) => new(
-            Scales,
-            Quaternion.Concatenate(Rotation, parent.Rotation),
-            Vector3.Transform(Origin, parent.Rotation) + parent.Origin);
-    }
-
-    private void ExtractEntityModel(CMapEntity mapEntity, string modelName, in EntityTransform entityTransform)
+    private void ExtractEntityModel(CMapEntity mapEntity, string modelName, Vector3 offset)
     {
         using var model = FileLoader.LoadFileCompiled(modelName);
         if (model is null || model.DataBlock is null)
@@ -1464,8 +1443,6 @@ public sealed class MapExtract
 
         if (EntitiesToHammerMesh)
         {
-            var offset = entityTransform.Origin;
-
             if (isJustPhysics)
             {
                 var phys = data.GetEmbeddedPhys();

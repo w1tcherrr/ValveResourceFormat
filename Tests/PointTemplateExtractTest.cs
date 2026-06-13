@@ -261,59 +261,6 @@ namespace Tests
             Assert.That(properties["template02"], Is.EqualTo("crate_multi_b"));
         }
 
-        [Test]
-        public void ComposeWithMatchesMatrixProductForUnscaledParent()
-        {
-            var child = new MapExtract.EntityTransform(
-                new Vector3(0.5f),
-                Quaternion.CreateFromAxisAngle(Vector3.UnitZ, float.DegreesToRadians(30)),
-                new Vector3(10, 20, 30));
-            var parent = new MapExtract.EntityTransform(
-                Vector3.One,
-                Quaternion.CreateFromAxisAngle(Vector3.UnitZ, float.DegreesToRadians(90)),
-                new Vector3(100, 0, 0));
-
-            var composed = child.ComposeWith(parent);
-
-            var matrixProduct = TrsMatrix(child) * TrsMatrix(parent);
-            Assert.That(Matrix4x4.Decompose(matrixProduct, out var scales, out var rotation, out var translation), Is.True);
-
-            AssertVector(composed.Origin, translation);
-            AssertVector(composed.Scales, scales);
-            if (Quaternion.Dot(composed.Rotation, rotation) < 0)
-            {
-                rotation = -rotation;
-            }
-
-            Assert.That((composed.Rotation - rotation).Length(), Is.LessThan(Tolerance));
-        }
-
-        [Test]
-        public void ComposeWithIgnoresParentScale()
-        {
-            // mirrors the compiler convention: child lump transforms are relative by the
-            // template's origin and rotation only, so parent scale must not leak into the child
-            var child = new MapExtract.EntityTransform(
-                new Vector3(2, 2, 2),
-                Quaternion.CreateFromAxisAngle(Vector3.UnitZ, float.DegreesToRadians(45)),
-                new Vector3(64, 0, 0));
-            var parent = new MapExtract.EntityTransform(
-                new Vector3(1, 2, 1),
-                Quaternion.CreateFromAxisAngle(Vector3.UnitZ, float.DegreesToRadians(90)),
-                new Vector3(100, 200, 0));
-
-            var composed = child.ComposeWith(parent);
-
-            AssertVector(composed.Origin, new Vector3(100, 264, 0));
-            AssertVector(composed.Scales, new Vector3(2, 2, 2));
-            AssertVector(Vector3.Transform(Vector3.UnitX, composed.Rotation), new Vector3(-0.7071f, 0.7071f, 0));
-        }
-
-        private static Matrix4x4 TrsMatrix(MapExtract.EntityTransform transform)
-            => Matrix4x4.CreateScale(transform.Scales)
-                * Matrix4x4.CreateFromQuaternion(transform.Rotation)
-                * Matrix4x4.CreateTranslation(transform.Origin);
-
         private static DMElement Properties(DMElement entity)
             => (DMElement)entity["entity_properties"]!;
 
