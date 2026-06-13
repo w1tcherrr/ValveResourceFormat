@@ -172,14 +172,15 @@ namespace ValveResourceFormat.IO
             var assetFolders = assetName.Split('/')[..^1];
             var userFolders = outputFolder.Split(Path.DirectorySeparatorChar);
 
+            var assetFoldersReversed = assetFolders.Reverse().ToArray();
+            var userFoldersReversed = userFolders.Reverse().ToArray();
+
             var leftChop = 0;
-            foreach (var i in Enumerable.Range(0, assetFolders.Length))
+            for (var i = 0; i < assetFolders.Length; i++)
             {
-                if (Enumerable.SequenceEqual(
-                    assetFolders.Reverse().Skip(i),
-                    userFolders.Reverse().Take(assetFolders.Length - i)))
+                if (assetFoldersReversed.Skip(i).SequenceEqual(userFoldersReversed.Take(assetFolders.Length - i)))
                 {
-                    leftChop = assetFolders.Reverse().Skip(i).Sum(static x => x.Length + 1);
+                    leftChop = assetFoldersReversed.Skip(i).Sum(static x => x.Length + 1);
                 }
             }
 

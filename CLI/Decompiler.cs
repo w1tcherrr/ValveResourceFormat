@@ -1459,9 +1459,8 @@ namespace CLI
         /// </summary>
         private string ResolveContentOutputPath(string contentRelativeName)
         {
-            var baseFolder = Directory.Exists(OutputFile)
-                ? OutputFile!
-                : Path.GetDirectoryName(Path.GetFullPath(OutputFile!)) ?? OutputFile!;
+            var output = OutputFile!;
+            var baseFolder = Directory.Exists(output) ? output : Path.GetDirectoryName(Path.GetFullPath(output)) ?? output;
 
             return FileExtract.CombineOutputFolder(baseFolder, contentRelativeName).FullPath;
         }

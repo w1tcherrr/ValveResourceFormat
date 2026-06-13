@@ -37,7 +37,7 @@ namespace ValveResourceFormat.Renderer.World
         public WorldNode? MainWorldNode { get; private set; }
 
         /// <summary>Layer names that should be visible by default, populated during loading.</summary>
-        public HashSet<string> DefaultEnabledLayers { get; } = [NoLayerName, EntitiesLayerName, ParticlesLayerName, TemplateEntitiesLayerName];
+        public HashSet<string> DefaultEnabledLayers { get; } = ["No layer", "Entities", "Particles", "Template Entities"];
 
         /// <summary>Names of info_camera_link entities found in the world.</summary>
         public List<string> CameraNames { get; } = [];
@@ -214,7 +214,7 @@ namespace ValveResourceFormat.Renderer.World
                     continue;
                 }
 
-                LoadEntitiesFromLump(entityLump, EntitiesLayerName, Matrix4x4.Identity);
+                LoadEntitiesFromLump(entityLump, "Entities", Matrix4x4.Identity);
             }
 
             Action<List<SceneLight>> lightEntityStore = (scene.LightingInfo.LightmapVersionNumber, scene.LightingInfo.LightmapGameVersionNumber) switch
@@ -416,11 +416,6 @@ namespace ValveResourceFormat.Renderer.World
             || cls == "point_camera";
 
         internal const string ToolEntitiesLayerName = "Tool Entities";
-        internal const string TemplateEntitiesLayerName = "Template Entities";
-        internal const string NoLayerName = "No layer";
-        internal const string EntitiesLayerName = "Entities";
-        internal const string DisabledEntitiesLayerName = "Disabled Entities";
-        internal const string ParticlesLayerName = "Particles";
 
         private void LoadEntitiesFromLump(EntityLump entityLump, string originalLayerName, Matrix4x4 parentTransform,
             Dictionary<string, EntityLump>? childEntityLumps = null)
@@ -491,9 +486,9 @@ namespace ValveResourceFormat.Renderer.World
                     disabled = !entity.GetBooleanProperty("enabled", true);
                 }
 
-                if (disabled && layerName == EntitiesLayerName)
+                if (disabled && layerName == "Entities")
                 {
-                    layerName = DisabledEntitiesLayerName;
+                    layerName = "Disabled Entities";
                 }
 
                 if (classname == "info_world_layer")
@@ -529,7 +524,7 @@ namespace ValveResourceFormat.Renderer.World
                         if (childEntityLumps.TryGetValue(entityLumpName, out var childLump))
                         {
                             var childLumpTransform = EntityTransformHelper.CalculateRigidTransformationMatrix(entity) * parentTransform;
-                            LoadEntitiesFromLump(childLump, TemplateEntitiesLayerName, childLumpTransform, childEntityLumps);
+                            LoadEntitiesFromLump(childLump, "Template Entities", childLumpTransform, childEntityLumps);
                         }
                         else
                         {
@@ -938,7 +933,7 @@ namespace ValveResourceFormat.Renderer.World
                             {
                                 Name = particle,
                                 Transform = Matrix4x4.CreateTranslation(origin),
-                                LayerName = ParticlesLayerName,
+                                LayerName = "Particles",
                                 EntityData = entity,
                             };
 
@@ -1262,7 +1257,7 @@ namespace ValveResourceFormat.Renderer.World
 
             foreach (var node in SkyboxScene.AllNodes)
             {
-                if (node.LayerName == ToolEntitiesLayerName)
+                if (node.LayerName == "Tool Entities")
                 {
                     node.Transform *= offsetTransform;
                 }
