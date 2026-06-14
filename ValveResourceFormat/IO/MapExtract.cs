@@ -54,13 +54,15 @@ public sealed class MapExtract
     private CMapRootElement MapDocument { get; set; } = [];
     private List<CMapRootElement> AdditionalMapDocuments { get; set; } = [];
 
-    // flat (un-nested) entities gathered for instance reconstruction; a compile_source_id shared by
-    // several of them marks copies of one authored source, rebuilt as a CMapGroup + CMapInstance set
-    private readonly List<GatheredEntity> FlatEntities = [];
+    // every map entity, gathered before emission so instance reconstruction can run across all of them:
+    // a compile_source_id shared by several entities marks copies of one authored source object, which
+    // are rebuilt as a CMapGroup + one CMapInstance per placement
+    private readonly List<GatheredEntity> GatheredEntities = [];
 
     private sealed class GatheredEntity
     {
         public required CMapEntity MapEntity { get; init; }
+        public required int[] Lineage { get; init; }
         public required int SourceId { get; init; }
     }
 
@@ -394,7 +396,7 @@ public sealed class MapExtract
         datamodel.PrefixAttributes.Add("map_asset_references", AssetReferences);
         datamodel.Root = MapDocument = [];
 
-        FlatEntities.Clear();
+        GatheredEntities.Clear();
 
         CreateSelectionSets(MapDocument.RootSelectionSet);
 
@@ -444,7 +446,7 @@ public sealed class MapExtract
             }
         }
 
-        EmitFlatEntities();
+        EmitGatheredEntities();
 
         //convert phys to hammer meshes
         if (phys != null)
@@ -959,7 +961,7 @@ public sealed class MapExtract
                 }
 
                 propStatic.Origin = translation;
-                propStatic.Angles = ModelExtract.ToEulerAngles(rotation);
+                propStatic.Angles = EntityTransformHelper.ToEulerAngles(rotation);
                 propStatic.Scales = scales;
             }
 
@@ -1132,7 +1134,7 @@ public sealed class MapExtract
                     }
 
                     instance.Origin = translation;
-                    var angles = ModelExtract.ToEulerAngles(rotation);
+                    var angles = EntityTransformHelper.ToEulerAngles(rotation);
                     instance.Angles = angles;
                     instance.Scales = scales;
 
@@ -1249,8 +1251,6 @@ public sealed class MapExtract
             }
         }
 
-        Dictionary<int, CMapSelectionSet> lineageSelectionSets = [];
-
         foreach (var compiledEntity in entityLump.GetEntities())
         {
             var className = compiledEntity.GetStringProperty("classname");
@@ -1274,44 +1274,6 @@ public sealed class MapExtract
 
             var mapEntity = new CMapEntity();
             var (entityLineage, sourceId) = AddProperties(className, compiledEntity, mapEntity);
-            if (entityLineage.Length > 1)
-            {
-                for (var i = 0; i < entityLineage.Length; i++)
-                {
-                    var lineage = entityLineage[i];
-
-                    CMapSelectionSet selectionSet;
-
-                    if (lineageSelectionSets.TryGetValue(lineage, out var value))
-                    {
-                        selectionSet = value;
-                    }
-                    else
-                    {
-                        selectionSet = new CMapSelectionSet
-                        {
-                            Name = lineage.ToString(CultureInfo.InvariantCulture),
-                            SelectionSetName = lineage.ToString(CultureInfo.InvariantCulture)
-                        };
-                        lineageSelectionSets.Add(lineage, selectionSet);
-
-                        if (i == 0)
-                        {
-                            EntitiesSelectionSet?.Children.Add(selectionSet);
-                        }
-                        else
-                        {
-                            var parentSelectionSet = lineageSelectionSets[entityLineage[i - 1]];
-                            parentSelectionSet.Children.Add(selectionSet);
-                        }
-                    }
-
-                    if (i == entityLineage.Length - 1)
-                    {
-                        selectionSet.SelectionSetData.SelectedObjects.Add(mapEntity);
-                    }
-                }
-            }
 
             var rawModelName = compiledEntity.GetStringProperty("model");
             string? modelName = null;
@@ -1364,49 +1326,94 @@ public sealed class MapExtract
                 mapEntity.WithProperty("snapshot_mesh", "0");
             }
 
-            // lineaged (prefab-baked) entities keep the selection-set grouping above; flat entities are
-            // held back so copies sharing a compile_source_id can be rebuilt as instances
-            if (entityLineage.Length > 1)
+            // every entity is held back; placement (instance, prefab selection-set, or flat) is decided
+            // once in EmitGatheredEntities after all lumps are read
+            GatheredEntities.Add(new GatheredEntity
             {
-                MapDocument.World.Children.Add(mapEntity);
-            }
-            else
-            {
-                FlatEntities.Add(new GatheredEntity { MapEntity = mapEntity, SourceId = sourceId });
-            }
+                MapEntity = mapEntity,
+                Lineage = entityLineage,
+                SourceId = sourceId,
+            });
         }
     }
 
     /// <summary>
-    /// Emits gathered flat entities: copies sharing a compile_source_id are rebuilt as one
-    /// <see cref="CMapGroup"/> + a <see cref="CMapInstance"/> per placement; the rest stay flat.
+    /// Decides where every gathered entity lands. Copies sharing a compile_source_id are rebuilt as one
+    /// <see cref="CMapGroup"/> + a <see cref="CMapInstance"/> per placement (this covers top-level
+    /// instances, instances nested in prefabs, and prefab content placed more than once — all of which
+    /// the compiler bakes as repeated copies of one source). Whatever is left over is placed flat in the
+    /// world, with prefab-baked entities (lineage > 1) additionally grouped into selection sets.
     /// </summary>
-    private void EmitFlatEntities()
+    private void EmitGatheredEntities()
     {
-        var consumed = ReconstructInstances(FlatEntities);
+        var consumed = ReconstructInstances(GatheredEntities);
 
-        foreach (var gathered in FlatEntities)
+        Dictionary<int, CMapSelectionSet> lineageSelectionSets = [];
+
+        foreach (var gathered in GatheredEntities)
         {
-            if (!consumed.Contains(gathered))
+            if (consumed.Contains(gathered))
             {
-                MapDocument.World.Children.Add(gathered.MapEntity);
+                continue;
+            }
+
+            MapDocument.World.Children.Add(gathered.MapEntity);
+
+            if (gathered.Lineage.Length > 1)
+            {
+                AddToLineageSelectionSets(gathered, lineageSelectionSets);
             }
         }
     }
 
     /// <summary>
-    /// Detects instanced groups among flat entities (a compile_source_id shared by ≥2 entities is a
-    /// source placed multiple times) and rebuilds them as one <see cref="CMapGroup"/> + a
-    /// <see cref="CMapInstance"/> per placement, with transforms recovered from the baked world
-    /// positions/angles. Returns the entities consumed into instances (to skip when emitting flat).
-    /// Any group that does not validate (clean 1:1 placement match + exact reconstruction) is left flat.
+    /// Files a prefab-baked entity into the nested selection-set tree mirroring its hammerUniqueId
+    /// lineage (one selection set per lineage id, nested by prefix).
     /// </summary>
-    private HashSet<GatheredEntity> ReconstructInstances(List<GatheredEntity> flat)
+    private void AddToLineageSelectionSets(GatheredEntity gathered, Dictionary<int, CMapSelectionSet> lineageSelectionSets)
+    {
+        var lineage = gathered.Lineage;
+        for (var i = 0; i < lineage.Length; i++)
+        {
+            if (!lineageSelectionSets.TryGetValue(lineage[i], out var selectionSet))
+            {
+                selectionSet = new CMapSelectionSet
+                {
+                    Name = lineage[i].ToString(CultureInfo.InvariantCulture),
+                    SelectionSetName = lineage[i].ToString(CultureInfo.InvariantCulture)
+                };
+                lineageSelectionSets.Add(lineage[i], selectionSet);
+
+                if (i == 0)
+                {
+                    EntitiesSelectionSet?.Children.Add(selectionSet);
+                }
+                else
+                {
+                    lineageSelectionSets[lineage[i - 1]].Children.Add(selectionSet);
+                }
+            }
+
+            if (i == lineage.Length - 1)
+            {
+                selectionSet.SelectionSetData.SelectedObjects.Add(gathered.MapEntity);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Detects instanced sources (a compile_source_id carried by ≥2 entities is one source object the
+    /// compiler copied per placement) and rebuilds them as one <see cref="CMapGroup"/> + a
+    /// <see cref="CMapInstance"/> per placement, with each placement's rigid transform recovered from the
+    /// baked world positions/angles. Returns the entities consumed into instances. A group that does not
+    /// validate (clean 1:1 placement match + exact rigid reconstruction) is left untouched.
+    /// </summary>
+    private HashSet<GatheredEntity> ReconstructInstances(List<GatheredEntity> entities)
     {
         var consumed = new HashSet<GatheredEntity>();
 
-        // candidate sources: a real compile_source_id present on more than one flat entity
-        var bySource = flat
+        // candidate sources: a real compile_source_id carried by more than one entity
+        var bySource = entities
             .Where(e => e.SourceId >= 0)
             .GroupBy(e => e.SourceId)
             .Where(g => g.Count() > 1)
@@ -1414,7 +1421,7 @@ public sealed class MapExtract
 
         var remaining = new HashSet<int>(bySource.Keys);
 
-        // process groups anchored on the highest-multiplicity source first
+        // anchor on the highest-multiplicity source first; its copies define the placements
         foreach (var anchorSource in bySource.Keys.OrderByDescending(k => bySource[k].Count))
         {
             if (!remaining.Contains(anchorSource))
@@ -1422,11 +1429,11 @@ public sealed class MapExtract
                 continue;
             }
 
-            var anchors = bySource[anchorSource];
-            var placementCount = anchors.Count;
+            var placementAnchors = bySource[anchorSource];
+            var placementCount = placementAnchors.Count;
 
-            // co-members: other unprocessed sources with one copy per placement (nearest-anchor bijection)
-            var members = new List<(int Source, List<GatheredEntity> Copies)> { (anchorSource, anchors) };
+            // co-members: other unconsumed sources with one copy per placement, assigned by proximity
+            var members = new List<(int Source, List<GatheredEntity> Copies)> { (anchorSource, placementAnchors) };
             foreach (var source in remaining)
             {
                 if (source == anchorSource || bySource[source].Count != placementCount)
@@ -1434,14 +1441,14 @@ public sealed class MapExtract
                     continue;
                 }
 
-                var matched = MatchCopiesToAnchors(bySource[source], anchors);
-                if (matched != null)
+                var assigned = AssignCopiesToPlacements(bySource[source], placementAnchors);
+                if (assigned != null)
                 {
-                    members.Add((source, matched));
+                    members.Add((source, assigned));
                 }
             }
 
-            if (TryEmitInstanceGroup(anchors, members, consumed))
+            if (TryBuildInstanceGroup(placementAnchors, members, consumed))
             {
                 foreach (var (source, _) in members)
                 {
@@ -1454,15 +1461,16 @@ public sealed class MapExtract
     }
 
     /// <summary>
-    /// Orders <paramref name="copies"/> so index i is the copy nearest to <paramref name="anchors"/>[i],
-    /// requiring a clean 1:1 assignment; returns null if the nearest match is not a bijection.
+    /// Orders <paramref name="copies"/> so index i is the copy nearest to
+    /// <paramref name="placementAnchors"/>[i], requiring a clean 1:1 assignment; returns null if the
+    /// nearest match is not a bijection.
     /// </summary>
-    private static List<GatheredEntity>? MatchCopiesToAnchors(List<GatheredEntity> copies, List<GatheredEntity> anchors)
+    private static List<GatheredEntity>? AssignCopiesToPlacements(List<GatheredEntity> copies, List<GatheredEntity> placementAnchors)
     {
-        var ordered = new GatheredEntity[anchors.Count];
+        var ordered = new GatheredEntity[placementAnchors.Count];
         var used = new bool[copies.Count];
 
-        for (var a = 0; a < anchors.Count; a++)
+        for (var a = 0; a < placementAnchors.Count; a++)
         {
             var best = -1;
             var bestDist = float.MaxValue;
@@ -1473,7 +1481,7 @@ public sealed class MapExtract
                     continue;
                 }
 
-                var dist = Vector3.DistanceSquared(copies[c].MapEntity.Origin, anchors[a].MapEntity.Origin);
+                var dist = Vector3.DistanceSquared(copies[c].MapEntity.Origin, placementAnchors[a].MapEntity.Origin);
                 if (dist < bestDist)
                 {
                     bestDist = dist;
@@ -1494,41 +1502,33 @@ public sealed class MapExtract
     }
 
     /// <summary>
-    /// Builds a <see cref="CMapGroup"/> from the members' placement-0 local layout (relative to the
-    /// anchor) and a <see cref="CMapInstance"/> per placement, but only if every member reconstructs
-    /// within tolerance at every placement. On success the group + instances are added to the world and
-    /// all consumed copies recorded; on failure nothing is emitted and false is returned.
+    /// Builds a <see cref="CMapGroup"/> from the members' layout at placement 0 (expressed in the local
+    /// frame of that placement's anchor) and a <see cref="CMapInstance"/> per placement — but only if
+    /// every member reconstructs within tolerance at every placement. On success the group + instances
+    /// are added to the world and the consumed copies recorded; on failure nothing is emitted.
     /// </summary>
-    private bool TryEmitInstanceGroup(List<GatheredEntity> anchors, List<(int Source, List<GatheredEntity> Copies)> members, HashSet<GatheredEntity> consumed)
+    private bool TryBuildInstanceGroup(List<GatheredEntity> placementAnchors, List<(int Source, List<GatheredEntity> Copies)> members, HashSet<GatheredEntity> consumed)
     {
         const float Tolerance = 0.5f;
 
-        var localOf = new Dictionary<int, (Vector3 Pos, Vector3 Angles)>();
+        // placement 0 (its anchor at local 0/0) defines the group-local frame
+        var referenceFrame = PlacementOf(placementAnchors[0]);
+        var toLocal = referenceFrame.Inverse();
 
-        // reference placement 0 defines the group-local frame, anchored on the anchor entity (local 0/0)
-        var refAnchor = anchors[0].MapEntity;
-        var refAnchorRot = EntityTransformHelper.CreateRotationMatrixFromEulerAngles(AnglesOf(refAnchor));
-        Matrix4x4.Invert(refAnchorRot, out var refAnchorRotInv);
-
+        // each member's transform within the group, recovered from its copy at placement 0
+        var localOf = new Dictionary<int, EntityTransformHelper.RigidTransform>();
         foreach (var (source, copies) in members)
         {
-            var refCopy = copies[0].MapEntity;
-            var localPos = Vector3.Transform(refCopy.Origin - refAnchor.Origin, refAnchorRotInv);
-            var localRot = EntityTransformHelper.CreateRotationMatrixFromEulerAngles(AnglesOf(refCopy)) * refAnchorRotInv;
-            var localAngles = ModelExtract.ToEulerAngles(Quaternion.CreateFromRotationMatrix(localRot));
-            localOf[source] = (localPos, localAngles);
+            localOf[source] = toLocal.Concat(PlacementOf(copies[0]));
         }
 
-        // validate: every member at every placement must reconstruct from the anchor's transform
-        for (var p = 0; p < anchors.Count; p++)
+        // validate: every member at every placement must reconstruct from that placement's transform
+        for (var p = 0; p < placementAnchors.Count; p++)
         {
-            var placementRot = EntityTransformHelper.CreateRotationMatrixFromEulerAngles(AnglesOf(anchors[p].MapEntity));
-            var placementOrigin = anchors[p].MapEntity.Origin;
-
+            var placement = PlacementOf(placementAnchors[p]);
             foreach (var (source, copies) in members)
             {
-                var (localPos, _) = localOf[source];
-                var expected = Vector3.Transform(localPos, placementRot) + placementOrigin;
+                var expected = placement.Apply(localOf[source].Translation);
                 if (Vector3.Distance(expected, copies[p].MapEntity.Origin) > Tolerance)
                 {
                     return false;
@@ -1537,15 +1537,15 @@ public sealed class MapExtract
         }
 
         // snapshot placement transforms BEFORE mutating (an anchor copy may also be a group member)
-        var placements = anchors.Select(a => (a.MapEntity.Origin, a.MapEntity.Angles)).ToList();
+        var placements = placementAnchors.Select(a => (a.MapEntity.Origin, a.MapEntity.Angles)).ToList();
 
-        // validated: reposition placement-0 copies into the group local frame and emit
+        // validated: move each placement-0 copy into the group-local frame and emit the group
         var group = new CMapGroup();
         foreach (var (source, copies) in members)
         {
-            var (localPos, localAngles) = localOf[source];
+            var (localOrigin, localAngles) = localOf[source].ToOriginAngles();
             var member = copies[0].MapEntity;
-            member.Origin = localPos;
+            member.Origin = localOrigin;
             member.Angles = localAngles;
             group.Children.Add(member);
         }
@@ -1572,7 +1572,11 @@ public sealed class MapExtract
         return true;
     }
 
-    private static Vector3 AnglesOf(CMapEntity entity) => new(entity.Angles.Pitch, entity.Angles.Yaw, entity.Angles.Roll);
+    private static EntityTransformHelper.RigidTransform PlacementOf(GatheredEntity entity)
+    {
+        var e = entity.MapEntity;
+        return EntityTransformHelper.RigidTransform.FromOriginAngles(e.Origin, new Vector3(e.Angles.Pitch, e.Angles.Yaw, e.Angles.Roll));
+    }
 
     private void ExtractEntityModel(CMapEntity mapEntity, Entity compiledEntity, string modelName)
     {

@@ -41,6 +41,39 @@ namespace ValveResourceFormat.Utils
         }
 
         /// <summary>
+        /// Converts a quaternion to Euler angles (pitch, yaw, roll) in degrees.
+        /// </summary>
+        /// <param name="q">The quaternion.</param>
+        /// <returns>The Euler angles in degrees.</returns>
+        public static Vector3 ToEulerAngles(Quaternion q)
+        {
+            Vector3 angles = new();
+
+            // pitch / x
+            var sinp = 2 * (q.W * q.Y - q.Z * q.X);
+            if (Math.Abs(sinp) >= 1)
+            {
+                angles.X = MathF.CopySign(MathF.PI / 2, sinp);
+            }
+            else
+            {
+                angles.X = MathF.Asin(sinp);
+            }
+
+            // yaw / y
+            var siny_cosp = 2 * (q.W * q.Z + q.X * q.Y);
+            var cosy_cosp = 1 - 2 * (q.Y * q.Y + q.Z * q.Z);
+            angles.Y = MathF.Atan2(siny_cosp, cosy_cosp);
+
+            // roll / z
+            var sinr_cosp = 2 * (q.W * q.X + q.Y * q.Z);
+            var cosr_cosp = 1 - 2 * (q.X * q.X + q.Y * q.Y);
+            angles.Z = MathF.Atan2(sinr_cosp, cosr_cosp);
+
+            return Vector3.RadiansToDegrees(angles);
+        }
+
+        /// <summary>
         /// Calculates the full transformation matrix for an entity.
         /// </summary>
         /// <param name="entity">The entity.</param>
@@ -100,6 +133,40 @@ namespace ValveResourceFormat.Utils
                 float.Parse(split[0], CultureInfo.InvariantCulture),
                 float.Parse(split[1], CultureInfo.InvariantCulture),
                 float.Parse(split[2], CultureInfo.InvariantCulture));
+        }
+
+        /// <summary>
+        /// A rigid transform: rotation plus translation, no scale. Uses the same row-vector convention
+        /// as the rest of the map pipeline — a point is mapped by <see cref="Apply"/>(p) = p · Rotation +
+        /// Translation. This is exactly what a prefab/instance placement is (placement scale is inert),
+        /// so it is the natural unit for recovering placements from baked world positions and angles.
+        /// </summary>
+        public readonly record struct RigidTransform(Matrix4x4 Rotation, Vector3 Translation)
+        {
+            /// <summary>Builds a placement transform from a world origin and pitch/yaw/roll angles.</summary>
+            public static RigidTransform FromOriginAngles(Vector3 origin, Vector3 pitchYawRoll)
+                => new(CreateRotationMatrixFromEulerAngles(pitchYawRoll), origin);
+
+            /// <summary>Maps a point through this transform.</summary>
+            public readonly Vector3 Apply(Vector3 point) => Vector3.Transform(point, Rotation) + Translation;
+
+            /// <summary>The inverse transform (undoes <see cref="Apply"/>).</summary>
+            public readonly RigidTransform Inverse()
+            {
+                Matrix4x4.Invert(Rotation, out var inverseRotation);
+                return new RigidTransform(inverseRotation, Vector3.Transform(-Translation, inverseRotation));
+            }
+
+            /// <summary>
+            /// This transform applied after <paramref name="inner"/> — i.e. the transform equivalent to
+            /// <c>this.Apply(inner.Apply(p))</c>.
+            /// </summary>
+            public readonly RigidTransform Concat(RigidTransform inner)
+                => new(inner.Rotation * Rotation, Vector3.Transform(inner.Translation, Rotation) + Translation);
+
+            /// <summary>Decomposes back to a world origin and pitch/yaw/roll angles.</summary>
+            public readonly (Vector3 Origin, Vector3 Angles) ToOriginAngles()
+                => (Translation, ToEulerAngles(Quaternion.CreateFromRotationMatrix(Rotation)));
         }
     }
 }
