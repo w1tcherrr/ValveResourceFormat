@@ -54,18 +54,6 @@ public sealed class MapExtract
     private CMapRootElement MapDocument { get; set; } = [];
     private List<CMapRootElement> AdditionalMapDocuments { get; set; } = [];
 
-    // every map entity, gathered before emission so instance reconstruction can run across all of them:
-    // a compile_source_id shared by several entities marks copies of one authored source object, which
-    // are rebuilt as a CMapGroup + one CMapInstance per placement
-    private readonly List<GatheredEntity> GatheredEntities = [];
-
-    private sealed class GatheredEntity
-    {
-        public required CMapEntity MapEntity { get; init; }
-        public required int[] Lineage { get; init; }
-        public required int SourceId { get; init; }
-    }
-
     private readonly IFileLoader FileLoader;
 
     /// <summary>Gets or sets the progress reporter.</summary>
@@ -396,8 +384,6 @@ public sealed class MapExtract
         datamodel.PrefixAttributes.Add("map_asset_references", AssetReferences);
         datamodel.Root = MapDocument = [];
 
-        GatheredEntities.Clear();
-
         CreateSelectionSets(MapDocument.RootSelectionSet);
 
         var phys = LoadWorldPhysics();
@@ -434,6 +420,7 @@ public sealed class MapExtract
             });
         }
 
+        List<GatheredEntity> gatheredEntities = [];
         foreach (var entityLumpName in EntityLumpNames)
         {
             var entityLumpCompiled = entityLumpName + GameFileLoader.CompiledFileSuffix;
@@ -442,11 +429,11 @@ public sealed class MapExtract
             using var entityLumpResource = FileLoader.LoadFile(entityLumpCompiled);
             if (entityLumpResource != null && entityLumpResource.DataBlock != null)
             {
-                GatherEntitiesFromLump((EntityLump)entityLumpResource.DataBlock);
+                GatherEntitiesFromLump((EntityLump)entityLumpResource.DataBlock, gatheredEntities);
             }
         }
 
-        EmitGatheredEntities();
+        EmitGatheredEntities(gatheredEntities);
 
         //convert phys to hammer meshes
         if (phys != null)
@@ -1238,16 +1225,24 @@ public sealed class MapExtract
     }
 
     #region Entities
-    private void GatherEntitiesFromLump(EntityLump entityLump)
-    {
-        var lumpName = entityLump.Name;
 
+    /// <summary>A map entity collected during gathering, paired with the two baked ids used to place it:
+    /// its hammerUniqueId lineage and its compile_source_id.</summary>
+    private sealed class GatheredEntity
+    {
+        public required CMapEntity MapEntity { get; init; }
+        public required int[] Lineage { get; init; }
+        public required int SourceId { get; init; }
+    }
+
+    private void GatherEntitiesFromLump(EntityLump entityLump, List<GatheredEntity> gatheredEntities)
+    {
         foreach (var childLumpName in entityLump.GetChildEntityNames())
         {
             using var entityLumpResource = FileLoader.LoadFileCompiled(childLumpName);
             if (entityLumpResource != null && entityLumpResource.DataBlock != null)
             {
-                GatherEntitiesFromLump((EntityLump)entityLumpResource.DataBlock);
+                GatherEntitiesFromLump((EntityLump)entityLumpResource.DataBlock, gatheredEntities);
             }
         }
 
@@ -1328,7 +1323,7 @@ public sealed class MapExtract
 
             // every entity is held back; placement (instance, prefab selection-set, or flat) is decided
             // once in EmitGatheredEntities after all lumps are read
-            GatheredEntities.Add(new GatheredEntity
+            gatheredEntities.Add(new GatheredEntity
             {
                 MapEntity = mapEntity,
                 Lineage = entityLineage,
@@ -1344,13 +1339,13 @@ public sealed class MapExtract
     /// the compiler bakes as repeated copies of one source). Whatever is left over is placed flat in the
     /// world, with prefab-baked entities (lineage > 1) additionally grouped into selection sets.
     /// </summary>
-    private void EmitGatheredEntities()
+    private void EmitGatheredEntities(List<GatheredEntity> gatheredEntities)
     {
-        var consumed = ReconstructInstances(GatheredEntities);
+        var consumed = ReconstructInstances(gatheredEntities);
 
         Dictionary<int, CMapSelectionSet> lineageSelectionSets = [];
 
-        foreach (var gathered in GatheredEntities)
+        foreach (var gathered in gatheredEntities)
         {
             if (consumed.Contains(gathered))
             {
@@ -1512,14 +1507,13 @@ public sealed class MapExtract
         const float Tolerance = 0.5f;
 
         // placement 0 (its anchor at local 0/0) defines the group-local frame
-        var referenceFrame = PlacementOf(placementAnchors[0]);
-        var toLocal = referenceFrame.Inverse();
+        Matrix4x4.Invert(PlacementOf(placementAnchors[0]), out var toLocal);
 
         // each member's transform within the group, recovered from its copy at placement 0
-        var localOf = new Dictionary<int, EntityTransformHelper.RigidTransform>();
+        var localOf = new Dictionary<int, Matrix4x4>();
         foreach (var (source, copies) in members)
         {
-            localOf[source] = toLocal.Concat(PlacementOf(copies[0]));
+            localOf[source] = PlacementOf(copies[0]) * toLocal;
         }
 
         // validate: every member at every placement must reconstruct from that placement's transform
@@ -1528,7 +1522,7 @@ public sealed class MapExtract
             var placement = PlacementOf(placementAnchors[p]);
             foreach (var (source, copies) in members)
             {
-                var expected = placement.Apply(localOf[source].Translation);
+                var expected = Vector3.Transform(localOf[source].Translation, placement);
                 if (Vector3.Distance(expected, copies[p].MapEntity.Origin) > Tolerance)
                 {
                     return false;
@@ -1543,7 +1537,7 @@ public sealed class MapExtract
         var group = new CMapGroup();
         foreach (var (source, copies) in members)
         {
-            var (localOrigin, localAngles) = localOf[source].ToOriginAngles();
+            EntityTransformHelper.DecomposeRigidTransform(localOf[source], out var localOrigin, out var localAngles);
             var member = copies[0].MapEntity;
             member.Origin = localOrigin;
             member.Angles = localAngles;
@@ -1572,10 +1566,10 @@ public sealed class MapExtract
         return true;
     }
 
-    private static EntityTransformHelper.RigidTransform PlacementOf(GatheredEntity entity)
+    private static Matrix4x4 PlacementOf(GatheredEntity entity)
     {
         var e = entity.MapEntity;
-        return EntityTransformHelper.RigidTransform.FromOriginAngles(e.Origin, new Vector3(e.Angles.Pitch, e.Angles.Yaw, e.Angles.Roll));
+        return EntityTransformHelper.CreateRigidTransform(e.Origin, new Vector3(e.Angles.Pitch, e.Angles.Yaw, e.Angles.Roll));
     }
 
     private void ExtractEntityModel(CMapEntity mapEntity, Entity compiledEntity, string modelName)

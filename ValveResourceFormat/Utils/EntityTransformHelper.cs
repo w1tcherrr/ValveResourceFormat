@@ -136,37 +136,26 @@ namespace ValveResourceFormat.Utils
         }
 
         /// <summary>
-        /// A rigid transform: rotation plus translation, no scale. Uses the same row-vector convention
-        /// as the rest of the map pipeline — a point is mapped by <see cref="Apply"/>(p) = p · Rotation +
-        /// Translation. This is exactly what a prefab/instance placement is (placement scale is inert),
-        /// so it is the natural unit for recovering placements from baked world positions and angles.
+        /// Builds a rigid transform matrix (rotation + translation, no scale) from a world origin and
+        /// pitch/yaw/roll angles. This is exactly what a prefab/instance placement is — placement scale
+        /// is inert — so it is the natural unit for recovering placements from baked world transforms.
+        /// A point is mapped by <c>Vector3.Transform(point, matrix)</c>.
         /// </summary>
-        public readonly record struct RigidTransform(Matrix4x4 Rotation, Vector3 Translation)
+        public static Matrix4x4 CreateRigidTransform(Vector3 origin, Vector3 pitchYawRoll)
         {
-            /// <summary>Builds a placement transform from a world origin and pitch/yaw/roll angles.</summary>
-            public static RigidTransform FromOriginAngles(Vector3 origin, Vector3 pitchYawRoll)
-                => new(CreateRotationMatrixFromEulerAngles(pitchYawRoll), origin);
+            var matrix = CreateRotationMatrixFromEulerAngles(pitchYawRoll);
+            matrix.Translation = origin;
+            return matrix;
+        }
 
-            /// <summary>Maps a point through this transform.</summary>
-            public readonly Vector3 Apply(Vector3 point) => Vector3.Transform(point, Rotation) + Translation;
-
-            /// <summary>The inverse transform (undoes <see cref="Apply"/>).</summary>
-            public readonly RigidTransform Inverse()
-            {
-                Matrix4x4.Invert(Rotation, out var inverseRotation);
-                return new RigidTransform(inverseRotation, Vector3.Transform(-Translation, inverseRotation));
-            }
-
-            /// <summary>
-            /// This transform applied after <paramref name="inner"/> — i.e. the transform equivalent to
-            /// <c>this.Apply(inner.Apply(p))</c>.
-            /// </summary>
-            public readonly RigidTransform Concat(RigidTransform inner)
-                => new(inner.Rotation * Rotation, Vector3.Transform(inner.Translation, Rotation) + Translation);
-
-            /// <summary>Decomposes back to a world origin and pitch/yaw/roll angles.</summary>
-            public readonly (Vector3 Origin, Vector3 Angles) ToOriginAngles()
-                => (Translation, ToEulerAngles(Quaternion.CreateFromRotationMatrix(Rotation)));
+        /// <summary>
+        /// Decomposes a rigid transform matrix back into a world origin and pitch/yaw/roll angles,
+        /// ignoring any scale component.
+        /// </summary>
+        public static void DecomposeRigidTransform(Matrix4x4 matrix, out Vector3 origin, out Vector3 pitchYawRoll)
+        {
+            origin = matrix.Translation;
+            pitchYawRoll = ToEulerAngles(Quaternion.CreateFromRotationMatrix(matrix));
         }
     }
 }
