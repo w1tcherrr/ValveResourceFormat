@@ -196,6 +196,12 @@ internal class CMapEntity : BaseEntity
 {
     public Vector3 HitNormal { get; set; }
     public bool IsProceduralEntity { get; set; }
+
+    // decompile-time bookkeeping; internal so the Datamodel serializer (public properties only) does
+    // not write it: the baked hammerUniqueId lineage and compile_source_id, used to reconstruct prefab
+    // grouping / instances during extraction
+    internal int[] HammerLineage { get; set; } = [];
+    internal int CompileSourceId { get; set; } = -1;
 }
 
 [CamelCaseProperties]
