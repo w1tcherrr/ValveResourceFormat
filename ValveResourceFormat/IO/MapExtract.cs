@@ -1416,7 +1416,8 @@ public sealed class MapExtract
 
         var remaining = new HashSet<int>(bySource.Keys);
 
-        // anchor on the highest-multiplicity source first; its copies define the placements
+        // Anchor on the highest-multiplicity source first: its copies define the placement count and
+        // positions that the rest of the group is matched against.
         foreach (var anchorSource in bySource.Keys.OrderByDescending(k => bySource[k].Count))
         {
             if (!remaining.Contains(anchorSource))
@@ -1425,23 +1426,7 @@ public sealed class MapExtract
             }
 
             var placementAnchors = bySource[anchorSource];
-            var placementCount = placementAnchors.Count;
-
-            // co-members: other unconsumed sources with one copy per placement, assigned by proximity
-            var members = new List<(int Source, List<GatheredEntity> Copies)> { (anchorSource, placementAnchors) };
-            foreach (var source in remaining)
-            {
-                if (source == anchorSource || bySource[source].Count != placementCount)
-                {
-                    continue;
-                }
-
-                var assigned = AssignCopiesToPlacements(bySource[source], placementAnchors);
-                if (assigned != null)
-                {
-                    members.Add((source, assigned));
-                }
-            }
+            var members = CollectInstanceMembers(anchorSource, placementAnchors, bySource, remaining);
 
             if (TryBuildInstanceGroup(placementAnchors, members, consumed))
             {
@@ -1456,9 +1441,39 @@ public sealed class MapExtract
     }
 
     /// <summary>
+    /// Gathers the sources that travel together as one instanced group: the anchor plus every other
+    /// unconsumed source with the same number of copies, each copy assigned 1:1 to a placement by
+    /// proximity. The result is the per-source copy lists aligned so index p is placement p.
+    /// </summary>
+    private static List<(int Source, List<GatheredEntity> Copies)> CollectInstanceMembers(
+        int anchorSource, List<GatheredEntity> placementAnchors,
+        Dictionary<int, List<GatheredEntity>> bySource, HashSet<int> remaining)
+    {
+        var members = new List<(int Source, List<GatheredEntity> Copies)> { (anchorSource, placementAnchors) };
+
+        foreach (var source in remaining)
+        {
+            if (source == anchorSource || bySource[source].Count != placementAnchors.Count)
+            {
+                continue;
+            }
+
+            var assigned = AssignCopiesToPlacements(bySource[source], placementAnchors);
+            if (assigned != null)
+            {
+                members.Add((source, assigned));
+            }
+        }
+
+        return members;
+    }
+
+    /// <summary>
     /// Orders <paramref name="copies"/> so index i is the copy nearest to
     /// <paramref name="placementAnchors"/>[i], requiring a clean 1:1 assignment; returns null if the
-    /// nearest match is not a bijection.
+    /// nearest match is not a bijection. The greedy nearest-neighbour choice is safe because
+    /// <see cref="TryBuildInstanceGroup"/> re-validates every placement and abandons the group on any
+    /// mismatch — a wrong assignment can only cause a missed reconstruction, never wrong output.
     /// </summary>
     private static List<GatheredEntity>? AssignCopiesToPlacements(List<GatheredEntity> copies, List<GatheredEntity> placementAnchors)
     {
@@ -1497,43 +1512,22 @@ public sealed class MapExtract
     }
 
     /// <summary>
-    /// Builds a <see cref="CMapGroup"/> from the members' layout at placement 0 (expressed in the local
-    /// frame of that placement's anchor) and a <see cref="CMapInstance"/> per placement — but only if
-    /// every member reconstructs within tolerance at every placement. On success the group + instances
-    /// are added to the world and the consumed copies recorded; on failure nothing is emitted.
+    /// Rebuilds an instanced group: one <see cref="CMapGroup"/> holding the members at their layout in
+    /// placement 0's local frame, plus a <see cref="CMapInstance"/> per placement. Only emits if every
+    /// member reconstructs rigidly within tolerance at every placement; on success the nodes are added to
+    /// the world and the consumed copies recorded, on failure nothing is touched.
     /// </summary>
     private bool TryBuildInstanceGroup(List<GatheredEntity> placementAnchors, List<(int Source, List<GatheredEntity> Copies)> members, HashSet<GatheredEntity> consumed)
     {
-        const float Tolerance = 0.5f;
-
-        // placement 0 (its anchor at local 0/0) defines the group-local frame
-        Matrix4x4.Invert(PlacementOf(placementAnchors[0]), out var toLocal);
-
-        // each member's transform within the group, recovered from its copy at placement 0
-        var localOf = new Dictionary<int, Matrix4x4>();
-        foreach (var (source, copies) in members)
+        if (!TryRecoverGroupLayout(placementAnchors, members, out var localOf))
         {
-            localOf[source] = PlacementOf(copies[0]) * toLocal;
-        }
-
-        // validate: every member at every placement must reconstruct from that placement's transform
-        for (var p = 0; p < placementAnchors.Count; p++)
-        {
-            var placement = PlacementOf(placementAnchors[p]);
-            foreach (var (source, copies) in members)
-            {
-                var expected = Vector3.Transform(localOf[source].Translation, placement);
-                if (Vector3.Distance(expected, copies[p].MapEntity.Origin) > Tolerance)
-                {
-                    return false;
-                }
-            }
+            return false;
         }
 
         // snapshot placement transforms BEFORE mutating (an anchor copy may also be a group member)
         var placements = placementAnchors.Select(a => (a.MapEntity.Origin, a.MapEntity.Angles)).ToList();
 
-        // validated: move each placement-0 copy into the group-local frame and emit the group
+        // move each placement-0 copy into the group-local frame and collect them under the group
         var group = new CMapGroup();
         foreach (var (source, copies) in members)
         {
@@ -1560,6 +1554,42 @@ public sealed class MapExtract
             foreach (var copy in copies)
             {
                 consumed.Add(copy);
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Recovers each member's transform within the group (its layout relative to placement 0's anchor)
+    /// and verifies the recovery is consistent: every member at every placement must reproduce the baked
+    /// world position within tolerance. Pure — mutates nothing. Returns false (and an empty map) if any
+    /// member fails to reconstruct rigidly.
+    /// </summary>
+    private static bool TryRecoverGroupLayout(List<GatheredEntity> placementAnchors, List<(int Source, List<GatheredEntity> Copies)> members, out Dictionary<int, Matrix4x4> localOf)
+    {
+        // tolerance is in world units, sized to absorb the float-precision drift of baked positions
+        const float Tolerance = 0.5f;
+
+        // placement 0 (its anchor at local 0/0) defines the group-local frame
+        Matrix4x4.Invert(PlacementOf(placementAnchors[0]), out var toLocal);
+
+        localOf = new Dictionary<int, Matrix4x4>();
+        foreach (var (source, copies) in members)
+        {
+            localOf[source] = PlacementOf(copies[0]) * toLocal;
+        }
+
+        for (var p = 0; p < placementAnchors.Count; p++)
+        {
+            var placement = PlacementOf(placementAnchors[p]);
+            foreach (var (source, copies) in members)
+            {
+                var expected = Vector3.Transform(localOf[source].Translation, placement);
+                if (Vector3.Distance(expected, copies[p].MapEntity.Origin) > Tolerance)
+                {
+                    return false;
+                }
             }
         }
 
