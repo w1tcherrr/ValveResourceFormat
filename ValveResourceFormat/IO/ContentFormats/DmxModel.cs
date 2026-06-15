@@ -95,9 +95,9 @@ public class DmeDag : DMElement
     public DmeTransform Transform { get; } = [];
 
     /// <summary>
-    /// Gets the mesh shape of this DAG node.
+    /// Gets or sets the mesh shape of this DAG node, or null for nodes without geometry (e.g. skeleton joints).
     /// </summary>
-    public DmeShape Shape { get; set; } = [];
+    public DmeShape? Shape { get; set; }
 
     /// <summary>
     /// Gets or sets a value indicating whether this node is visible.
