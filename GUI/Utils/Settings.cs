@@ -11,7 +11,7 @@ namespace GUI.Utils
     /// </summary>
     static class Settings
     {
-        private const int SettingsFileCurrentVersion = 15;
+        private const int SettingsFileCurrentVersion = 16;
         private const int RecentFilesLimit = 20;
 
         /// <summary>
@@ -58,6 +58,10 @@ namespace GUI.Utils
             public List<string> RecentFiles { get; set; } = [];
             /// <summary>Gets or sets saved camera positions keyed by name.</summary>
             public Dictionary<string, float[]> SavedCameras { get; set; } = [];
+            /// <summary>Gets or sets the last chosen output format for the multi-export types dialog, keyed by file extension.</summary>
+            public Dictionary<string, string> ExportTypePreferences { get; set; } = [];
+            /// <summary>Gets or sets the last chosen save dialog filter index, keyed by resource type.</summary>
+            public Dictionary<string, int> ExportFilterIndices { get; set; } = [];
             /// <summary>Gets or sets the selected UI theme index.</summary>
             public int Theme { get; set; }
             /// <summary>Gets or sets the maximum texture resolution loaded by the renderer.</summary>
@@ -176,6 +180,8 @@ namespace GUI.Utils
 
             Config.GameSearchPaths ??= [];
             Config.SavedCameras ??= [];
+            Config.ExportTypePreferences ??= [];
+            Config.ExportFilterIndices ??= [];
             Config.BookmarkedFiles ??= [];
             Config.RecentFiles ??= new(RecentFilesLimit);
             Config.Update ??= new();

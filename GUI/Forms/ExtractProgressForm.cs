@@ -113,6 +113,11 @@ namespace GUI.Forms
             path = dialog.SelectedPath;
             Settings.Config.SaveDirectory = dialog.SelectedPath;
 
+            if (decompile)
+            {
+                Settings.Save();
+            }
+
             ShowDialog();
         }
 
@@ -163,7 +168,18 @@ namespace GUI.Forms
                     ? firstType is "vmap" ? 1 : 0
                     : 1;
 
+                if (Settings.Config.ExportTypePreferences.TryGetValue(type.Key, out var preferred))
+                {
+                    var preferredIndex = preferred.Length == 0 ? 0 : outputTypes.IndexOf(preferred);
+
+                    if (preferredIndex >= 0)
+                    {
+                        selectedIndex = preferredIndex;
+                    }
+                }
+
                 type.Value.OutputFormat = selectedIndex == 0 ? null : outputTypes[selectedIndex];
+                Settings.Config.ExportTypePreferences[type.Key] = type.Value.OutputFormat ?? string.Empty;
                 typesDialog.AddTypeToTable(type.Key, type.Value.Count, outputTypes, selectedIndex);
             }
 
@@ -185,14 +201,16 @@ namespace GUI.Forms
                 return;
             }
 
-            // TODO: Remember last selected value in settings?
+            // Remembered in settings; persisted once when extraction starts.
             if (control.SelectedIndex == 0)
             {
                 fileTypesToExtract[type].OutputFormat = null;
+                Settings.Config.ExportTypePreferences[type] = string.Empty;
                 return;
             }
 
             fileTypesToExtract[type].OutputFormat = control.SelectedItem as string;
+            Settings.Config.ExportTypePreferences[type] = (control.SelectedItem as string) ?? string.Empty;
         }
 
         protected override void OnShown(EventArgs e)

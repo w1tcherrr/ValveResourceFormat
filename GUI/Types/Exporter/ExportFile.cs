@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -91,12 +92,23 @@ namespace GUI.Types.Exporter
                         AddToRecent = true,
                     };
 
+                    var filterKey = resource.ResourceType.ToString();
+                    var filterCount = (filter.Count(c => c == '|') + 1) / 2;
+
+                    if (Settings.Config.ExportFilterIndices.TryGetValue(filterKey, out var savedIndex) && savedIndex >= 1 && savedIndex <= filterCount)
+                    {
+                        dialog.FilterIndex = savedIndex;
+                    }
+
                     var result = dialog.ShowDialog();
 
                     if (result != DialogResult.OK)
                     {
                         return;
                     }
+
+                    Settings.Config.ExportFilterIndices[filterKey] = dialog.FilterIndex;
+                    Settings.Save();
 
                     filaNameToSave = dialog.FileName;
                     resourceTemp = null;
