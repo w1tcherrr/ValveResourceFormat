@@ -39,6 +39,9 @@ namespace GUI.Forms
         private readonly Stopwatch exportStopwatch = new();
         private int filesFailedToExport;
 
+        /// <summary>Explicit type selections from the dialog, flushed to settings only when extraction starts.</summary>
+        private readonly Dictionary<string, string> pendingExportTypePreferences = [];
+
         private static readonly List<ResourceType> ExtractOrder =
         [
             ResourceType.Map,
@@ -115,6 +118,11 @@ namespace GUI.Forms
 
             if (decompile)
             {
+                foreach (var (type, format) in pendingExportTypePreferences)
+                {
+                    Settings.Config.ExportTypePreferences[type] = format;
+                }
+
                 Settings.Save();
             }
 
@@ -179,7 +187,6 @@ namespace GUI.Forms
                 }
 
                 type.Value.OutputFormat = selectedIndex == 0 ? null : outputTypes[selectedIndex];
-                Settings.Config.ExportTypePreferences[type.Key] = type.Value.OutputFormat ?? string.Empty;
                 typesDialog.AddTypeToTable(type.Key, type.Value.Count, outputTypes, selectedIndex);
             }
 
@@ -201,16 +208,16 @@ namespace GUI.Forms
                 return;
             }
 
-            // Remembered in settings; persisted once when extraction starts.
+            // Buffer the explicit choice; flushed to settings only when extraction starts.
             if (control.SelectedIndex == 0)
             {
                 fileTypesToExtract[type].OutputFormat = null;
-                Settings.Config.ExportTypePreferences[type] = string.Empty;
+                pendingExportTypePreferences[type] = string.Empty;
                 return;
             }
 
             fileTypesToExtract[type].OutputFormat = control.SelectedItem as string;
-            Settings.Config.ExportTypePreferences[type] = (control.SelectedItem as string) ?? string.Empty;
+            pendingExportTypePreferences[type] = (control.SelectedItem as string) ?? string.Empty;
         }
 
         protected override void OnShown(EventArgs e)
