@@ -28,13 +28,13 @@ namespace Tests
         }
 
         [Test]
-        public void TestRootMotionIsBakedIntoExport()
+        public void TestSkinnedAnimatedExport()
         {
             using var resource = new Resource();
             var modelPath = Path.Combine(TestContext.CurrentContext.TestDirectory, "Files", "box_creature_ik_model.vmdl_c");
             resource.Read(modelPath);
 
-            var dir = Path.Combine(Path.GetTempPath(), "vrf_rootmotion_" + Guid.NewGuid().ToString("N"));
+            var dir = Path.Combine(Path.GetTempPath(), "vrf_skinned_" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(dir);
             var outPath = Path.Combine(dir, "box_creature.glb");
 
@@ -48,11 +48,11 @@ namespace Tests
                 gltf.Export(resource, outPath);
 
                 var root = ModelRoot.Load(outPath);
-                var anim = root.LogicalAnimations.Single(a => a.Name == "box_creature_leggy_walk");
 
                 // The root_motion bone has no per-frame bone animation, so any net displacement of its
                 // translation channel comes purely from the baked root motion (~47.92 source units forward,
                 // ~1.22 m once the source->glTF unit conversion is baked into the export).
+                var anim = root.LogicalAnimations.Single(a => a.Name == "box_creature_leggy_walk");
                 var rootMotionNode = root.LogicalNodes.Single(n => n.Name == "root_motion");
                 var sampler = anim.FindTranslationChannel(rootMotionNode)?.GetTranslationSampler();
                 Assert.That(sampler, Is.Not.Null, "root_motion bone should have a translation channel");
@@ -60,38 +60,11 @@ namespace Tests
                 var keys = sampler.GetLinearKeys().ToArray();
                 var displacement = keys[^1].Value - keys[0].Value;
                 Assert.That(displacement.Length(), Is.GreaterThan(1f), "root motion should travel the skeleton forward");
-            }
-            finally
-            {
-                Directory.Delete(dir, true);
-            }
-        }
 
-        [Test]
-        public void TestSkinnedExportHasIdentityBindMatrices()
-        {
-            using var resource = new Resource();
-            resource.Read(Path.Combine(TestContext.CurrentContext.TestDirectory, "Files", "box_creature_ik_model.vmdl_c"));
-
-            var dir = Path.Combine(Path.GetTempPath(), "vrf_bind_" + Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(dir);
-            var outPath = Path.Combine(dir, "box_creature.glb");
-
-            try
-            {
-                var gltf = new GltfModelExporter(new NullFileLoader())
-                {
-                    ExportMaterials = false,
-                    ProgressReporter = new Progress<string>(progress => { }),
-                };
-                gltf.Export(resource, outPath);
-
-                var root = ModelRoot.Load(outPath);
+                // The conversion is baked into the geometry, so each joint's world transform times its
+                // inverse-bind matrix has unit scale. A 0.0254 scale here means the conversion is still on the
+                // armature, which makes Blender's "Apply Transforms" explode skinned models.
                 var skin = root.LogicalSkins[0];
-
-                // The source->glTF conversion is baked into the geometry, so each joint's world transform
-                // times its inverse-bind matrix has unit scale. A 0.0254 scale here means the conversion is
-                // still on the armature, which makes Blender's "Apply Transforms" explode skinned models.
                 for (var i = 0; i < skin.JointsCount; i++)
                 {
                     var (joint, inverseBind) = skin.GetJoint(i);
