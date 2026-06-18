@@ -1,4 +1,5 @@
 using System.IO;
+using System.Linq;
 using System.Text;
 using ValveKeyValue;
 using ValveResourceFormat.CompiledShader;
@@ -46,12 +47,6 @@ namespace ValveResourceFormat.IO
         /// since this is most likely their most optimal extract context.
         /// </summary>
         public List<ContentFile> AdditionalFiles { get; init; } = [];
-
-        /// <summary>
-        /// When true, writers place this file (and its subfiles) at its full <see cref="FileName"/> relative
-        /// to the output root instead of next to the parent content file.
-        /// </summary>
-        public bool KeepFullPath { get; set; }
 
         /// <summary>
         /// Gets a value indicating whether this instance has been disposed.
@@ -161,6 +156,51 @@ namespace ValveResourceFormat.IO
     /// </summary>
     public static class FileExtract
     {
+        /// <summary>
+        /// Resolves the output root for a content tree. A decompiled resource keeps its full content-relative
+        /// path (e.g. <c>maps/de_dust2_d.vmap</c>), so the user may select either the content root or a folder
+        /// that already includes the leading part of that path (e.g. the <c>maps</c> folder). This strips the
+        /// longest run of trailing segments of <paramref name="selectedFolder"/> that matches the leading
+        /// segments of the primary file's directory, so both selections resolve to the same root.
+        /// </summary>
+        public static string ResolveContentRoot(string selectedFolder, string primaryFileName)
+        {
+            var assetDir = Path.GetDirectoryName(primaryFileName);
+            if (string.IsNullOrEmpty(assetDir))
+            {
+                return selectedFolder;
+            }
+
+            var assetSegments = assetDir.Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries);
+            var folderSegments = selectedFolder.Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries);
+
+            var root = selectedFolder;
+            for (var overlap = Math.Min(assetSegments.Length, folderSegments.Length); overlap > 0; overlap--)
+            {
+                if (folderSegments.AsSpan(folderSegments.Length - overlap, overlap)
+                    .SequenceEqual(assetSegments.AsSpan(0, overlap), StringComparer.OrdinalIgnoreCase))
+                {
+                    // Trim trailing separators first, otherwise GetDirectoryName strips the separator, not a segment.
+                    root = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+                    for (var i = 0; i < overlap; i++)
+                    {
+                        var parent = Path.GetDirectoryName(root);
+                        if (string.IsNullOrEmpty(parent))
+                        {
+                            return root;
+                        }
+
+                        root = parent;
+                    }
+
+                    break;
+                }
+            }
+
+            return root;
+        }
+
         /// <summary>
         /// Extract content file from a compiled resource.
         /// </summary>

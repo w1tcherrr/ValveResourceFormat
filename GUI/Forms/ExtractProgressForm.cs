@@ -408,16 +408,14 @@ namespace GUI.Forms
             }
         }
 
-        public async Task ExtractFile(Resource resource, string inFilePath, string outFilePath, bool flatSubfiles = false)
+        public async Task ExtractFile(Resource resource, string inFilePath, string? outFilePath)
         {
             if (path == null)
             {
                 throw new InvalidOperationException("Path must be set before extracting files");
             }
 
-            var outExtension = Path.GetExtension(outFilePath);
-
-            if (GltfModelExporter.CanExport(resource) && outExtension is ".glb" or ".gltf")
+            if (outFilePath != null && GltfModelExporter.CanExport(resource) && Path.GetExtension(outFilePath) is ".glb" or ".gltf")
             {
                 if (gltfExporter == null)
                 {
@@ -445,65 +443,29 @@ namespace GUI.Forms
                 return;
             }
 
-            if (outExtension == ".sound" || outExtension == ".image" || outExtension.EndsWith(GameFileLoader.CompiledFileSuffix, StringComparison.Ordinal))
-            {
-                var extension = FileExtract.GetExtension(resource);
-
-                if (extension != null)
-                {
-                    outFilePath = Path.ChangeExtension(outFilePath, extension);
-                }
-            }
-            else if (outExtension == ".vmap")
-            {
-                flatSubfiles = false;
-            }
-
             ContentFile? contentFile = null;
 
             try
             {
                 contentFile = FileExtract.Extract(resource, exportData.VrfGuiContext, progressReporter);
 
-                if (contentFile.Data != null)
-                {
-                    SetProgress($"+ {outFilePath[(path.Length + 1)..]}");
-                    await File.WriteAllBytesAsync(outFilePath, contentFile.Data, cancellationTokenSource.Token).ConfigureAwait(false);
-                }
+                // Everything is placed under one content root, so the user can select either the content root
+                // or a folder that already includes the leading path (e.g. maps/) and get the same layout.
+                var root = FileExtract.ResolveContentRoot(path, contentFile.FileName);
+
+                // A named single-file export keeps the chosen path; a tree export (outFilePath == null, e.g. a
+                // map) places the root file under the root by its full content path, so a vmap lands in maps/.
+                var rootOutPath = FixExtractExtension(resource, outFilePath ?? Path.Combine(root, contentFile.FileName));
+
+                await WriteContentFile(root, rootOutPath, contentFile).ConfigureAwait(false);
 
                 foreach (var additionalFile in contentFile.AdditionalFiles)
                 {
                     extractedFiles.Add(additionalFile.FileName + GameFileLoader.CompiledFileSuffix);
-                    var fileNameOut = additionalFile.FileName;
-                    var flattenThis = flatSubfiles && !additionalFile.KeepFullPath;
-
-                    if (additionalFile.Data != null)
-                    {
-                        if (flattenThis)
-                        {
-                            fileNameOut = Path.GetFileName(fileNameOut);
-                        }
-
-                        var outPath = CombineAssetFolder(path, fileNameOut);
-                        var outPathDirectory = Path.GetDirectoryName(outPath.Full);
-                        if (outPathDirectory != null)
-                        {
-                            Directory.CreateDirectory(outPathDirectory);
-                        }
-                        SetProgress($" + {outPath.Partial}");
-                        await File.WriteAllBytesAsync(outPath.Full, additionalFile.Data, cancellationTokenSource.Token).ConfigureAwait(false);
-                    }
-
-                    var contentRelativeFolder = flattenThis ? string.Empty : Path.GetDirectoryName(fileNameOut) ?? string.Empty;
-
-                    await ExtractSubfiles(contentRelativeFolder, additionalFile).ConfigureAwait(false);
+                    await WriteContentFile(root, Path.Combine(root, additionalFile.FileName), additionalFile).ConfigureAwait(false);
                 }
 
                 extractedFiles.Add(inFilePath);
-
-                var inFileContentRelativeFolder = flatSubfiles ? string.Empty : Path.GetDirectoryName(inFilePath) ?? string.Empty;
-
-                await ExtractSubfiles(inFileContentRelativeFolder, contentFile).ConfigureAwait(false);
             }
             catch (Exception e)
             {
@@ -518,29 +480,55 @@ namespace GUI.Forms
             }
         }
 
-        private async Task ExtractSubfiles(string contentRelativeFolder, ContentFile contentFile)
+        private static string FixExtractExtension(Resource resource, string outFilePath)
         {
-            if (path == null)
+            var outExtension = Path.GetExtension(outFilePath);
+
+            if (outExtension == ".sound" || outExtension == ".image" || outExtension.EndsWith(GameFileLoader.CompiledFileSuffix, StringComparison.Ordinal))
             {
-                throw new InvalidOperationException("Path must be set before extracting files");
+                var extension = FileExtract.GetExtension(resource);
+
+                if (extension != null)
+                {
+                    outFilePath = Path.ChangeExtension(outFilePath, extension);
+                }
             }
 
+            return outFilePath;
+        }
+
+        // Writes a content file's data and places its subfiles next to it.
+        private async Task WriteContentFile(string root, string outFilePath, ContentFile contentFile)
+        {
+            if (contentFile.Data != null)
+            {
+                var directory = Path.GetDirectoryName(outFilePath);
+                if (directory != null)
+                {
+                    Directory.CreateDirectory(directory);
+                }
+
+                SetProgress($"+ {Path.GetRelativePath(root, outFilePath)}");
+                await File.WriteAllBytesAsync(outFilePath, contentFile.Data, cancellationTokenSource.Token).ConfigureAwait(false);
+            }
+
+            await ExtractSubfiles(Path.GetDirectoryName(outFilePath) ?? root, contentFile).ConfigureAwait(false);
+        }
+
+        // Subfiles (e.g. a model's meshes, a material's textures) are written next to their parent content file.
+        private async Task ExtractSubfiles(string parentDirectory, ContentFile contentFile)
+        {
             foreach (var contentSubFile in contentFile.SubFiles)
             {
                 cancellationTokenSource.Token.ThrowIfCancellationRequested();
-                contentSubFile.FileName = Path.Combine(contentRelativeFolder, contentSubFile.FileName).Replace(Path.DirectorySeparatorChar, '/');
-                var outPath = CombineAssetFolder(path, contentSubFile.FileName);
 
-                if (extractedFiles.Contains(contentSubFile.FileName))
+                var subFileName = Path.GetFileName(contentSubFile.FileName);
+                var outFilePath = Path.Combine(parentDirectory, subFileName);
+
+                if (extractedFiles.Contains(outFilePath))
                 {
-                    SetProgress($"  - {outPath.Partial}");
+                    SetProgress($"  - {subFileName}");
                     continue;
-                }
-
-                var outPathDirectory = Path.GetDirectoryName(outPath.Full);
-                if (outPathDirectory != null)
-                {
-                    Directory.CreateDirectory(outPathDirectory);
                 }
 
                 if (contentSubFile.Extract == null)
@@ -565,32 +553,17 @@ namespace GUI.Forms
 
                 if (subFileData.Length > 0)
                 {
-                    SetProgress($"  + {outPath.Partial}");
-                    extractedFiles.Add(contentSubFile.FileName);
-                    await File.WriteAllBytesAsync(outPath.Full, subFileData, cancellationTokenSource.Token).ConfigureAwait(false);
+                    var directory = Path.GetDirectoryName(outFilePath);
+                    if (directory != null)
+                    {
+                        Directory.CreateDirectory(directory);
+                    }
+
+                    SetProgress($"  + {subFileName}");
+                    extractedFiles.Add(outFilePath);
+                    await File.WriteAllBytesAsync(outFilePath, subFileData, cancellationTokenSource.Token).ConfigureAwait(false);
                 }
             }
-        }
-
-        private static (string Full, string Partial) CombineAssetFolder(string userFolder, string assetName)
-        {
-            var assetFolders = assetName.Split('/')[..^1];
-            var userFolders = userFolder.Split(Path.DirectorySeparatorChar);
-
-            var leftChop = 0;
-
-            foreach (var i in Enumerable.Range(0, assetFolders.Length))
-            {
-                if (Enumerable.SequenceEqual(
-                    assetFolders.Reverse().Skip(i),
-                    userFolders.Reverse().Take(assetFolders.Length - i)
-                ))
-                {
-                    leftChop = assetFolders.Reverse().Skip(i).Sum(static x => x.Length + 1);
-                }
-            }
-
-            return (Path.Combine(userFolder, assetName[leftChop..]), assetName[leftChop..]);
         }
 
         private void CancelButton_Click(object sender, EventArgs e)

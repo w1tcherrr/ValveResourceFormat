@@ -603,7 +603,7 @@ namespace CLI
                     path = Path.ChangeExtension(path, extension);
 
                     var outFilePath = GetOutputPath(path);
-                    DumpContentFile(outFilePath, content);
+                    DumpContentFile(outFilePath, content, FileExtract.ResolveContentRoot(Path.GetDirectoryName(outFilePath)!, content.FileName));
                 }
                 else
                 {
@@ -677,7 +677,7 @@ namespace CLI
                         }
                     }
 
-                    DumpContentFile(outFilePath, contentFile);
+                    DumpContentFile(outFilePath, contentFile, FileExtract.ResolveContentRoot(Path.GetDirectoryName(outFilePath)!, contentFile.FileName));
                     return;
                 }
             }
@@ -1362,7 +1362,7 @@ namespace CLI
 
                         outputFile = GetOutputPath(outputFile, useOutputAsDirectory: true);
 
-                        DumpContentFile(outputFile, contentFile);
+                        DumpContentFile(outputFile, contentFile, FileExtract.ResolveContentRoot(Path.GetDirectoryName(outputFile)!, contentFile.FileName));
                     }
                 }
                 catch (Exception e)
@@ -1422,19 +1422,18 @@ namespace CLI
             return highestByShader.Values.Select(x => x.FilePath).ToHashSet();
         }
 
-        private void DumpContentFile(string path, ContentFile contentFile, bool dumpSubFiles = true)
+        private static void DumpContentFile(string path, ContentFile contentFile, string outputRoot, bool dumpSubFiles = true)
         {
             if (contentFile.Data != null)
             {
                 DumpFile(path, contentFile.Data);
             }
 
+            // Additional files carry their full content-relative path (e.g. models/foo.vmdl), so place them
+            // under the output root rather than flattening them next to the parent.
             foreach (var additionalFile in contentFile.AdditionalFiles)
             {
-                var additionalPath = additionalFile.KeepFullPath && OutputFile != null && (IsInputFolder || Directory.Exists(OutputFile))
-                    ? Path.Combine(OutputFile, additionalFile.FileName)
-                    : Path.Combine(Path.GetDirectoryName(path)!, Path.GetFileName(additionalFile.FileName));
-                DumpContentFile(additionalPath, additionalFile);
+                DumpContentFile(Path.Combine(outputRoot, additionalFile.FileName), additionalFile, outputRoot);
             }
 
             if (dumpSubFiles)
@@ -1444,7 +1443,7 @@ namespace CLI
                     var data = contentSubFile.Extract?.Invoke();
                     if (data != null)
                     {
-                        DumpFile(Path.Combine(Path.GetDirectoryName(path)!, contentSubFile.FileName), data);
+                        DumpFile(Path.Combine(Path.GetDirectoryName(path)!, Path.GetFileName(contentSubFile.FileName)), data);
                     }
                 }
             }
@@ -1496,7 +1495,8 @@ namespace CLI
             }
             else if (useOutputAsDirectory || Directory.Exists(OutputFile))
             {
-                return Path.Combine(OutputFile, inputPath);
+                // Strip any overlap so pointing -o at e.g. the maps/ folder doesn't double-nest (maps/maps/...).
+                return Path.Combine(FileExtract.ResolveContentRoot(OutputFile, inputPath), inputPath);
             }
 
             return Path.GetFullPath(OutputFile);

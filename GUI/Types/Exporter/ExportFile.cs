@@ -47,7 +47,8 @@ namespace GUI.Types.Exporter
                     FileName = fileName,
                 };
                 var resource = resourceTemp;
-                string filaNameToSave;
+                string? namedOutputFile = null;
+                var targetDirectory = string.Empty;
 
                 try
                 {
@@ -76,8 +77,8 @@ namespace GUI.Types.Exporter
 
                     if (Path.GetExtension(fileName) == ".vmap_c")
                     {
-                        // When exporting a vmap, suggest saving with a suffix like de_dust2_d,
-                        // to reduce conflicts when users end up recompiling the map with the same name as it exists in the game
+                        // When exporting a vmap, suggest saving with a suffix like de_dust2_d, to reduce conflicts
+                        // when users end up recompiling the map with the same name as it exists in the game.
                         fileNameForSave += "_d";
                     }
 
@@ -91,14 +92,24 @@ namespace GUI.Types.Exporter
                         AddToRecent = true,
                     };
 
-                    var result = dialog.ShowDialog();
-
-                    if (result != DialogResult.OK)
+                    if (dialog.ShowDialog() != DialogResult.OK)
                     {
                         return;
                     }
 
-                    filaNameToSave = dialog.FileName;
+                    namedOutputFile = dialog.FileName;
+                    targetDirectory = Path.GetDirectoryName(namedOutputFile) ?? string.Empty;
+
+                    // A map decompiled to a vmap produces a whole tree (vmap + worldnodes + models + materials).
+                    // The chosen folder is treated as the content root (the user may navigate into the maps/ folder
+                    // too), and the vmap is written under maps/ by its full content path. glTF/glb exports of a map
+                    // stay single-file at the chosen path.
+                    if (Path.GetExtension(fileName) == ".vmap_c"
+                        && Path.GetExtension(namedOutputFile).Equals(".vmap", StringComparison.OrdinalIgnoreCase))
+                    {
+                        namedOutputFile = null;
+                    }
+
                     resourceTemp = null;
                 }
                 finally
@@ -106,21 +117,22 @@ namespace GUI.Types.Exporter
                     resourceTemp?.Dispose();
                 }
 
-                var directory = Path.GetDirectoryName(filaNameToSave);
-                if (directory != null)
+                if (!string.IsNullOrEmpty(targetDirectory))
                 {
-                    Settings.Config.SaveDirectory = directory;
+                    Settings.Config.SaveDirectory = targetDirectory;
                 }
 
-                var extractDialog = new ExtractProgressForm(exportData, directory ?? string.Empty, true)
+                var progressName = namedOutputFile != null ? Path.GetFileName(namedOutputFile) : Path.GetFileName(fileName);
+
+                var extractDialog = new ExtractProgressForm(exportData, targetDirectory, true)
                 {
                     ShownCallback = (form, cancellationToken) =>
                     {
-                        form.SetProgress($"Extracting {fileName} to \"{Path.GetFileName(filaNameToSave)}\"");
+                        form.SetProgress($"Extracting {fileName} to \"{progressName}\"");
 
                         Task.Run(async () =>
                         {
-                            await form.ExtractFile(resource, fileName, filaNameToSave, true).ConfigureAwait(false);
+                            await form.ExtractFile(resource, fileName, namedOutputFile).ConfigureAwait(false);
                         }, cancellationToken).ContinueWith(t =>
                         {
                             stream.Dispose();

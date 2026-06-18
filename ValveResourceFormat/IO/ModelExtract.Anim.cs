@@ -54,7 +54,6 @@ partial class ModelExtract
             {
                 var clipContent = new NmClipExtract(clipResource, fileLoader).ToContentFile();
                 clipContent.FileName = clipName;
-                clipContent.KeepFullPath = true;
                 vmdl.AdditionalFiles.Add(clipContent);
             }
             catch (Exception e)
