@@ -51,14 +51,59 @@ namespace Tests
                 var anim = root.LogicalAnimations.Single(a => a.Name == "box_creature_leggy_walk");
 
                 // The root_motion bone has no per-frame bone animation, so any net displacement of its
-                // translation channel comes purely from the baked root motion (~47.92 source units forward).
+                // translation channel comes purely from the baked root motion (~47.92 source units forward,
+                // ~1.22 m once the source->glTF unit conversion is baked into the export).
                 var rootMotionNode = root.LogicalNodes.Single(n => n.Name == "root_motion");
                 var sampler = anim.FindTranslationChannel(rootMotionNode)?.GetTranslationSampler();
                 Assert.That(sampler, Is.Not.Null, "root_motion bone should have a translation channel");
 
                 var keys = sampler.GetLinearKeys().ToArray();
                 var displacement = keys[^1].Value - keys[0].Value;
-                Assert.That(displacement.X, Is.GreaterThan(40f), "root motion should travel the skeleton forward");
+                Assert.That(displacement.Length(), Is.GreaterThan(1f), "root motion should travel the skeleton forward");
+            }
+            finally
+            {
+                Directory.Delete(dir, true);
+            }
+        }
+
+        [Test]
+        public void TestSkinnedExportHasIdentityBindMatrices()
+        {
+            using var resource = new Resource();
+            resource.Read(Path.Combine(TestContext.CurrentContext.TestDirectory, "Files", "box_creature_ik_model.vmdl_c"));
+
+            var dir = Path.Combine(Path.GetTempPath(), "vrf_bind_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            var outPath = Path.Combine(dir, "box_creature.glb");
+
+            try
+            {
+                var gltf = new GltfModelExporter(new NullFileLoader())
+                {
+                    ExportMaterials = false,
+                    ProgressReporter = new Progress<string>(progress => { }),
+                };
+                gltf.Export(resource, outPath);
+
+                var root = ModelRoot.Load(outPath);
+                var skin = root.LogicalSkins[0];
+
+                // The source->glTF conversion is baked into the geometry, so each joint's world transform
+                // times its inverse-bind matrix has unit scale. A 0.0254 scale here means the conversion is
+                // still on the armature, which makes Blender's "Apply Transforms" explode skinned models.
+                for (var i = 0; i < skin.JointsCount; i++)
+                {
+                    var (joint, inverseBind) = skin.GetJoint(i);
+                    var bind = joint.WorldMatrix * inverseBind;
+
+                    using (Assert.EnterMultipleScope())
+                    {
+                        Assert.That(new Vector3(bind.M11, bind.M12, bind.M13).Length(), Is.EqualTo(1f).Within(0.01f), $"joint {joint.Name}");
+                        Assert.That(new Vector3(bind.M21, bind.M22, bind.M23).Length(), Is.EqualTo(1f).Within(0.01f), $"joint {joint.Name}");
+                        Assert.That(new Vector3(bind.M31, bind.M32, bind.M33).Length(), Is.EqualTo(1f).Within(0.01f), $"joint {joint.Name}");
+                    }
+                }
             }
             finally
             {
