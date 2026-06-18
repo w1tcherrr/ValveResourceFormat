@@ -13,9 +13,8 @@ public partial class GltfModelExporter
     private static readonly Matrix4x4 TransformSourceToGltf = Matrix4x4.CreateScale(SourceToGltfScale) * Matrix4x4.CreateFromQuaternion(SourceToGltfRotation);
 
     // The conversion is baked into the exported geometry (bones, vertices, animation tracks) so the armature
-    // stays identity-scaled. Leaving the scale on the armature makes Blender's "Apply Transforms" desync the
-    // bone rest pose from the source-unit animation tracks and explode skinned models. The scale folds into
-    // translations (a bone cannot hold a rest scale); the rotation bakes into the skeleton roots.
+    // is identity-scaled and the bind matrices are clean inverses. The scale folds into translations (a bone
+    // has no rest scale); the rotation bakes into the skeleton roots.
 
     /// <summary>
     /// Applies the conversion to a bone-local transform: scales the translation, and on skeleton roots also
@@ -37,7 +36,7 @@ public partial class GltfModelExporter
     /// <summary>
     /// The node transform for placed geometry. The conversion is already baked into the geometry, so a
     /// standalone model resolves to identity; a world/entity placement is conjugated by the conversion so it
-    /// still positions the converted geometry correctly.
+    /// positions the converted geometry correctly.
     /// </summary>
     private static Matrix4x4 GetPlacementTransform(Matrix4x4 transform)
     {
