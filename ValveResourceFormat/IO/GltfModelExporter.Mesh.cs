@@ -533,7 +533,7 @@ public partial class GltfModelExporter
             CreateMeshFromDrawCall(drawCall, mesh, vbib, vertexBufferAccessors, exportedModel, skinMaterialPath: null, tintColor);
 
             var newNode = scene.CreateNode(name).WithMesh(mesh);
-            newNode.WorldMatrix = transform * TRANSFORMSOURCETOGLTF;
+            newNode.WorldMatrix = transform * TransformSourceToGltf;
         }
 
         return true;
@@ -654,31 +654,6 @@ public partial class GltfModelExporter
             {
                 vectorArray[i] = -Vector3.UnitZ;
             }
-        }
-    }
-
-    private static void BakePositions(Span<Vector3> positions)
-    {
-        for (var i = 0; i < positions.Length; i++)
-        {
-            positions[i] = Vector3.Transform(positions[i], TRANSFORMSOURCETOGLTF);
-        }
-    }
-
-    private static void BakeDirections(Span<Vector3> directions)
-    {
-        for (var i = 0; i < directions.Length; i++)
-        {
-            directions[i] = Vector3.TransformNormal(directions[i], SOURCETOGLTF_ROTATION);
-        }
-    }
-
-    private static void BakeTangents(Span<Vector4> tangents)
-    {
-        for (var i = 0; i < tangents.Length; i++)
-        {
-            var rotated = Vector3.TransformNormal(new Vector3(tangents[i].X, tangents[i].Y, tangents[i].Z), SOURCETOGLTF_ROTATION);
-            tangents[i] = new Vector4(rotated, tangents[i].W);
         }
     }
 

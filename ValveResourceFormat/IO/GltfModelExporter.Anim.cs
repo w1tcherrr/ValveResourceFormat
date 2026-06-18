@@ -221,18 +221,6 @@ public partial class GltfModelExporter
                 outputAnimation.CreateScaleChannel(jointNode, ScaleWriter.Channels[boneID], true);
             }
         }
-
-        private static (Vector3 Position, Quaternion Rotation) BakeConversion(Vector3 position, Quaternion rotation, bool isRoot)
-        {
-            position *= SOURCETOGLTF_SCALE;
-            if (isRoot)
-            {
-                position = Vector3.Transform(position, SOURCETOGLTF_ROTATION);
-                rotation = SOURCETOGLTF_ROTATIONQ * rotation;
-            }
-
-            return (position, rotation);
-        }
     }
 
     // Animation-graph clips aren't part of GetAllAnimations; write them here, retargeted by bone name.
