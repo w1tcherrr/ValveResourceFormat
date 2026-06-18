@@ -32,6 +32,12 @@ namespace ValveResourceFormat.IO
         // https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#coordinate-system-and-units
         private readonly static Matrix4x4 TRANSFORMSOURCETOGLTF = Matrix4x4.CreateScale(0.0254f) * Matrix4x4.CreateFromYawPitchRoll(0, MathF.PI / -2f, MathF.PI / -2f);
 
+        // Decomposed conversion, baked into the geometry (bones/vertices/animation) so the exported
+        // armature stays identity-scaled. Scale folds into translations; rotation bakes into skeleton roots.
+        private const float SOURCETOGLTF_SCALE = 0.0254f;
+        private readonly static Matrix4x4 SOURCETOGLTF_ROTATION = Matrix4x4.CreateFromYawPitchRoll(0, MathF.PI / -2f, MathF.PI / -2f);
+        private readonly static Quaternion SOURCETOGLTF_ROTATIONQ = Quaternion.CreateFromYawPitchRoll(0, MathF.PI / -2f, MathF.PI / -2f);
+
         // https://github.com/KhronosGroup/glTF-Blender-IO/blob/6b29ca135d5255dbfe1dd72424ce7243be73c0be/addons/io_scene_gltf2/blender/com/conversion.py#L20
         private const float PbrWattsTolumens = 683;
 
@@ -633,8 +639,6 @@ namespace ValveResourceFormat.IO
                     var animationWriter = new AnimationWriter(skeletonData, []);
                     animationWriter.WriteAnimation(exportedModel, joints, animation);
                 }
-
-                skeletonNode.WorldMatrix = TRANSFORMSOURCETOGLTF;
             }
 
             ExportAnimationClip(animationClip);
@@ -699,8 +703,10 @@ namespace ValveResourceFormat.IO
                 Debug.Assert(joints == null);
             }
 
-            // Swap Rotate upright, scale inches to meters.
-            transform *= TRANSFORMSOURCETOGLTF;
+            // Conversion is baked into the geometry, so nodes carry placement only (identity for a
+            // standalone model; conjugated by the conversion for placed world/entity models).
+            Matrix4x4.Invert(TRANSFORMSOURCETOGLTF, out var gltfToSource);
+            var nodeTransform = gltfToSource * transform * TRANSFORMSOURCETOGLTF;
 
             var skinMaterialPath = skinName != null ? GetSkinPathFromModel(model, skinName) : null;
 
@@ -723,7 +729,7 @@ namespace ValveResourceFormat.IO
                 var node = AddMeshNode(exportedModel, scene, meshName, tintColor, m.Mesh, m.Mesh.VBIB, joints, boneRemapTable, skinMaterialPath, entity);
                 if (node != null)
                 {
-                    node.WorldMatrix = transform;
+                    node.WorldMatrix = nodeTransform;
 
                     DebugValidateGLTF();
                 }
@@ -733,7 +739,7 @@ namespace ValveResourceFormat.IO
             // WorldMatrix should only be set after everything else.
             if (skeletonNode != null)
             {
-                skeletonNode.WorldMatrix = transform;
+                skeletonNode.WorldMatrix = nodeTransform;
             }
         }
 
@@ -778,13 +784,7 @@ namespace ValveResourceFormat.IO
         {
             var exportedModel = CreateModelRoot(resourceName, out var scene);
             var name = Path.GetFileName(resourceName);
-            var node = AddMeshNode(exportedModel, scene, name, Vector4.One, mesh, mesh.VBIB, joints: null);
-
-            if (node != null)
-            {
-                // Swap Rotate upright, scale inches to meters.
-                node.WorldMatrix = TRANSFORMSOURCETOGLTF;
-            }
+            AddMeshNode(exportedModel, scene, name, Vector4.One, mesh, mesh.VBIB, joints: null);
 
             WriteModelFile(exportedModel, fileName);
         }
@@ -922,22 +922,31 @@ namespace ValveResourceFormat.IO
             var joints = new Node[skeleton.Bones.Length];
             foreach (var root in skeleton.Roots)
             {
-                CreateBonesRecursive(root, skeletonNode, ref joints);
+                CreateBonesRecursive(root, skeletonNode, ref joints, isRoot: true);
             }
             return (skeletonNode, joints);
         }
 
-        private static void CreateBonesRecursive(Bone bone, Node parent, ref Node[] joints)
+        private static void CreateBonesRecursive(Bone bone, Node parent, ref Node[] joints, bool isRoot)
         {
+            // Scale bone translations; bake the axis rotation into roots only (children inherit it).
+            var translation = bone.Position * SOURCETOGLTF_SCALE;
+            var rotation = bone.Angle;
+            if (isRoot)
+            {
+                translation = Vector3.Transform(translation, SOURCETOGLTF_ROTATION);
+                rotation = SOURCETOGLTF_ROTATIONQ * rotation;
+            }
+
             var node = parent.CreateNode(bone.Name)
-                .WithLocalTranslation(bone.Position)
-                .WithLocalRotation(bone.Angle);
+                .WithLocalTranslation(translation)
+                .WithLocalRotation(rotation);
             joints[bone.Index] = node;
 
             // Recurse into children
             foreach (var child in bone.Children)
             {
-                CreateBonesRecursive(child, node, ref joints);
+                CreateBonesRecursive(child, node, ref joints, isRoot: false);
             }
         }
 
@@ -1002,7 +1011,7 @@ namespace ValveResourceFormat.IO
 
             primitive.WithMaterial(material);
 
-            return scene.CreateNode().WithSkinnedMesh(mesh, TRANSFORMSOURCETOGLTF, joints);
+            return scene.CreateNode().WithSkinnedMesh(mesh, Matrix4x4.Identity, joints);
         }
 
         private static PunctualLight CreateGltfLightEnvironment(ModelRoot exportedModel, VEntityLump.Entity entity)
