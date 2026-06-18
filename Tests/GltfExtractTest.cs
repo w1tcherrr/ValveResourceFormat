@@ -61,9 +61,8 @@ namespace Tests
                 var displacement = keys[^1].Value - keys[0].Value;
                 Assert.That(displacement.Length(), Is.GreaterThan(1f), "root motion should travel the skeleton forward");
 
-                // The conversion is baked into the geometry, so each joint's world transform times its
-                // inverse-bind matrix has unit scale. A 0.0254 scale here means the conversion is still on the
-                // armature, which makes Blender's "Apply Transforms" explode skinned models.
+                // Each joint's world transform times its inverse-bind matrix is unit-scaled: the conversion is
+                // baked into the geometry, so the armature is identity.
                 var skin = root.LogicalSkins[0];
                 for (var i = 0; i < skin.JointsCount; i++)
                 {
