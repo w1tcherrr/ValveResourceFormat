@@ -27,17 +27,6 @@ namespace ValveResourceFormat.IO
     /// </summary>
     public partial class GltfModelExporter
     {
-        // NOTE: Swaps Y and Z axes - gltf up axis is Y (source engine up is Z)
-        // Also divides by 100, gltf units are in meters, source engine units are in inches
-        // https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#coordinate-system-and-units
-        private readonly static Matrix4x4 TRANSFORMSOURCETOGLTF = Matrix4x4.CreateScale(0.0254f) * Matrix4x4.CreateFromYawPitchRoll(0, MathF.PI / -2f, MathF.PI / -2f);
-
-        // Decomposed conversion, baked into the geometry (bones/vertices/animation) so the exported
-        // armature stays identity-scaled. Scale folds into translations; rotation bakes into skeleton roots.
-        private const float SOURCETOGLTF_SCALE = 0.0254f;
-        private readonly static Matrix4x4 SOURCETOGLTF_ROTATION = Matrix4x4.CreateFromYawPitchRoll(0, MathF.PI / -2f, MathF.PI / -2f);
-        private readonly static Quaternion SOURCETOGLTF_ROTATIONQ = Quaternion.CreateFromYawPitchRoll(0, MathF.PI / -2f, MathF.PI / -2f);
-
         // https://github.com/KhronosGroup/glTF-Blender-IO/blob/6b29ca135d5255dbfe1dd72424ce7243be73c0be/addons/io_scene_gltf2/blender/com/conversion.py#L20
         private const float PbrWattsTolumens = 683;
 
@@ -404,7 +393,7 @@ namespace ValveResourceFormat.IO
 
                         var node = scene.CreateNode(className);
                         node.PunctualLight = CreateGltfLightEnvironment(exportedModel, entity);
-                        node.LocalMatrix = lightMatrix * TRANSFORMSOURCETOGLTF;
+                        node.LocalMatrix = lightMatrix * TransformSourceToGltf;
                     }
                     else if (className == "point_template")
                     {
@@ -703,10 +692,7 @@ namespace ValveResourceFormat.IO
                 Debug.Assert(joints == null);
             }
 
-            // Conversion is baked into the geometry, so nodes carry placement only (identity for a
-            // standalone model; conjugated by the conversion for placed world/entity models).
-            Matrix4x4.Invert(TRANSFORMSOURCETOGLTF, out var gltfToSource);
-            var nodeTransform = gltfToSource * transform * TRANSFORMSOURCETOGLTF;
+            var nodeTransform = GetPlacementTransform(transform);
 
             var skinMaterialPath = skinName != null ? GetSkinPathFromModel(model, skinName) : null;
 
@@ -929,14 +915,7 @@ namespace ValveResourceFormat.IO
 
         private static void CreateBonesRecursive(Bone bone, Node parent, ref Node[] joints, bool isRoot)
         {
-            // Scale bone translations; bake the axis rotation into roots only (children inherit it).
-            var translation = bone.Position * SOURCETOGLTF_SCALE;
-            var rotation = bone.Angle;
-            if (isRoot)
-            {
-                translation = Vector3.Transform(translation, SOURCETOGLTF_ROTATION);
-                rotation = SOURCETOGLTF_ROTATIONQ * rotation;
-            }
+            var (translation, rotation) = BakeConversion(bone.Position, bone.Angle, isRoot);
 
             var node = parent.CreateNode(bone.Name)
                 .WithLocalTranslation(translation)
