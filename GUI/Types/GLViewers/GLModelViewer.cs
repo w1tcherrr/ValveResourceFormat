@@ -121,8 +121,17 @@ namespace GUI.Types.GLViewers
                     }
                 }
 
+                // Root motion is part of the animation, so apply it by default whenever the clip carries it
+                // (otherwise turn/locomotion clips animate in place and look wrong). The checkbox can disable it.
                 rootMotionCheckBox!.Enabled = animationController.ActiveAnimation?.HasMovementData() ?? false;
-                enableRootMotion = rootMotionCheckBox.Enabled && rootMotionCheckBox.Checked;
+                rootMotionCheckBox.Checked = rootMotionCheckBox.Enabled;
+                enableRootMotion = rootMotionCheckBox.Enabled;
+
+                if (enableRootMotion)
+                {
+                    LastRootMotionPosition = modelSceneNode.Transform.Translation;
+                    LastRootMotionAngle = animationController.AnimationFrame?.Movement.Angle ?? 0f;
+                }
             });
 
             animationTimeLabel = new Label()
@@ -172,6 +181,7 @@ namespace GUI.Types.GLViewers
                 enableRootMotion = isChecked;
                 Debug.Assert(modelSceneNode != null);
                 LastRootMotionPosition = modelSceneNode.Transform.Translation;
+                LastRootMotionAngle = animationController.AnimationFrame?.Movement.Angle ?? 0f;
             });
 
             rootMotionCheckBox.Checked = false;
@@ -581,6 +591,7 @@ namespace GUI.Types.GLViewers
         }
 
         private Vector3 LastRootMotionPosition;
+        private float LastRootMotionAngle;
         private bool enableRootMotion;
 
         /// <summary>
@@ -619,8 +630,20 @@ namespace GUI.Types.GLViewers
                     Translation = modelSceneNode.Transform.Translation + rootMotionDelta,
                 };
 
+                // Yaw turns (e.g. AG2 turn clips) live in the angle, so spin the model in place about its position.
+                var angleDelta = animationFrame.Movement.Angle - LastRootMotionAngle;
+                if (angleDelta != 0f)
+                {
+                    var pivot = modelSceneNode.Transform.Translation;
+                    var rotation = Matrix4x4.CreateTranslation(-pivot)
+                        * Matrix4x4.CreateRotationZ(float.DegreesToRadians(angleDelta))
+                        * Matrix4x4.CreateTranslation(pivot);
+                    modelSceneNode.Transform *= rotation;
+                }
+
                 Input.Camera.Location += rootMotionDelta;
                 LastRootMotionPosition = animationFrame.Movement.Position;
+                LastRootMotionAngle = animationFrame.Movement.Angle;
             }
 
             // The stats overlay reflects whatever meshes are currently drawn, so it only needs rebuilding
