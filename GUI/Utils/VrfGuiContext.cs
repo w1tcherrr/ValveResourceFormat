@@ -266,6 +266,35 @@ namespace GUI.Utils
             return parent.FindFile(file, logNotFound);
         }
 
+        // Override to add support for parent file loaders. Without this, enumeration on a leaf context
+        // (which has no package of its own) returns nothing, so package-wide scans like the animgraph2
+        // skeleton-clip discovery silently find no files.
+        public override IEnumerable<string> FindFiles(string extension)
+        {
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var file in base.FindFiles(extension))
+            {
+                if (seen.Add(file))
+                {
+                    yield return file;
+                }
+            }
+
+            if (ParentGuiContext == null)
+            {
+                yield break;
+            }
+
+            foreach (var file in ParentGuiContext.FindFiles(extension))
+            {
+                if (seen.Add(file))
+                {
+                    yield return file;
+                }
+            }
+        }
+
         // Override to add support for parent file loaders
         protected override ShaderCollection LoadShaderFromDisk(string shaderName)
         {
