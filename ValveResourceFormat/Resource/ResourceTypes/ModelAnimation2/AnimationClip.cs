@@ -79,6 +79,12 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation2
         /// </summary>
         public bool IsAdditive { get; private set; }
 
+        /// <summary>
+        /// Gets the per-frame cumulative root motion (translation and yaw, relative to the first frame),
+        /// or empty when the clip has no net root motion.
+        /// </summary>
+        public AnimationMovement.MovementData[] RootMotion { get; private set; } = [];
+
         /// <inheritdoc/>
         public override void Read(BinaryReader reader)
         {
@@ -131,6 +137,8 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation2
             CompressedPoseOffsets = clipData.GetIntegerArray("m_compressedPoseOffsets");
             Debug.Assert(CompressedPoseOffsets.Length == NumFrames);
 
+            RootMotion = ReadRootMotion(clipData);
+
             var secondaryAnims = clipData.GetArray("m_secondaryAnimations") ?? [];
             SecondaryAnimations = new AnimationClip[secondaryAnims.Count];
             for (var j = 0; j < secondaryAnims.Count; j++)
@@ -144,6 +152,54 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation2
                 secondaryAnim.ReadClip(secondaryAnims[j]);
                 SecondaryAnimations[j] = secondaryAnim;
             }
+        }
+
+        // Root motion is stored separately from the pose tracks as a per-frame array of cumulative root
+        // transforms. Reduce each to the translation + yaw the existing AnimationMovement machinery expects.
+        private static AnimationMovement.MovementData[] ReadRootMotion(KVObject clipData)
+        {
+            var rootMotion = clipData.GetSubCollection("m_rootMotion");
+            if (rootMotion == null)
+            {
+                return [];
+            }
+
+            var transforms = rootMotion.GetArray("m_transforms");
+            if (transforms == null || transforms.Count <= 1)
+            {
+                // In-place clips store a single identity transform; there is no motion to bake.
+                return [];
+            }
+
+            // Skip clips whose root never actually moves (no net translation or yaw).
+            var totalDelta = rootMotion.GetSubCollection("m_totalDelta");
+            if (totalDelta != null)
+            {
+                var (totalPosition, _, totalRotation) = totalDelta.ToTransform();
+                var moved = new Vector2(totalPosition.X, totalPosition.Y).Length() > 0.01f
+                    || MathF.Abs(ExtractYawDegrees(totalRotation)) > 0.01f;
+
+                if (!moved)
+                {
+                    return [];
+                }
+            }
+
+            var movements = new AnimationMovement.MovementData[transforms.Count];
+            for (var i = 0; i < transforms.Count; i++)
+            {
+                var (position, _, rotation) = transforms[i].ToTransform();
+                movements[i] = new AnimationMovement.MovementData(position, ExtractYawDegrees(rotation));
+            }
+
+            return movements;
+        }
+
+        // Root motion only turns the body about the vertical axis, so reduce the orientation to a yaw in degrees.
+        private static float ExtractYawDegrees(Quaternion q)
+        {
+            var yaw = MathF.Atan2(2f * (q.W * q.Z + q.X * q.Y), 1f - 2f * (q.Y * q.Y + q.Z * q.Z));
+            return float.RadiansToDegrees(yaw);
         }
 
         /// <summary>

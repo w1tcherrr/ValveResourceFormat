@@ -66,6 +66,9 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation
         /// </summary>
         public AnimationMovement[] Movements { get; }
 
+        // Per-frame cumulative root motion for ModelAnimation2 clips, which store it outside m_movementArray.
+        private readonly AnimationMovement.MovementData[] clipMovements = [];
+
         /// <summary>
         /// Gets the events defined in this animation.
         /// </summary>
@@ -436,7 +439,7 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation
         /// </summary>
         public bool HasMovementData()
         {
-            return Movements.Length > 0;
+            return Movements.Length > 0 || clipMovements.Length > 0;
         }
 
         /// <summary>
@@ -449,8 +452,24 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation
                 return new();
             }
 
-            GetMovementForTime(time, out var movement, out var nextMovement, out var t);
-            return AnimationMovement.Lerp(movement, nextMovement, t);
+            if (clipMovements.Length > 0)
+            {
+                var frameTime = time * Fps;
+                var frame = (int)MathF.Floor(frameTime);
+                var t = frameTime - frame;
+
+                frame = Math.Clamp(frame, 0, clipMovements.Length - 1);
+                var nextFrame = Math.Clamp(frame + 1, 0, clipMovements.Length - 1);
+
+                var current = clipMovements[frame];
+                var next = clipMovements[nextFrame];
+                return new AnimationMovement.MovementData(
+                    Vector3.Lerp(current.Position, next.Position, t),
+                    float.Lerp(current.Angle, next.Angle, t));
+            }
+
+            GetMovementForTime(time, out var movement, out var nextMovement, out var movementT);
+            return AnimationMovement.Lerp(movement, nextMovement, movementT);
         }
 
         /// <summary>
@@ -461,6 +480,11 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation
             if (!HasMovementData())
             {
                 return new();
+            }
+
+            if (clipMovements.Length > 0)
+            {
+                return clipMovements[Math.Clamp(frame, 0, clipMovements.Length - 1)];
             }
 
             var movementIndex = GetMovementIndexForFrame(frame);
@@ -518,6 +542,7 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation
 
             Clip = clip;
             Movements = [];
+            clipMovements = clip.RootMotion;
             Events = [];
             Activities = [];
         }
