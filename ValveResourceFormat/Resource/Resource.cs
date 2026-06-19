@@ -171,13 +171,18 @@ namespace ValveResourceFormat
         /// <param name="input">The input <see cref="Stream"/> to read from.</param>
         /// <param name="verifyFileSize">Whether to verify that the stream was correctly consumed.</param>
         /// <param name="leaveOpen">Whether to leave the stream open after the object is disposed.</param>
+        /// <param name="blockFilter">Optional predicate selecting which blocks to parse; when null, all blocks are parsed.</param>
         /// <remarks>
         /// The input stream must remain open while accessing data from this resource,
         /// as some operations may perform reads lazily from the stream at call time.
         /// </remarks>
-        public void Read(Stream input, bool verifyFileSize = true, bool leaveOpen = false)
+        public void Read(Stream input, bool verifyFileSize = true, bool leaveOpen = false, Func<BlockType, bool>? blockFilter = null)
         {
             Reader = new BinaryReader(input, Encoding.UTF8, leaveOpen);
+
+            // When a filter is supplied, only the selected blocks are parsed; others are still indexed
+            // (offset/size) but left unread. Note RED2/REDI carry edit info and resource-type hints.
+            bool ShouldReadBlock(BlockType type) => blockFilter == null || blockFilter(type);
 
             FileSize = Reader.ReadUInt32();
 
@@ -255,12 +260,12 @@ namespace ValveResourceFormat
 
                 Blocks.Add(block);
 
-                if (block.Type is BlockType.NTRO)
+                if (block.Type is BlockType.NTRO && ShouldReadBlock(BlockType.NTRO))
                 {
                     block.Read(Reader);
                 }
 
-                if (block.Type is BlockType.RED2 or BlockType.REDI)
+                if ((block.Type is BlockType.RED2 or BlockType.REDI) && ShouldReadBlock(block.Type))
                 {
                     block.Read(Reader);
                     EditInfo = (ResourceEditInfo)block;
@@ -293,7 +298,7 @@ namespace ValveResourceFormat
 
             foreach (var block in Blocks)
             {
-                if (block.Type is not BlockType.REDI and not BlockType.RED2 and not BlockType.NTRO)
+                if ((block.Type is not BlockType.REDI and not BlockType.RED2 and not BlockType.NTRO) && ShouldReadBlock(block.Type))
                 {
                     block.Read(Reader);
                 }

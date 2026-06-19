@@ -1,3 +1,4 @@
+using ValveResourceFormat.Blocks;
 using ValveResourceFormat.CompiledShader;
 
 namespace ValveResourceFormat.IO
@@ -24,5 +25,17 @@ namespace ValveResourceFormat.IO
         /// Always returns null.
         /// </remarks>
         public ShaderCollection? LoadShader(string shaderName) => null;
+
+        /// <inheritdoc/>
+        /// <remarks>
+        /// Always returns an empty enumeration.
+        /// </remarks>
+        public IEnumerable<string> FindFiles(string extension) => [];
+
+        /// <inheritdoc/>
+        /// <remarks>
+        /// Always returns null.
+        /// </remarks>
+        public ResourceExtRefList? LoadFileExternalRefs(string file) => null;
     }
 }

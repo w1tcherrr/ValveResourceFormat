@@ -6,6 +6,7 @@ using System.IO.Enumeration;
 using System.Threading;
 using SteamDatabase.ValvePak;
 using ValveKeyValue;
+using ValveResourceFormat.Blocks;
 using ValveResourceFormat.CompiledShader;
 using ValveResourceFormat.ResourceTypes;
 using ValveResourceFormat.Serialization.KeyValues;
@@ -402,6 +403,73 @@ namespace ValveResourceFormat.IO
             }
 
             return resourceToReturn;
+        }
+
+        /// <inheritdoc/>
+        public virtual IEnumerable<string> FindFiles(string extension)
+        {
+            var compiledExtension = string.Concat(extension, CompiledFileSuffix);
+
+            if (CurrentPackage != null)
+            {
+                foreach (var name in FindPackageFiles(CurrentPackage, compiledExtension))
+                {
+                    yield return name;
+                }
+            }
+
+            foreach (var package in CurrentGamePackages)
+            {
+                foreach (var name in FindPackageFiles(package, compiledExtension))
+                {
+                    yield return name;
+                }
+            }
+        }
+
+        private static IEnumerable<string> FindPackageFiles(Package package, string compiledExtension)
+        {
+            if (package.Entries == null || !package.Entries.TryGetValue(compiledExtension, out var entries))
+            {
+                yield break;
+            }
+
+            foreach (var entry in entries)
+            {
+                var fullPath = entry.GetFullPath();
+                yield return fullPath.EndsWith(CompiledFileSuffix, StringComparison.Ordinal)
+                    ? fullPath[..^CompiledFileSuffix.Length]
+                    : fullPath;
+            }
+        }
+
+        /// <inheritdoc/>
+        public virtual ResourceExtRefList? LoadFileExternalRefs(string file)
+        {
+            var compiledFile = string.Concat(file, CompiledFileSuffix);
+            var foundFile = FindFile(compiledFile, logNotFound: false);
+
+            using var resource = new Resource
+            {
+                FileName = compiledFile,
+            };
+
+            if (foundFile.PathOnDisk != null)
+            {
+                using var stream = File.OpenRead(foundFile.PathOnDisk);
+                resource.Read(stream, blockFilter: static type => type == BlockType.RERL);
+            }
+            else if (foundFile.PackageEntry != null)
+            {
+                using var stream = GetPackageEntryStream(foundFile.Package!, foundFile.PackageEntry);
+                resource.Read(stream, blockFilter: static type => type == BlockType.RERL);
+            }
+            else
+            {
+                return null;
+            }
+
+            return resource.ExternalReferences;
         }
 
         private void HandleGameInfo(HashSet<string> folders, string gameRoot, string gameinfoPath)

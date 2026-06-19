@@ -1,3 +1,4 @@
+using ValveResourceFormat.Blocks;
 using ValveResourceFormat.CompiledShader;
 
 namespace ValveResourceFormat.IO
@@ -37,5 +38,21 @@ namespace ValveResourceFormat.IO
         /// <param name="shaderName">Name of the shader to load.</param>
         /// <returns>Loaded shader collection, or null if not found.</returns>
         public ShaderCollection? LoadShader(string shaderName);
+
+        /// <summary>
+        /// Enumerates the resource names (without the <c>"_c"</c> suffix) of every compiled file of the
+        /// given resource extension known to this loader.
+        /// </summary>
+        /// <param name="extension">Resource extension without a leading dot, e.g. <c>"vnmclip"</c>.</param>
+        /// <returns>The matching resource names; empty when none are found or enumeration is unsupported.</returns>
+        public IEnumerable<string> FindFiles(string extension);
+
+        /// <summary>
+        /// Reads only a compiled file's external reference list (<c>RERL</c>), skipping its data blocks,
+        /// for cheap dependency inspection over many files. Appends <c>"_c"</c> like <see cref="LoadFileCompiled"/>.
+        /// </summary>
+        /// <param name="file">Path to the file to load (without the _c suffix).</param>
+        /// <returns>The external references, or <c>null</c> if not found.</returns>
+        public ResourceExtRefList? LoadFileExternalRefs(string file);
     }
 }

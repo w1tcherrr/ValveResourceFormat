@@ -1,6 +1,7 @@
 using System.IO;
 using System.Text;
 using ValveKeyValue;
+using ValveResourceFormat.Blocks;
 using ValveResourceFormat.CompiledShader;
 using ValveResourceFormat.ResourceTypes;
 using ValveResourceFormat.Serialization.KeyValues;
@@ -146,6 +147,12 @@ namespace ValveResourceFormat.IO
 
         /// <inheritdoc/>
         public ShaderCollection? LoadShader(string shaderName) => fileLoader.LoadShader(shaderName);
+
+        /// <inheritdoc/>
+        public IEnumerable<string> FindFiles(string extension) => fileLoader.FindFiles(extension);
+
+        /// <inheritdoc/>
+        public ResourceExtRefList? LoadFileExternalRefs(string file) => fileLoader.LoadFileExternalRefs(file);
 
         /// <summary>
         /// Initializes a new instance of the <see cref="TrackingFileLoader"/> class.
