@@ -3,6 +3,7 @@ using Datamodel;
 using ValveResourceFormat.IO.ContentFormats.DmxModel;
 using ValveResourceFormat.ResourceTypes;
 using ValveResourceFormat.ResourceTypes.ModelAnimation;
+using ValveResourceFormat.ResourceTypes.ModelAnimation2;
 using ValveResourceFormat.ResourceTypes.ModelFlex;
 
 namespace ValveResourceFormat.IO;
@@ -21,6 +22,36 @@ partial class ModelExtract
             foreach (var anim in model.GetEmbeddedAnimations())
             {
                 AnimationsToExtract.Add((anim, GetDmxFileName_ForAnimation(anim.Name)));
+            }
+        }
+    }
+
+    private void AddAnimationGraphClips(ContentFile vmdl)
+    {
+        if (Type != ModelExtractType.Default || model == null || fileLoader == null)
+        {
+            return;
+        }
+
+        foreach (var clipName in AnimationGraphLoader.GetClipNames(model, fileLoader))
+        {
+            var clipResource = fileLoader.LoadFileCompiled(clipName);
+            if (clipResource?.DataBlock is not AnimationClip)
+            {
+                continue;
+            }
+
+            try
+            {
+                var clipContent = new NmClipExtract(clipResource, fileLoader).ToContentFile();
+                clipContent.FileName = clipName;
+                clipContent.KeepFullPath = true;
+                vmdl.AdditionalFiles.Add(clipContent);
+            }
+            catch (Exception e)
+            {
+                // A single malformed clip shouldn't fail the whole model export.
+                ProgressReporter?.Report($"Skipping animation graph clip '{clipName}': {e.Message}");
             }
         }
     }
@@ -136,6 +167,12 @@ partial class ModelExtract
 
     private static Quaternion NmSkelRotationFixup = new(-0.5f, -0.5f, -0.5f, 0.5f);
 
+    /// <summary>Emits cloth bones with the '_' prefix the compiler sanitizes '$' to, so round-trips don't duplicate them.</summary>
+    internal static string GetExportBoneName(Bone bone)
+        => bone.IsProceduralCloth && bone.Name.StartsWith('$')
+            ? $"_{bone.Name[1..]}"
+            : bone.Name;
+
     private static DmeModel BuildDmeDagSkeleton(Skeleton skeleton, out DmeTransform[] transforms, bool nmSkelAxisFixup = false)
     {
         var dmeSkeleton = new DmeModel();
@@ -146,12 +183,13 @@ partial class ModelExtract
 
         foreach (var bone in skeleton.Bones)
         {
+            var boneName = GetExportBoneName(bone);
             var dag = new DmeJoint
             {
-                Name = bone.Name
+                Name = boneName
             };
 
-            dag.Transform.Name = bone.Name;
+            dag.Transform.Name = boneName;
             dag.Transform.Position = bone.Position;
             dag.Transform.Orientation = bone.Angle;
 
@@ -215,12 +253,19 @@ partial class ModelExtract
         return channel;
     }
 
-    private static void ProcessBoneFrameForDmeChannel(Bone bone, Frame frame, TimeSpan time, DmeLogLayer<Vector3> positionLayer, DmeLogLayer<Quaternion> orientationLayer)
+    private static void ProcessBoneFrameForDmeChannel(Bone bone, Frame frame, TimeSpan time, DmeLogLayer<Vector3> positionLayer, DmeLogLayer<Quaternion> orientationLayer, bool dropVertical)
     {
         var frameBone = frame.Bones[bone.Index];
 
+        var position = frameBone.Position;
+        if (dropVertical)
+        {
+            // vertical root motion is not applied to the visible body. baking it floats the model up.
+            position.Z = 0f;
+        }
+
         positionLayer.Times.Add(time);
-        positionLayer.LayerValues[frame.FrameIndex] = frameBone.Position;
+        positionLayer.LayerValues[frame.FrameIndex] = position;
 
         orientationLayer.Times.Add(time);
         orientationLayer.LayerValues[frame.FrameIndex] = frameBone.Angle;
@@ -255,7 +300,8 @@ partial class ModelExtract
 
             var movement = anim.GetMovementOffsetData(time);
 
-            rootPositionLayer.LayerValues[i] = movement.Position;
+            // vertical root motion is not applied to the visible body, so don't bake it.
+            rootPositionLayer.LayerValues[i] = new Vector3(movement.Position.X, movement.Position.Y, 0f);
             rootPositionLayer.Times.Add(timespan);
 
             var degrees = movement.Angle * 0.0174532925f; //Deg to rad
@@ -297,12 +343,15 @@ partial class ModelExtract
 
     private static void ProcessBoneChannels(Skeleton skeleton, Animation anim, DmeTransform[] transforms, DmeChannelsClip clip, Frame[] frames)
     {
+        var rootMotionBone = skeleton["root_motion"];
+
         foreach (var bone in skeleton.Bones)
         {
             var transform = transforms[bone.Index];
+            var boneName = GetExportBoneName(bone);
 
-            var positionChannel = BuildDmeChannel<Vector3>($"{bone.Name}_p", transform, "position", out var positionLog);
-            var orientationChannel = BuildDmeChannel<Quaternion>($"{bone.Name}_o", transform, "orientation", out var orientationLog);
+            var positionChannel = BuildDmeChannel<Vector3>($"{boneName}_p", transform, "position", out var positionLog);
+            var orientationChannel = BuildDmeChannel<Quaternion>($"{boneName}_o", transform, "orientation", out var orientationLog);
 
             var positionLogLayer = positionLog.GetLayer(0);
             var orientationLogLayer = orientationLog.GetLayer(0);
@@ -316,7 +365,7 @@ partial class ModelExtract
 
                 var time = TimeSpan.FromSeconds((double)i / MathF.Max(1f, anim.Fps));
 
-                ProcessBoneFrameForDmeChannel(bone, frame, time, positionLogLayer, orientationLogLayer);
+                ProcessBoneFrameForDmeChannel(bone, frame, time, positionLogLayer, orientationLogLayer, bone == rootMotionBone);
             }
 
             ApplyModelDocHack(positionLogLayer);

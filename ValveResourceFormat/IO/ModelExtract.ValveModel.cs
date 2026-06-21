@@ -228,7 +228,7 @@ partial class ModelExtract
         {
             var boneDefinitionNode = MakeNode(
                 "Bone",
-                ("name", bone.Name),
+                ("name", GetExportBoneName(bone)),
                 ("origin", ToKVArray(bone.Position)),
                 ("angles", ToKVArray(EntityTransformHelper.ToEulerAngles(bone.Angle))),
                 ("do_not_discard", true)
@@ -646,7 +646,9 @@ partial class ModelExtract
                     var extractMotion = MakeNode("ExtractMotion",
                         ("extract_tx", flags.HasFlag(ModelAnimationMotionFlags.TX)),
                         ("extract_ty", flags.HasFlag(ModelAnimationMotionFlags.TY)),
-                        ("extract_tz", flags.HasFlag(ModelAnimationMotionFlags.TZ)),
+                        // never extract vertical. on recompile it makes the compiler counter-bake the root
+                        // and float the whole model up. the engine doesn't apply vertical root motion.
+                        ("extract_tz", false),
                         ("extract_rz", flags.HasFlag(ModelAnimationMotionFlags.RZ)),
                         ("linear", flags.HasFlag(ModelAnimationMotionFlags.Linear)),
                         ("quadratic", false),

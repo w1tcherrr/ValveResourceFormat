@@ -2,6 +2,7 @@ using System.Buffers;
 using System.Diagnostics;
 using System.Linq;
 using System.Runtime.InteropServices;
+using ValveResourceFormat.IO;
 using ValveResourceFormat.Renderer.Buffers;
 using ValveResourceFormat.ResourceTypes;
 using ValveResourceFormat.ResourceTypes.ModelAnimation;
@@ -50,6 +51,9 @@ namespace ValveResourceFormat.Renderer.SceneNodes
         /// Attachment points from model data.
         /// </summary>
         public Dictionary<string, Attachment> Attachments { get; }
+
+        /// <summary>Gets the list of nodes attached to this model and the attachment points used.</summary>
+        public List<(SceneNode Node, string AttachmentName, Vector3 Offset, Quaternion Rotation)> AttachedNodes { get; } = [];
 
         /// <summary>Gets the name of the currently active material group (skin).</summary>
         public string ActiveMaterialGroup => activeMaterialGroup.Name;
@@ -117,15 +121,9 @@ namespace ValveResourceFormat.Renderer.SceneNodes
                     AnimationController.RegisterExternalSkeleton(skeletonName, skeleton);
                 }
 
-                var animGraphs = model.Data.GetArray("m_animGraph2Refs");
-
-                // just in case there is any recursive or duplicate references
-                var visitedResources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-                foreach (var animGraphRef in animGraphs)
+                foreach (var clipName in AnimationGraphLoader.GetClipNames(model, Scene.RendererContext.FileLoader))
                 {
-                    var graphName = animGraphRef.GetStringProperty("m_hGraph");
-                    LoadAnimGraphResources(graphName, visitedResources);
+                    LoadAnimationClip(clipName);
                 }
             }
 
@@ -233,6 +231,7 @@ namespace ValveResourceFormat.Renderer.SceneNodes
         public override void Update(Scene.UpdateContext context)
         {
             UpdateAutoLod(context.Camera);
+            UpdateAttachments(context);
 
             if (!AnimationController.Update(context.Timestep))
             {
@@ -305,6 +304,24 @@ namespace ValveResourceFormat.Renderer.SceneNodes
                         renderableMesh.FlexStateManager.UpdateComposite();
                         renderableMesh.FlexStateManager.MorphComposite.Render();
                     }
+                }
+            }
+        }
+
+        private void UpdateAttachments(Scene.UpdateContext context)
+        {
+            foreach (var attachment in AttachedNodes)
+            {
+                var child = attachment.Node;
+                var oldBounds = child.BoundingBox;
+
+                var localTransform = Matrix4x4.CreateFromQuaternion(attachment.Rotation) * Matrix4x4.CreateTranslation(attachment.Offset);
+                child.Transform = localTransform * GetAttachmentTransform(attachment.AttachmentName);
+                child.Update(context);
+
+                if (child.LayerEnabled)
+                {
+                    child.Scene.DynamicOctree.Update(child, oldBounds);
                 }
             }
         }
@@ -413,43 +430,6 @@ namespace ValveResourceFormat.Renderer.SceneNodes
             return true;
         }
 
-        private bool LoadAnimGraphResources(string graphName, HashSet<string> visited)
-        {
-            var resource = Scene.RendererContext.FileLoader.LoadFileCompiled(graphName);
-            if (resource?.DataBlock is not BinaryKV3 graphData)
-            {
-                return false;
-            }
-
-            var graphResources = graphData.Data.Root.GetArray<string>("m_resources");
-            if (graphResources == null)
-            {
-                return false;
-            }
-
-            var clipExt = ResourceType.NmClip.GetExtension()!;
-            var graphExt = ResourceType.NmGraph.GetExtension()!;
-
-            foreach (var graphResource in graphResources)
-            {
-                if (!visited.Add(graphResource))
-                {
-                    continue;
-                }
-
-                if (graphResource.EndsWith(clipExt, StringComparison.OrdinalIgnoreCase))
-                {
-                    LoadAnimationClip(graphResource);
-                }
-                else if (graphResource.EndsWith(graphExt, StringComparison.OrdinalIgnoreCase))
-                {
-                    LoadAnimGraphResources(graphResource, visited);
-                }
-            }
-
-            return true;
-        }
-
         private void LoadMeshes(Model model)
         {
             // All LoD levels are loaded; the active one is picked at render time.
@@ -545,6 +525,23 @@ namespace ValveResourceFormat.Renderer.SceneNodes
                     renderer.SetBoneMatricesBuffer(null);
                 }
             }
+        }
+
+        /// <summary>
+        /// Attaches another <see cref="SceneNode"/> to this model with optional attachment point, offset and rotation.
+        /// </summary>
+        /// <param name="node">The child model to attach.</param>
+        /// <param name="attachmentName">The attachment point name.</param>
+        /// <param name="offset">The local offset from the attachment point.</param>
+        /// <param name="rotation">The local rotation from the attachment point.</param>
+        public void AttachNode(SceneNode node,
+            string attachmentName = "",
+            Vector3 offset = default,
+            Quaternion rotation = default)
+        {
+            node.Parent = this;
+            AttachedNodes.RemoveAll(entry => entry.Node == node);
+            AttachedNodes.Add((node, attachmentName, offset, rotation));
         }
 
         /// <summary>

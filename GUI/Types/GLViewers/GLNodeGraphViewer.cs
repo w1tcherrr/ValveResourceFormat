@@ -203,7 +203,6 @@ namespace GUI.Types.GLViewers
             var screenPoint = new SKPoint(e.Location.X, e.Location.Y);
             var graphPoint = ScreenToGraph(screenPoint);
 
-            using var lockedGl = MakeCurrent();
             nodeGraph.HandleMouseDown(graphPoint, e.Button, Control.ModifierKeys);
 
             if (e.Button == MouseButtons.Left && Control.ModifierKeys == Keys.None)
@@ -228,7 +227,6 @@ namespace GUI.Types.GLViewers
                 return;
             }
 
-            using var lockedGl = MakeCurrent();
             nodeGraph.HandleMouseMove(graphPoint, Control.ModifierKeys);
         }
 
@@ -241,7 +239,6 @@ namespace GUI.Types.GLViewers
             var screenPoint = new SKPoint(e.Location.X, e.Location.Y);
             var graphPoint = ScreenToGraph(screenPoint);
 
-            using var lockedGl = MakeCurrent();
             nodeGraph.HandleMouseUp(graphPoint);
         }
 
@@ -256,6 +253,38 @@ namespace GUI.Types.GLViewers
             var graphY = canvasY + graphBounds.Top;
 
             return new SKPoint(graphX, graphY);
+        }
+
+        // The graph is drawn through Skia, not the texture/shader pipeline the base capture
+        // path assumes, so render the whole graph into a raster bitmap for Ctrl+C / saving.
+        protected override SKBitmap ReadPixelsToBitmap()
+        {
+            var bounds = nodeGraph.GetGraphBounds();
+
+            const float maxDimension = 8192f;
+            var scale = Math.Min(1f, maxDimension / Math.Max(bounds.Width, bounds.Height));
+
+            var width = Math.Max(1, (int)(bounds.Width * scale));
+            var height = Math.Max(1, (int)(bounds.Height * scale));
+
+            var bitmap = new SKBitmap(new SKImageInfo(width, height, SKColorType.Bgra8888, SKAlphaType.Premul));
+
+            try
+            {
+                using var canvas = new SKCanvas(bitmap);
+                canvas.Scale(scale, scale);
+                canvas.Translate(-bounds.Left, -bounds.Top);
+
+                nodeGraph.RenderToCanvas(canvas, bounds.Location, new SKPoint(bounds.Right, bounds.Bottom));
+
+                var bitmapToReturn = bitmap;
+                bitmap = null;
+                return bitmapToReturn;
+            }
+            finally
+            {
+                bitmap?.Dispose();
+            }
         }
 
         public override void Dispose()
