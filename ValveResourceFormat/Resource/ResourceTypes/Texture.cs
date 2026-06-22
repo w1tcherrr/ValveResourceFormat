@@ -157,6 +157,124 @@ namespace ValveResourceFormat.ResourceTypes
                 /// Gets the dictionary of floating-point parameters associated with this sequence.
                 /// </summary>
                 public Dictionary<string, float> FloatParams { get; } = [];
+
+                /// <summary>
+                /// Gets the total playback duration of this sequence in seconds.
+                /// </summary>
+                public float TotalLength => FramesPerSecond > 0f
+                    ? Frames.Length / FramesPerSecond
+                    : Frames.Sum(static frame => frame.DisplayTime);
+
+                /// <summary>
+                /// Applies this sequence's intrinsic looping behavior to a raw frame index, either
+                /// clamping to the last frame (when <see cref="Clamp"/> is set) or wrapping around.
+                /// </summary>
+                /// <param name="frameId">The raw frame index to normalize.</param>
+                /// <returns>A valid index into <see cref="Frames"/>.</returns>
+                public int ClampFrameIndex(int frameId) => ClampFrameIndex(frameId, !Clamp);
+
+                /// <summary>
+                /// Normalizes a raw frame index, either clamping to the last frame or wrapping around
+                /// depending on <paramref name="loop"/>.
+                /// </summary>
+                /// <param name="frameId">The raw frame index to normalize.</param>
+                /// <param name="loop">Whether the sequence should wrap around instead of holding the last frame.</param>
+                /// <returns>A valid index into <see cref="Frames"/>.</returns>
+                public int ClampFrameIndex(int frameId, bool loop)
+                {
+                    if (Frames.Length <= 1)
+                    {
+                        return 0;
+                    }
+
+                    if (!loop)
+                    {
+                        return Math.Clamp(frameId, 0, Frames.Length - 1);
+                    }
+
+                    frameId %= Frames.Length;
+
+                    if (frameId < 0)
+                    {
+                        frameId += Frames.Length;
+                    }
+
+                    return frameId;
+                }
+
+                /// <summary>
+                /// Gets the playback time in seconds at which the given frame begins, using
+                /// <see cref="FramesPerSecond"/> when available and otherwise accumulating
+                /// per-frame <see cref="Frame.DisplayTime"/> values.
+                /// </summary>
+                /// <param name="frameIndex">The frame index to locate.</param>
+                /// <returns>The start time of the frame in seconds.</returns>
+                public float GetFrameStartTime(int frameIndex)
+                {
+                    frameIndex = Math.Clamp(frameIndex, 0, Math.Max(0, Frames.Length - 1));
+
+                    if (FramesPerSecond > 0f)
+                    {
+                        return frameIndex / FramesPerSecond;
+                    }
+
+                    var time = 0f;
+
+                    for (var i = 0; i < frameIndex; i++)
+                    {
+                        time += Frames[i].DisplayTime;
+                    }
+
+                    return time;
+                }
+
+                /// <summary>
+                /// Selects the frame to display at the given playback time, using <see cref="FramesPerSecond"/>
+                /// when available and otherwise walking per-frame <see cref="Frame.DisplayTime"/> values.
+                /// </summary>
+                /// <param name="seconds">The elapsed playback time in seconds.</param>
+                /// <param name="loop">Whether the sequence should wrap around instead of holding the last frame.</param>
+                /// <returns>A valid index into <see cref="Frames"/>.</returns>
+                public int GetFrameIndexForTime(float seconds, bool loop)
+                {
+                    if (Frames.Length <= 1)
+                    {
+                        return 0;
+                    }
+
+                    if (FramesPerSecond > 0f)
+                    {
+                        return ClampFrameIndex((int)(seconds * FramesPerSecond), loop);
+                    }
+
+                    var total = TotalLength;
+
+                    if (total <= 0f)
+                    {
+                        return 0;
+                    }
+
+                    var time = loop ? seconds % total : Math.Min(seconds, total);
+
+                    if (time < 0f)
+                    {
+                        time += total;
+                    }
+
+                    var accumulated = 0f;
+
+                    for (var i = 0; i < Frames.Length; i++)
+                    {
+                        accumulated += Frames[i].DisplayTime;
+
+                        if (time < accumulated)
+                        {
+                            return i;
+                        }
+                    }
+
+                    return Frames.Length - 1;
+                }
             }
 
             /// <summary>

@@ -323,18 +323,7 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
                                 frameId = (int)(animationTime * animationRate * sequence.FramesPerSecond);
                             }
 
-                            if (sequence.Clamp)
-                            {
-                                frameId = Math.Clamp(frameId, 0, sequence.Frames.Length - 1);
-                            }
-                            else
-                            {
-                                frameId %= sequence.Frames.Length;
-                                if (frameId < 0)
-                                {
-                                    frameId += sequence.Frames.Length;
-                                }
-                            }
+                            frameId = sequence.ClampFrameIndex(frameId);
                         }
 
                         var currentFrame = sequence.Frames[frameId];

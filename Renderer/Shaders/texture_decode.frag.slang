@@ -117,6 +117,8 @@ uniform vec2 g_vViewportPosition;
 uniform float g_flScale = 1.0;
 uniform int g_nChannelSplitMode;
 uniform int g_nCubemapProjectionType;
+uniform int g_nSpriteSheetMode = 0; // 0 = off, 1 = full sheet + highlight, 2 = single frame
+uniform vec4 g_vSpriteFrameMinMax = vec4(0.0, 0.0, 1.0, 1.0);
 
 #define g_bCubeEquiRectangularProjection (g_nCubemapProjectionType == 1)
 #define g_bCubeCubicProjection (g_nCubemapProjectionType == 2)
@@ -192,6 +194,13 @@ void main()
             vChannelSliceTexCoord.x = fract(vChannelSliceTexCoord.x);
             vTexCoord.xy = bIsWideImage ? vChannelSliceTexCoord.yx : vChannelSliceTexCoord.xy;
         }
+    }
+
+    // In single-frame mode the [0,1] viewer area maps onto the current frame's sub-rect so it fills the panel.
+    vec2 vSpriteBoundsCoord = vTexCoord.xy;
+    if (g_bTextureViewer && g_nSpriteSheetMode == 2)
+    {
+        vTexCoord.xy = mix(g_vSpriteFrameMinMax.xy, g_vSpriteFrameMinMax.zw, vTexCoord.xy);
     }
 
     // cubemaps take a direction vector as sample coords
@@ -291,7 +300,8 @@ void main()
         float flBackgroundMix = 1.0;
 
         const float flMaxUv = g_bVisualizeTiling ? 2.0 : 1.0;
-        bool bWithinImageBounds = vTexCoord.x < flMaxUv && vTexCoord.y < flMaxUv && vTexCoord.x >= 0.0 && vTexCoord.y >= 0.0;
+        vec2 vBoundsCoord = g_nSpriteSheetMode == 2 ? vSpriteBoundsCoord : vTexCoord.xy;
+        bool bWithinImageBounds = vBoundsCoord.x < flMaxUv && vBoundsCoord.y < flMaxUv && vBoundsCoord.x >= 0.0 && vBoundsCoord.y >= 0.0;
 
         if (g_nChannelSplitMode > 0 && (bWithinImageBounds || nColorSliceBoundsIndex > 0))
         {
@@ -313,5 +323,22 @@ void main()
         }
 
         vColorOutput.rgb = mix(vColorOutput.rgb, vBackgroundColor, flBackgroundMix);
+
+        if (g_nSpriteSheetMode == 1)
+        {
+            vec2 vMin = g_vSpriteFrameMinMax.xy;
+            vec2 vMax = g_vSpriteFrameMinMax.zw;
+            vec2 vThickness = fwidth(vTexCoord.xy) * 1.5;
+
+            bool bInsideX = vTexCoord.x >= vMin.x && vTexCoord.x <= vMax.x;
+            bool bInsideY = vTexCoord.y >= vMin.y && vTexCoord.y <= vMax.y;
+            bool bOnVerticalEdge = (abs(vTexCoord.x - vMin.x) < vThickness.x || abs(vTexCoord.x - vMax.x) < vThickness.x) && bInsideY;
+            bool bOnHorizontalEdge = (abs(vTexCoord.y - vMin.y) < vThickness.y || abs(vTexCoord.y - vMax.y) < vThickness.y) && bInsideX;
+
+            if (bOnVerticalEdge || bOnHorizontalEdge)
+            {
+                vColorOutput = vec4(1.0, 0.5, 0.0, 1.0);
+            }
+        }
     }
 }
