@@ -278,6 +278,34 @@ public class UserInput
         TransitionEndTime = Renderer.Uptime + transitionDuration;
     }
 
+    /// <summary>
+    /// Instantly moves the camera to the given pose, cancelling any active smooth transition so there
+    /// is no glide. Also leaves orbit mode so the new free-flight position holds.
+    /// </summary>
+    public void TeleportCamera(Vector3 location, float pitch, float yaw)
+    {
+        TransitionEndTime = -1f;
+        OrbitTarget = null;
+        Camera.SetLocation(location);
+        Camera.Pitch = pitch;
+        Camera.Yaw = yaw;
+        Camera.ClampRotation();
+        Camera.RecalculateMatrices();
+    }
+
+    /// <summary>
+    /// Instantly moves the camera to <paramref name="location"/> looking along <paramref name="forward"/>,
+    /// cancelling any active smooth transition so there is no glide and leaving orbit mode.
+    /// </summary>
+    public void TeleportCamera(Vector3 location, Vector3 forward)
+    {
+        TransitionEndTime = -1f;
+        OrbitTarget = null;
+        Camera.SetLocation(location);
+        Camera.LookAt(location + forward);
+        Camera.RecalculateMatrices();
+    }
+
     private CameraLite GetInterpolatedCamera()
     {
         if (TransitionEndTime < Renderer.Uptime)

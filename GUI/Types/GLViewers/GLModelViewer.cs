@@ -25,6 +25,7 @@ namespace GUI.Types.GLViewers
         public ComboBox? animationComboBox { get; protected set; }
         protected CheckBox? animationPlayPause;
         private CheckBox? rootMotionCheckBox;
+        private CheckBox? firstPersonCameraCheckBox;
         private CheckBox? showSkeletonCheckbox;
         private ComboBox? hitboxComboBox;
         private Label? animationTimeLabel;
@@ -43,6 +44,10 @@ namespace GUI.Types.GLViewers
         private HitboxSetSceneNode? hitboxSetSceneNode;
         private CheckedListBox? physicsGroupsComboBox;
         private int animationComboBoxCurrentIndex = -1;
+
+        private bool inFirstPersonView;
+        private (Vector3 Location, float Pitch, float Yaw)? savedCameraBeforeFirstPerson;
+        private bool suppressMeshGroupEvents;
 
         public GLModelViewer(VrfGuiContext vrfGuiContext, RendererContext rendererContext) : base(vrfGuiContext, rendererContext)
         {
@@ -73,6 +78,7 @@ namespace GUI.Types.GLViewers
             lodComboBox?.Dispose();
             physicsGroupsComboBox?.Dispose();
             rootMotionCheckBox?.Dispose();
+            firstPersonCameraCheckBox?.Dispose();
             showSkeletonCheckbox?.Dispose();
             hitboxComboBox?.Dispose();
         }
@@ -120,6 +126,9 @@ namespace GUI.Types.GLViewers
                         modelSceneNode.SetAnimation(null);
                     }
                 }
+
+                UpdateFirstPersonCamera();
+                RefreshMeshGroupChecks();
 
                 rootMotionCheckBox!.Enabled = animationController.ActiveAnimation?.HasMovementData() ?? false;
                 enableRootMotion = rootMotionCheckBox.Enabled && rootMotionCheckBox.Checked;
@@ -176,6 +185,8 @@ namespace GUI.Types.GLViewers
 
             rootMotionCheckBox.Checked = false;
             rootMotionCheckBox.Enabled = false;
+
+            firstPersonCameraCheckBox = UiControl.AddCheckBox("First-person camera", true, _ => UpdateFirstPersonCamera());
         }
 
         protected override void LoadScene()
@@ -184,7 +195,10 @@ namespace GUI.Types.GLViewers
 
             if (model != null)
             {
-                modelSceneNode = new ModelSceneNode(Scene, model);
+                modelSceneNode = new ModelSceneNode(Scene, model)
+                {
+                    AutoFirstPersonMeshGroups = true,
+                };
                 animationController = modelSceneNode.AnimationController;
                 Scene.Add(modelSceneNode, true);
 
@@ -362,6 +376,11 @@ namespace GUI.Types.GLViewers
                         }
                     }, groups =>
                     {
+                        if (suppressMeshGroupEvents)
+                        {
+                            return;
+                        }
+
                         modelSceneNode.SetActiveMeshGroups(groups);
                         modelStatsDirty = true;
                     });
@@ -425,6 +444,87 @@ namespace GUI.Types.GLViewers
             }
 
             base.AddUiControls();
+        }
+
+        // Teleport to a first-person eye view when a viewmodel clip is active and the "First-person
+        // camera" checkbox is on (re-framing on every first-person clip, even after the camera was
+        // moved), and instantly restore the previous camera when leaving first-person or unchecking the
+        // box. Called both on animation change and when the checkbox is toggled.
+        private void UpdateFirstPersonCamera()
+        {
+            if (modelSceneNode == null)
+            {
+                return;
+            }
+
+            var teleportEnabled = firstPersonCameraCheckBox?.Checked ?? true;
+            var wantFirstPersonView = modelSceneNode.IsFirstPersonActive && teleportEnabled;
+
+            if (wantFirstPersonView)
+            {
+                // Remember the previous camera once, when first entering the first-person view.
+                if (!inFirstPersonView)
+                {
+                    savedCameraBeforeFirstPerson = (Input.Camera.Location, Input.Camera.Pitch, Input.Camera.Yaw);
+                }
+
+                var (location, forward) = GetFirstPersonCameraPose();
+                Input.TeleportCamera(location, forward);
+                inFirstPersonView = true;
+            }
+            else if (inFirstPersonView)
+            {
+                // Leaving first-person (body clip selected, or checkbox unchecked): restore instantly.
+                if (savedCameraBeforeFirstPerson is { } saved)
+                {
+                    Input.TeleportCamera(saved.Location, saved.Pitch, saved.Yaw);
+                }
+
+                inFirstPersonView = false;
+            }
+        }
+
+        // Sync the Mesh Group checkboxes with the model's currently active groups, since first-person
+        // clips auto-switch the active group. Suppressed re-entrancy so the programmatic check changes
+        // don't feed back into SetActiveMeshGroups.
+        private void RefreshMeshGroupChecks()
+        {
+            if (meshGroupListBox == null || modelSceneNode == null)
+            {
+                return;
+            }
+
+            var active = modelSceneNode.GetActiveMeshGroups();
+
+            suppressMeshGroupEvents = true;
+            try
+            {
+                for (var i = 0; i < meshGroupListBox.Items.Count; i++)
+                {
+                    var shouldBeChecked = meshGroupListBox.Items[i] is string group && active.Contains(group);
+                    if (meshGroupListBox.GetItemChecked(i) != shouldBeChecked)
+                    {
+                        meshGroupListBox.SetItemChecked(i, shouldBeChecked);
+                    }
+                }
+            }
+            finally
+            {
+                suppressMeshGroupEvents = false;
+            }
+        }
+
+        // The first-person eye, derived by inverting ViewmodelSceneNode's placement: with the viewmodel
+        // armature at world identity, the eye sits at -ViewmodelOffset and looks along the inverse of the
+        // viewmodel offset rotation. Direction-to-angle conversion is left to the camera.
+        private static (Vector3 Location, Vector3 Forward) GetFirstPersonCameraPose()
+        {
+            var location = -ViewmodelSceneNode.DefaultViewmodelOffset;
+
+            var rotation = Matrix4x4.CreateFromQuaternion(Quaternion.Inverse(ViewmodelSceneNode.ViewmodelOffsetRotation));
+            var forward = Vector3.Normalize(new Vector3(rotation.M31, rotation.M32, rotation.M33));
+
+            return (location, forward);
         }
 
         protected void SetAnimationControllerUpdateHandler()

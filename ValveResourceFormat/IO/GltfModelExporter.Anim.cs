@@ -222,12 +222,141 @@ public partial class GltfModelExporter
                 outputAnimation.CreateScaleChannel(jointNode, ScaleWriter.Channels[boneID], true);
             }
         }
+
+        /// <summary>
+        /// Writes a clip authored on this writer's (source) skeleton onto a different, body-posed target
+        /// armature, matching bones by name and applying each bone's rotation relative to its source bind
+        /// pose onto the target bind pose. This lets a body-authored first-person mesh follow an
+        /// incompatible viewmodel clip without being deformed (re-skinning the mesh onto the viewmodel rig
+        /// warps it, since the two rigs disagree). Target bones with no source counterpart stay at bind.
+        /// </summary>
+        public void WriteRetargetedAnimation(ModelRoot model, Node?[] targetJoints, Skeleton targetSkeleton, VAnim animation, string? animationName = null)
+        {
+            Debug.Assert(targetJoints.Length == targetSkeleton.Bones.Length);
+
+            Frame.Clear(Skeleton);
+
+            var targetCount = targetSkeleton.Bones.Length;
+            var rotationWriter = AnimationChannelWriter<Quaternion>.Create(targetCount);
+            var positionWriter = AnimationChannelWriter<Vector3>.Create(targetCount);
+            var scaleWriter = AnimationChannelWriter<Vector3>.Create(targetCount);
+
+            // target bone -> source (clip skeleton) bone index by name, or -1 when the clip lacks it.
+            var sourceForTarget = new int[targetCount];
+            for (var t = 0; t < targetCount; t++)
+            {
+                sourceForTarget[t] = Skeleton.GetBoneIndex(targetSkeleton.Bones[t].Name);
+            }
+
+            var outputAnimation = model.UseAnimation(animationName ?? animation.Name);
+            var fps = animation.Fps == 0 ? 1f : animation.Fps;
+            var additive = animation.Clip?.IsAdditive ?? false;
+
+            for (var f = 0; f < animation.FrameCount; f++)
+            {
+                Frame.FrameIndex = f;
+                animation.DecodeFrame(Frame);
+
+                if (additive)
+                {
+                    for (var boneID = 0; boneID < BoneCount; boneID++)
+                    {
+                        var bind = new FrameBone(Skeleton.Bones[boneID].Position, 1f, Skeleton.Bones[boneID].Angle);
+                        Frame.Bones[boneID] = Frame.Bones[boneID].BlendAdd(bind, 1f);
+                    }
+                }
+
+                var time = f / fps;
+                var prevFrameTime = (f - 1) / fps;
+
+                for (var t = 0; t < targetCount; t++)
+                {
+                    var targetBone = targetSkeleton.Bones[t];
+                    var s = sourceForTarget[t];
+
+                    Vector3 position;
+                    Quaternion rotation;
+                    Vector3 scale;
+
+                    if (s == -1)
+                    {
+                        position = targetBone.Position;
+                        rotation = targetBone.Angle;
+                        scale = Vector3.One;
+                    }
+                    else
+                    {
+                        var sourceFrame = Frame.Bones[s];
+                        var sourceBone = Skeleton.Bones[s];
+
+                        // Apply the source bone's rotation relative to its own bind, in bone-local space,
+                        // onto the target bind: targetLocal = (frame * sourceBind^-1) * targetBind.
+                        var frameLocal = Matrix4x4.CreateFromQuaternion(sourceFrame.Angle) * Matrix4x4.CreateTranslation(sourceFrame.Position);
+                        var sourceBind = Matrix4x4.CreateFromQuaternion(sourceBone.Angle) * Matrix4x4.CreateTranslation(sourceBone.Position);
+                        var targetBind = Matrix4x4.CreateFromQuaternion(targetBone.Angle) * Matrix4x4.CreateTranslation(targetBone.Position);
+
+                        if (Matrix4x4.Invert(sourceBind, out var sourceBindInverse)
+                            && Matrix4x4.Decompose(frameLocal * sourceBindInverse * targetBind, out _, out var r, out var tr))
+                        {
+                            rotation = r;
+                            position = tr;
+                        }
+                        else
+                        {
+                            rotation = targetBone.Angle;
+                            position = targetBone.Position;
+                        }
+
+                        var boneScale = sourceFrame.Scale;
+                        if (float.IsNaN(boneScale) || float.IsInfinity(boneScale))
+                        {
+                            boneScale = 1f;
+                        }
+
+                        scale = new Vector3(boneScale);
+                    }
+
+                    (position, rotation) = BakeConversion(position, rotation, targetBone.Parent == null);
+
+                    rotationWriter.SubmitKeyframe(t, time, prevFrameTime, rotation);
+                    positionWriter.SubmitKeyframe(t, time, prevFrameTime, position);
+                    scaleWriter.SubmitKeyframe(t, time, prevFrameTime, scale);
+                }
+            }
+
+            for (var t = 0; t < targetCount; t++)
+            {
+                if (animation.FrameCount == 0)
+                {
+                    var targetBone = targetSkeleton.Bones[t];
+                    var (bindPosition, bindRotation) = BakeConversion(targetBone.Position, targetBone.Angle, targetBone.Parent == null);
+                    rotationWriter.Channels[t].Add(0f, bindRotation);
+                    positionWriter.Channels[t].Add(0f, bindPosition);
+                    scaleWriter.Channels[t].Add(0f, Vector3.One);
+                }
+
+                var jointNode = targetJoints[t];
+                if (jointNode == null)
+                {
+                    continue;
+                }
+
+                outputAnimation.CreateRotationChannel(jointNode, rotationWriter.Channels[t], true);
+                outputAnimation.CreateTranslationChannel(jointNode, positionWriter.Channels[t], true);
+                outputAnimation.CreateScaleChannel(jointNode, scaleWriter.Channels[t], true);
+            }
+        }
     }
 
-    // Animation-graph clips aren't part of GetAllAnimations; write them here, retargeted by bone name.
+    // Animation-graph clips aren't part of GetAllAnimations; write them here. Clips authored on a
+    // skeleton compatible with the model are retargeted onto its bones by name. Clips on an
+    // incompatible skeleton (e.g. the first-person viewmodel rig, whose arm bones hang off weapon
+    // bones the body lacks) are retargeted onto the model's armature by bone name as bind-relative
+    // deltas, so the body-authored first-person mesh follows the clip without being deformed
+    // (re-skinning that mesh onto the viewmodel rig instead would warp it, since the two rigs disagree).
     private void WriteAnimationGraphClips(ModelRoot exportedModel, VModel model, Node[] joints, HashSet<string> animationFilter)
     {
-        var retargets = new Dictionary<string, (AnimationWriter Writer, Node?[] Joints)?>();
+        var targets = new Dictionary<string, (AnimationWriter Writer, Node?[] Joints, Skeleton? RetargetTarget)?>();
 
         // UseAnimation is find-or-create by name, so a clip sharing a name with an already-written
         // animation (embedded, or an earlier clip) would merge its channels onto it. Keep the first, skip the rest.
@@ -255,14 +384,22 @@ public partial class GltfModelExporter
                 continue;
             }
 
-            if (!retargets.TryGetValue(clip.SkeletonName, out var retarget))
+            if (!targets.TryGetValue(clip.SkeletonName, out var target))
             {
-                retargets[clip.SkeletonName] = retarget = BuildClipRetarget(model, joints, clip.SkeletonName);
+                targets[clip.SkeletonName] = target = BuildClipTarget(model, joints, clip.SkeletonName);
             }
 
-            if (retarget != null)
+            if (target != null)
             {
-                retarget.Value.Writer.WriteAnimation(exportedModel, retarget.Value.Joints, new VAnim(clip), animationName);
+                if (target.Value.RetargetTarget != null)
+                {
+                    target.Value.Writer.WriteRetargetedAnimation(exportedModel, target.Value.Joints, target.Value.RetargetTarget, new VAnim(clip), animationName);
+                }
+                else
+                {
+                    target.Value.Writer.WriteAnimation(exportedModel, target.Value.Joints, new VAnim(clip), animationName);
+                }
+
                 writtenNames.Add(animationName);
             }
         }
@@ -272,7 +409,11 @@ public partial class GltfModelExporter
     // path with the .vnmclip extension stripped (the path keeps them unique across clip folders).
     private static string ClipAnimationName(string clipName) => Path.ChangeExtension(clipName, null)!;
 
-    private (AnimationWriter Writer, Node?[] Joints)? BuildClipRetarget(VModel model, Node[] joints, string clipSkeletonName)
+    // Build the write target shared by all clips on a skeleton. Compatible skeletons map directly onto
+    // the model's joints by name. Incompatible ones (the viewmodel rig) are retargeted onto the model's
+    // joints as bind-relative deltas (see WriteRetargetedAnimation), so the body-authored first-person
+    // mesh on that same armature follows the clip without being deformed.
+    private (AnimationWriter Writer, Node?[] Joints, Skeleton? RetargetTarget)? BuildClipTarget(VModel model, Node[] joints, string clipSkeletonName)
     {
         if (FileLoader.LoadFileCompiled(clipSkeletonName)?.DataBlock is not BinaryKV3 skeletonData)
         {
@@ -280,20 +421,28 @@ public partial class GltfModelExporter
         }
 
         var clipSkeleton = Skeleton.FromSkeletonData(skeletonData.Data);
-        var remappedJoints = new Node?[clipSkeleton.Bones.Length];
-        var matched = false;
 
-        for (var i = 0; i < clipSkeleton.Bones.Length; i++)
+        if (clipSkeleton.IsCompatibleWith(model.Skeleton))
         {
-            var modelBone = model.Skeleton[clipSkeleton.Bones[i].Name];
-            if (modelBone != null)
+            var remappedJoints = new Node?[clipSkeleton.Bones.Length];
+            var matched = false;
+
+            for (var i = 0; i < clipSkeleton.Bones.Length; i++)
             {
-                remappedJoints[i] = joints[modelBone.Index];
-                matched = true;
+                var modelBone = model.Skeleton[clipSkeleton.Bones[i].Name];
+                if (modelBone != null)
+                {
+                    remappedJoints[i] = joints[modelBone.Index];
+                    matched = true;
+                }
             }
+
+            return matched ? (new AnimationWriter(clipSkeleton, model.FlexControllers), remappedJoints, null) : null;
         }
 
-        return matched ? (new AnimationWriter(clipSkeleton, model.FlexControllers), remappedJoints) : null;
+        // Incompatible skeleton (the viewmodel rig): retarget the clip onto the model's own armature by
+        // bone name. The first-person mesh is also on that armature, so it follows the clip undeformed.
+        return (new AnimationWriter(clipSkeleton, []), joints, model.Skeleton);
     }
 
     record struct AnimationChannelWriter<T>(Dictionary<float, T>[] Channels, T?[] LastValue, bool[] ValueOmmited) where T : struct

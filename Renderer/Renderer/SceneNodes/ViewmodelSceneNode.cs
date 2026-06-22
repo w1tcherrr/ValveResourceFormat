@@ -10,10 +10,18 @@ namespace ValveResourceFormat.Renderer.SceneNodes;
 /// </summary>
 public class ViewmodelSceneNode : ModelSceneNode
 {
+    /// <summary>Default viewmodel offset in viewmodel space (forward, right, up).</summary>
+    public static readonly Vector3 DefaultViewmodelOffset = new(0, -2, -2);
+
+    /// <summary>Fixed rotation mapping viewmodel space to camera space, shared with first-person camera framing.</summary>
+    public static readonly Quaternion ViewmodelOffsetRotation =
+        Quaternion.CreateFromAxisAngle(Vector3.UnitY, -float.DegreesToRadians(90))
+        * Quaternion.CreateFromAxisAngle(Vector3.UnitX, -float.DegreesToRadians(90));
+
     /// <summary>
     /// Viewmodel offset in viewmodel space (forward, right, up).
     /// </summary>
-    public Vector3 ViewmodelOffset { get; set; } = new Vector3(0, -2, -2);
+    public Vector3 ViewmodelOffset { get; set; } = DefaultViewmodelOffset;
 
     /// <summary>
     /// The player arms.
@@ -516,9 +524,7 @@ public class ViewmodelSceneNode : ModelSceneNode
         ));
 
         // Apply a fixed viewmodel-space rotation to match the expected model orientation.
-        var viewmodelOffsetRot = Quaternion.CreateFromAxisAngle(Vector3.UnitY, -float.DegreesToRadians(90))
-            * Quaternion.CreateFromAxisAngle(Vector3.UnitX, -float.DegreesToRadians(90));
-        var viewmodelRotation = Quaternion.Normalize(cameraRotation * viewmodelOffsetRot);
+        var viewmodelRotation = Quaternion.Normalize(cameraRotation * ViewmodelOffsetRotation);
 
 
         var bobInputRotation = Quaternion.Inverse(viewmodelRotation);

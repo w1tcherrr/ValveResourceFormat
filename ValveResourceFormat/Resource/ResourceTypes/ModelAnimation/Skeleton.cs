@@ -11,6 +11,11 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation
     public class Skeleton
     {
         /// <summary>
+        /// Name of the dedicated bone that carries root motion.
+        /// </summary>
+        public const string RootMotionBoneName = "root_motion";
+
+        /// <summary>
         /// Gets the name of the skeleton.
         /// </summary>
         public string Name { get; private set; } = string.Empty;
@@ -57,6 +62,55 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation
         /// Gets the index of a bone by its name, or -1 if not found.
         /// </summary>
         public int GetBoneIndex(string name) => GetBoneIndex(StringToken.Get(name));
+
+        /// <summary>
+        /// Whether this skeleton is compatible with <paramref name="other"/>: every bone they share (by
+        /// name) has the same parent bone name in both, so this skeleton's parent-relative transforms stay
+        /// valid when retargeted onto <paramref name="other"/>. The first-person viewmodel rig fails this
+        /// (its arm bones hang off weapon/shoulder bones the body lacks), so callers can give it a separate
+        /// armature instead.
+        /// </summary>
+        public bool IsCompatibleWith(Skeleton other)
+        {
+            foreach (var bone in Bones)
+            {
+                if (bone.Name == RootMotionBoneName)
+                {
+                    continue;
+                }
+
+                var otherBone = other[bone.Name];
+                if (otherBone == null)
+                {
+                    continue;
+                }
+
+                var parent = bone.Parent?.Name;
+                var otherParent = otherBone.Parent?.Name;
+
+                if (parent != null && otherParent != null && parent != otherParent)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Builds a remap table mapping each bone in this skeleton to the index of the same-named bone in
+        /// <paramref name="target"/>, or -1 when <paramref name="target"/> has no such bone.
+        /// </summary>
+        public int[] BuildBoneRemapTable(Skeleton target)
+        {
+            var remap = new int[Bones.Length];
+            for (var i = 0; i < remap.Length; i++)
+            {
+                remap[i] = target.GetBoneIndex(Bones[i].Name);
+            }
+
+            return remap;
+        }
 
         /// <summary>
         /// Creates a skeleton from model data.

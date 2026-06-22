@@ -758,6 +758,9 @@ namespace ValveResourceFormat.IO
                 }
 
                 var boneRemapTable = model.GetRemapTable(m.MeshIndex);
+
+                // First-person meshes are authored on the body skeleton, so they bind to the model's own
+                // armature like any other mesh; the viewmodel clips are retargeted onto that armature too.
                 var node = AddMeshNode(exportedModel, scene, meshName, tintColor, m.Mesh, m.Mesh.VBIB, joints, boneRemapTable, skinMaterialPath, entity);
                 if (node != null)
                 {

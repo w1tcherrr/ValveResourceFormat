@@ -63,7 +63,7 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation
                 }
                 else
                 {
-                    id = Array.FindIndex(skeleton.Bones, bone => bone.Name.Equals(elementName, StringComparison.OrdinalIgnoreCase));
+                    id = skeleton.GetBoneIndex(elementName);
                 }
 
                 if (id != -1)

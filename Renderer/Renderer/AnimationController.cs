@@ -301,33 +301,12 @@ namespace ValveResourceFormat.Renderer
         /// <param name="skeleton">The external skeleton to register.</param>
         public void RegisterExternalSkeleton(string skeletonName, Skeleton skeleton)
         {
-            var sourceBoneCount = skeleton.Bones.Length;
-            var destinationBoneCount = Skeleton.Bones.Length;
+            var remapTable = Skeleton.BuildBoneRemapTable(skeleton);
 
-            var remapTable = new int[destinationBoneCount];
-            var debugMap = new Dictionary<string, string?>(destinationBoneCount);
-
-            var nameToIndex = new Dictionary<uint, int>(sourceBoneCount);
-
-            for (var i = 0; i < sourceBoneCount; i++)
+            var debugMap = new Dictionary<string, string?>(remapTable.Length);
+            for (var i = 0; i < remapTable.Length; i++)
             {
-                var name = skeleton.Bones[i].Name;
-                nameToIndex[StringToken.Store(name)] = i;
-            }
-
-            for (var i = 0; i < destinationBoneCount; i++)
-            {
-                var name = Skeleton.Bones[i].Name;
-                var hash = StringToken.Store(name);
-
-                remapTable[i] = -1;
-                debugMap[name] = null;
-
-                if (nameToIndex.TryGetValue(hash, out var idx))
-                {
-                    remapTable[i] = idx;
-                    debugMap[name] = skeleton.Bones[idx].Name;
-                }
+                debugMap[Skeleton.Bones[i].Name] = remapTable[i] != -1 ? skeleton.Bones[remapTable[i]].Name : null;
             }
 
             // Could this be a simpler base type?

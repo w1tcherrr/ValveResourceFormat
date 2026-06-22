@@ -76,6 +76,19 @@ namespace ValveResourceFormat.Renderer.SceneNodes
         private readonly (string Name, string[] Materials)[] materialGroups;
         private readonly string[] meshGroups;
         private readonly long[]? meshGroupMasks;
+
+        // First-person (viewmodel) clips are authored on a skeleton incompatible with the body; when one
+        // is played we show the first-person mesh group instead of the (re-oriented) body. Empty unless
+        // the model has both a first-person skeleton and a first-person mesh group.
+        private readonly HashSet<string> firstPersonSkeletons = [];
+        private readonly string[] firstPersonMeshGroups;
+        private string[] defaultMeshGroups = [];
+
+        /// <summary>When set, selecting a first-person (viewmodel) animation switches to the first-person mesh group.</summary>
+        public bool AutoFirstPersonMeshGroups { get; set; }
+
+        /// <summary>Whether the currently active animation is a first-person (viewmodel) clip.</summary>
+        public bool IsFirstPersonActive { get; private set; }
         private readonly ModelLodInfo lodInfo;
         private readonly List<(int MeshIndex, string MeshName, long LoDMask)> referenceMeshes;
         private int? lodOverride;
@@ -93,6 +106,7 @@ namespace ValveResourceFormat.Renderer.SceneNodes
         {
             materialGroups = model.GetMaterialGroups().ToArray();
             meshGroups = model.GetMeshGroups().ToArray();
+            firstPersonMeshGroups = meshGroups.Where(g => g.Contains(Model.FirstPersonMeshGroupToken, StringComparison.OrdinalIgnoreCase)).ToArray();
 
             if (meshGroups.Length > 1)
             {
@@ -119,6 +133,11 @@ namespace ValveResourceFormat.Renderer.SceneNodes
 
                     var skeleton = Skeleton.FromSkeletonData(skeletonData.Data);
                     AnimationController.RegisterExternalSkeleton(skeletonName, skeleton);
+
+                    if (!skeleton.IsCompatibleWith(model.Skeleton))
+                    {
+                        firstPersonSkeletons.Add(skeletonName);
+                    }
                 }
 
                 foreach (var clipName in AnimationGraphLoader.GetClipNames(model, Scene.RendererContext.FileLoader))
@@ -165,9 +184,9 @@ namespace ValveResourceFormat.Renderer.SceneNodes
             {
                 var skeleton = animationController.FrameCache.Skeleton;
 
-                LeftEyeBoneIndex = skeleton.Bones.FirstOrDefault(b => b.Name == "eyeball_l")?.Index ?? -1;
-                RightEyeBoneIndex = skeleton.Bones.FirstOrDefault(b => b.Name == "eyeball_r")?.Index ?? -1;
-                TargetBoneIndex = skeleton.Bones.FirstOrDefault(b => b.Name == "eye_target")?.Index ?? -1;
+                LeftEyeBoneIndex = skeleton.GetBoneIndex("eyeball_l");
+                RightEyeBoneIndex = skeleton.GetBoneIndex("eyeball_r");
+                TargetBoneIndex = skeleton.GetBoneIndex("eye_target");
 
                 if (!AreValid)
                 {
@@ -456,7 +475,8 @@ namespace ValveResourceFormat.Renderer.SceneNodes
             }
 
             // Set active meshes to default
-            SetActiveMeshGroups(model.GetDefaultMeshGroups());
+            defaultMeshGroups = model.GetDefaultMeshGroups().ToArray();
+            SetActiveMeshGroups(defaultMeshGroups);
         }
 
         private void SetupBoneMatrixBuffers()
@@ -507,6 +527,7 @@ namespace ValveResourceFormat.Renderer.SceneNodes
         public void SetAnimation(Animation? activeAnimation, float blendTime = 0f)
         {
             AnimationController.SetAnimation(activeAnimation, blendTime);
+            ApplyFirstPersonMeshGroups(activeAnimation);
             UpdateBoundingBox();
 
             if (activeAnimation != default)
@@ -524,6 +545,23 @@ namespace ValveResourceFormat.Renderer.SceneNodes
                     // renderer.SetMaterialCombo(("D_ANIMATED", 0));
                     renderer.SetBoneMatricesBuffer(null);
                 }
+            }
+        }
+
+        // First-person clips are authored on the viewmodel rig, which re-orients the body. Show the
+        // first-person mesh group (arms) for those, and the default group for body animations.
+        private void ApplyFirstPersonMeshGroups(Animation? animation)
+        {
+            if (firstPersonMeshGroups.Length == 0 || firstPersonSkeletons.Count == 0)
+            {
+                return;
+            }
+
+            IsFirstPersonActive = animation?.Clip is { } clip && firstPersonSkeletons.Contains(clip.SkeletonName);
+
+            if (AutoFirstPersonMeshGroups)
+            {
+                SetActiveMeshGroups(IsFirstPersonActive ? firstPersonMeshGroups : defaultMeshGroups);
             }
         }
 

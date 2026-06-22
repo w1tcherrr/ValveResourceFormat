@@ -104,7 +104,7 @@ partial class ModelExtract
     {
         using var dmx = new Datamodel.Datamodel("model", 22);
 
-        var rootMotionBone = skeleton["root_motion"];
+        var rootMotionBone = skeleton[Skeleton.RootMotionBoneName];
         var dmeSkeleton = BuildDmeDagSkeleton(skeleton, out var transforms);
 
         var animationList = new DmeAnimationList();
@@ -213,7 +213,7 @@ partial class ModelExtract
             }
         }
 
-        var rootMotionBone = skeleton["root_motion"];
+        var rootMotionBone = skeleton[Skeleton.RootMotionBoneName];
 
         if (nmSkelAxisFixup && rootMotionBone != null)
         {
@@ -343,7 +343,7 @@ partial class ModelExtract
 
     private static void ProcessBoneChannels(Skeleton skeleton, Animation anim, DmeTransform[] transforms, DmeChannelsClip clip, Frame[] frames)
     {
-        var rootMotionBone = skeleton["root_motion"];
+        var rootMotionBone = skeleton[Skeleton.RootMotionBoneName];
 
         foreach (var bone in skeleton.Bones)
         {

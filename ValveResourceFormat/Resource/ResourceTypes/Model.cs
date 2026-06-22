@@ -20,6 +20,11 @@ namespace ValveResourceFormat.ResourceTypes
     public class Model : KeyValuesOrNTRO
     {
         /// <summary>
+        /// Substring marking a first-person (viewmodel) mesh group, e.g. the <c>#&amp;firstperson</c> token.
+        /// </summary>
+        public const string FirstPersonMeshGroupToken = "firstperson";
+
+        /// <summary>
         /// Gets the model name.
         /// </summary>
         public string Name => Data.GetStringProperty("m_name");
