@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -8,13 +9,14 @@ using ValveResourceFormat.IO;
 namespace Tests;
 
 /// <summary>
-/// Guards the mechanism used by both the GUI (ExtractNestedPackageRecursive) and the CLI
-/// (--recursive_vpk) to descend into vpks nested inside other vpks and extract their contents,
-/// including several levels deep.
+/// Guards <see cref="NestedPackageEnumerator"/>, the descent mechanism used by both the GUI extraction
+/// queue and the CLI to walk vpks nested inside other vpks (including several levels deep) and merge their
+/// contents into the same output root as the parent package.
 /// </summary>
 public class NestedPackageExtractionTest
 {
     private string tempDir;
+    private readonly List<Package> openedPackages = [];
 
     [SetUp]
     public void SetUp()
@@ -26,6 +28,13 @@ public class NestedPackageExtractionTest
     [TearDown]
     public void TearDown()
     {
+        foreach (var package in openedPackages)
+        {
+            package.Dispose();
+        }
+
+        openedPackages.Clear();
+
         if (Directory.Exists(tempDir))
         {
             Directory.Delete(tempDir, recursive: true);
@@ -51,20 +60,19 @@ public class NestedPackageExtractionTest
             outer.Write(outerVpkPath);
         }
 
-        var extractDir = Path.Combine(tempDir, "extracted");
+        var reported = Enumerate(outerVpkPath);
 
-        using (var outerPackage = new Package())
-        {
-            outerPackage.Read(outerVpkPath);
-            ExtractPackageRecursive(outerPackage, extractDir);
-        }
+        // The outer sibling and the nested files are all reported by their own path (merged into one root)
+        Assert.That(reported.Keys, Does.Contain("sibling.txt"));
 
         foreach (var (path, data) in innerFiles)
         {
-            var outPath = Path.Combine(extractDir, path);
-            Assert.That(File.Exists(outPath), Is.True, $"expected extracted file {path}");
-            Assert.That(File.ReadAllBytes(outPath), Is.EqualTo(data), $"contents mismatch for {path}");
+            Assert.That(reported, Does.ContainKey(path), $"expected nested entry {path}");
+            Assert.That(reported[path].Single(), Is.EqualTo(data), $"contents mismatch for {path}");
         }
+
+        // No vpk entry should ever be reported as a leaf; they are descended into
+        Assert.That(reported.Keys, Has.None.EndWith(".vpk"));
     }
 
     [Test]
@@ -89,29 +97,89 @@ public class NestedPackageExtractionTest
         var outerVpkPath = Path.Combine(tempDir, "outer.vpk");
         File.WriteAllBytes(outerVpkPath, currentVpkBytes);
 
-        var extractDir = Path.Combine(tempDir, "extracted");
+        var reported = Enumerate(outerVpkPath);
 
-        using (var outerPackage = new Package())
-        {
-            outerPackage.Read(outerVpkPath);
-            ExtractPackageRecursive(outerPackage, extractDir);
-        }
+        // The leaf survived all 4 levels of descent and merged into the root by its own path
+        Assert.That(reported, Does.ContainKey("leaf.txt"));
+        Assert.That(reported["leaf.txt"].Single(), Is.EqualTo(leaf));
 
-        // The leaf survived all 4 levels of descent
-        var leafPath = Path.Combine(extractDir, "leaf.txt");
-        Assert.That(File.Exists(leafPath), Is.True, "leaf file should be extracted from the deepest vpk");
-        Assert.That(File.ReadAllBytes(leafPath), Is.EqualTo(leaf));
-
-        // Every intermediate level's marker was extracted, proving each level was descended into
+        // Every intermediate level's marker was reported, proving each level was descended into
         for (var level = 1; level <= Depth - 1; level++)
         {
-            var markerPath = Path.Combine(extractDir, $"level{level}", "marker.txt");
-            Assert.That(File.Exists(markerPath), Is.True, $"marker at level {level} should be extracted");
+            Assert.That(reported, Does.ContainKey($"level{level}/marker.txt"),
+                $"marker at level {level} should be reported");
         }
 
-        // No raw nested .vpk should be left behind
-        Assert.That(Directory.EnumerateFiles(extractDir, "*.vpk", SearchOption.AllDirectories), Is.Empty,
-            "no raw nested vpk should remain after recursive extraction");
+        // No vpk entry should be reported as a leaf
+        Assert.That(reported.Keys, Has.None.EndWith(".vpk"));
+    }
+
+    [Test]
+    public void NestedVpksMergeIntoTheSameRoot()
+    {
+        // Two nested vpks that both contain the same inner path. The enumerator surfaces both so that the
+        // consumer merges them into one output root (where the colliding path collapses to a single file).
+        var firstInner = BuildVpk([("models/shared.txt", Encoding.UTF8.GetBytes("from first"))]);
+        var secondInner = BuildVpk([("models/shared.txt", Encoding.UTF8.GetBytes("from second"))]);
+
+        var outerVpkPath = Path.Combine(tempDir, "outer.vpk");
+        using (var outer = new Package())
+        {
+            outer.AddFile("first.vpk", firstInner);
+            outer.AddFile("second.vpk", secondInner);
+            outer.Write(outerVpkPath);
+        }
+
+        var reported = Enumerate(outerVpkPath);
+
+        // Both nested files are reported under the same root path, ready to be merged by the caller
+        Assert.That(reported, Does.ContainKey("models/shared.txt"));
+
+        var contents = reported["models/shared.txt"].Select(Encoding.UTF8.GetString).ToList();
+        Assert.That(contents, Has.Count.EqualTo(2));
+        Assert.That(contents, Does.Contain("from first"));
+        Assert.That(contents, Does.Contain("from second"));
+    }
+
+    /// <summary>
+    /// Runs the production <see cref="NestedPackageEnumerator"/> over a vpk on disk and returns every reported
+    /// leaf entry grouped by its (root-relative) path; a path may appear more than once when nested vpks collide.
+    /// </summary>
+    private Dictionary<string, List<byte[]>> Enumerate(string vpkPath)
+    {
+        var results = new Dictionary<string, List<byte[]>>();
+
+        var root = new Package();
+        openedPackages.Add(root);
+        root.Read(vpkPath);
+
+        NestedPackageEnumerator.EnumerateEntries(
+            root,
+            root,
+            (package, entry, _) =>
+            {
+                package.ReadEntry(entry, out var data);
+                var path = entry.GetFullPath();
+
+                if (!results.TryGetValue(path, out var list))
+                {
+                    list = [];
+                    results[path] = list;
+                }
+
+                list.Add(data);
+            },
+            (parent, vpkEntry, _) =>
+            {
+                var stream = GameFileLoader.GetPackageEntryStream(parent, vpkEntry);
+                var nested = new Package();
+                openedPackages.Add(nested);
+                nested.SetFileName(vpkEntry.GetFullPath());
+                nested.Read(stream);
+                return (nested, nested);
+            });
+
+        return results;
     }
 
     private byte[] BuildVpk((string Path, byte[] Data)[] files)
@@ -130,29 +198,5 @@ public class NestedPackageExtractionTest
         var bytes = File.ReadAllBytes(vpkPath);
         File.Delete(vpkPath);
         return bytes;
-    }
-
-    // Mirrors ExtractNestedPackageRecursive (GUI) / ProcessVPKEntries recursion (CLI)
-    private static void ExtractPackageRecursive(Package package, string outputDir)
-    {
-        Assert.That(package.Entries, Is.Not.Null);
-
-        foreach (var entry in package.Entries.Values.SelectMany(x => x))
-        {
-            if (entry.TypeName == "vpk")
-            {
-                using var nestedStream = GameFileLoader.GetPackageEntryStream(package, entry);
-                using var nested = new Package();
-                nested.SetFileName(entry.GetFullPath());
-                nested.Read(nestedStream);
-                ExtractPackageRecursive(nested, outputDir);
-                continue;
-            }
-
-            package.ReadEntry(entry, out var data);
-            var outPath = Path.Combine(outputDir, entry.GetFullPath());
-            Directory.CreateDirectory(Path.GetDirectoryName(outPath)!);
-            File.WriteAllBytes(outPath, data);
-        }
     }
 }
