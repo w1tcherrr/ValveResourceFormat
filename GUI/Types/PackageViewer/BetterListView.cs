@@ -30,6 +30,20 @@ namespace GUI.Types.PackageViewer
 
         protected override void WndProc(ref Message m)
         {
+            const int WM_LBUTTONDOWN = 0x0201;
+
+            // A virtual-mode ListView selects a 2D region on Shift+click in icon views; select the reading-order
+            // range from the focused (anchor) item instead, matching Explorer. This runs before base, so FocusedItem
+            // is still the anchor and returning suppresses the native region selection.
+            if (m.Msg == WM_LBUTTONDOWN
+                && (ModifierKeys & (Keys.Shift | Keys.Control)) == Keys.Shift
+                && FocusedItem != null
+                && HitTest(PointToClient(Cursor.Position)).Item is { } clicked)
+            {
+                SelectIndexRange(FocusedItem.Index, clicked.Index);
+                return;
+            }
+
             base.WndProc(ref m);
             if (m.Msg == PInvoke.WM_VSCROLL)
             {
@@ -43,6 +57,27 @@ namespace GUI.Types.PackageViewer
                     ScrollEventType.EndScroll,
                     0 // no idea how to get scroll pos
                 ));
+            }
+        }
+
+        private void SelectIndexRange(int a, int b)
+        {
+            var min = Math.Min(a, b);
+            var max = Math.Max(a, b);
+
+            BeginUpdate();
+            try
+            {
+                SelectedIndices.Clear();
+
+                for (var i = min; i <= max; i++)
+                {
+                    SelectedIndices.Add(i);
+                }
+            }
+            finally
+            {
+                EndUpdate();
             }
         }
 
