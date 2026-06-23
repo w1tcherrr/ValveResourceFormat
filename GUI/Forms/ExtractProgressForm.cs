@@ -331,10 +331,11 @@ namespace GUI.Forms
         private void QueueFile(Package package, VrfGuiContext context, PackageEntry file)
         {
             // When decompiling, descend into nested vpks so their contents flow through the
-            // same type selection dialog and extraction logic as top-level files.
+            // same type selection dialog and extraction logic as top-level files. Their contents
+            // merge into the same output root as the parent package's files.
             if (decompile && file.TypeName == "vpk")
             {
-                QueueNestedVpk(package, context, file);
+                QueueNestedVpk(context, file);
                 return;
             }
 
@@ -358,40 +359,48 @@ namespace GUI.Forms
             filesToExtract.Enqueue(queued);
         }
 
-        private void QueueNestedVpk(Package parentPackage, VrfGuiContext parentContext, PackageEntry vpkEntry)
+        private void QueueNestedVpk(VrfGuiContext parentContext, PackageEntry vpkEntry)
+        {
+            var opened = OpenNestedTracked(parentContext, vpkEntry);
+            if (opened == null)
+            {
+                return;
+            }
+
+            NestedPackageEnumerator.EnumerateEntries(
+                opened.Value.Package,
+                opened.Value.State,
+                (package, entry, context) => QueueFile(package, context, entry),
+                (_, nestedVpkEntry, parent) => OpenNestedTracked(parent, nestedVpkEntry));
+        }
+
+        // Opens a nested vpk into a child context kept alive until extraction finishes; logs and counts failures.
+        private (Package Package, VrfGuiContext State)? OpenNestedTracked(VrfGuiContext parentContext, PackageEntry vpkEntry)
         {
             VrfGuiContext? childContext = null;
 
             try
             {
-                var stream = GameFileLoader.GetPackageEntryStream(parentPackage, vpkEntry);
-                childContext = new VrfGuiContext(vpkEntry.GetFullPath(), parentContext);
-                var nestedPackage = new Package();
-                nestedPackage.SetFileName(childContext.FileName);
-                nestedPackage.Read(stream); // Package takes ownership of the stream
-                childContext.CurrentPackage = nestedPackage;
+                childContext = ExportFile.OpenNestedPackage(vpkEntry, parentContext);
+                if (childContext?.CurrentPackage == null)
+                {
+                    filesFailedToExport++;
+                    Log.Error(nameof(ExtractProgressForm), $"Failed to open nested vpk '{vpkEntry.GetFullPath()}': parent package is null");
+                    return null;
+                }
 
+                var package = childContext.CurrentPackage;
                 nestedContexts.Add(childContext);
                 var ownedContext = childContext;
                 childContext = null; // ownership transferred to nestedContexts
 
-                if (nestedPackage.Entries == null)
-                {
-                    return;
-                }
-
-                foreach (var fileType in nestedPackage.Entries.Values)
-                {
-                    foreach (var entry in fileType)
-                    {
-                        QueueFile(nestedPackage, ownedContext, entry);
-                    }
-                }
+                return (package, ownedContext);
             }
             catch (Exception e)
             {
                 filesFailedToExport++;
                 Log.Error(nameof(ExtractProgressForm), $"Failed to open nested vpk '{vpkEntry.GetFullPath()}': {e}");
+                return null;
             }
             finally
             {

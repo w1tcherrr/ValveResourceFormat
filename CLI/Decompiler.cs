@@ -1089,7 +1089,12 @@ namespace CLI
                 var manifestPath = string.Concat(path, ".manifest.txt");
                 var manifestData = new Dictionary<string, uint>();
 
-                if (CachedManifest && File.Exists(manifestPath))
+                // A nested vpk gets a pseudo-path inside its parent vpk, so the manifest directory does not exist on
+                // disk. Skip the cache in that case instead of throwing when trying to read or write the manifest.
+                var manifestDirectory = Path.GetDirectoryName(manifestPath);
+                var canUseManifestCache = CachedManifest && (manifestDirectory == null || Directory.Exists(manifestDirectory));
+
+                if (canUseManifestCache && File.Exists(manifestPath))
                 {
                     using var file = new StreamReader(manifestPath);
                     string? line;
@@ -1143,7 +1148,7 @@ namespace CLI
                     ProcessVPKEntries(path, package, fileLoader, type.Key, manifestData);
                 }
 
-                if (CachedManifest)
+                if (canUseManifestCache)
                 {
                     using var file = new StreamWriter(manifestPath);
 

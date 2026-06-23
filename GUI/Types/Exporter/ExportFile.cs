@@ -200,14 +200,7 @@ namespace GUI.Types.Exporter
                 return;
             }
 
-            var exportData = new ExportData
-            {
-                VrfGuiContext = vrfGuiContext,
-            };
-
-            var extractDialog = new ExtractProgressForm(exportData, null, decompile);
-
-            try
+            RunExtraction(vrfGuiContext, decompile, extractDialog =>
             {
                 foreach (var fileType in package.Entries.Values)
                 {
@@ -216,23 +209,39 @@ namespace GUI.Types.Exporter
                         extractDialog.QueueFiles(entry);
                     }
                 }
-
-                extractDialog.ExecuteMultipleFileExtract();
-                extractDialog = null;
-            }
-            finally
-            {
-                extractDialog?.Dispose();
-            }
+            });
         }
 
         public static void ExtractNestedPackage(PackageEntry vpkEntry, VrfGuiContext parentContext, bool decompile)
         {
-            var parentPackage = parentContext.CurrentPackage;
-            if (parentPackage == null)
+            var childContext = OpenNestedPackage(vpkEntry, parentContext);
+            if (childContext == null)
             {
                 Log.Error(nameof(ExportFile), "CurrentPackage is null, cannot extract nested package");
                 return;
+            }
+
+            try
+            {
+                ExtractEntirePackage(childContext, decompile);
+            }
+            finally
+            {
+                childContext.Dispose();
+            }
+        }
+
+        /// <summary>
+        /// Opens a vpk entry that is itself a vpk archive into a child <see cref="VrfGuiContext"/> chained to
+        /// <paramref name="parentContext"/>. The caller owns the returned context and must dispose it. Returns
+        /// <see langword="null"/> only when the parent has no package; failures to read the nested vpk throw.
+        /// </summary>
+        public static VrfGuiContext? OpenNestedPackage(PackageEntry vpkEntry, VrfGuiContext parentContext)
+        {
+            var parentPackage = parentContext.CurrentPackage;
+            if (parentPackage == null)
+            {
+                return null;
             }
 
             var childContext = new VrfGuiContext(vpkEntry.GetFullPath(), parentContext);
@@ -245,11 +254,12 @@ namespace GUI.Types.Exporter
                 package.Read(stream); // Package takes ownership of the stream
                 childContext.CurrentPackage = package;
 
-                ExtractEntirePackage(childContext, decompile);
+                return childContext;
             }
-            finally
+            catch
             {
                 childContext.Dispose();
+                throw;
             }
         }
 
@@ -273,27 +283,35 @@ namespace GUI.Types.Exporter
             else
             {
                 // We are a folder
-                var exportData = new ExportData
-                {
-                    VrfGuiContext = vrfGuiContext,
-                };
-
-                var extractDialog = new ExtractProgressForm(exportData, null, decompile);
-
-                try
-                {
-                    extractDialog.QueueFiles(selectedNode);
-                    extractDialog.ExecuteMultipleFileExtract();
-                    extractDialog = null;
-                }
-                finally
-                {
-                    extractDialog?.Dispose();
-                }
+                RunExtraction(vrfGuiContext, decompile, extractDialog => extractDialog.QueueFiles(selectedNode));
             }
         }
 
         public static void ExtractFilesFromListViewNodes(List<ListViewItem> items, VrfGuiContext vrfGuiContext, bool decompile)
+        {
+            RunExtraction(vrfGuiContext, decompile, extractDialog =>
+            {
+                // When queuing files this way, it'll preserve the original tree
+                // which is probably unwanted behaviour? It works tho /shrug
+                foreach (IBetterBaseItem item in items)
+                {
+                    extractDialog.QueueFiles(item);
+                }
+            });
+        }
+
+        public static void ExtractFilesFromTreeNodes(IEnumerable<IBetterBaseItem> items, VrfGuiContext vrfGuiContext, bool decompile)
+        {
+            RunExtraction(vrfGuiContext, decompile, extractDialog =>
+            {
+                foreach (var item in items)
+                {
+                    extractDialog.QueueFiles(item);
+                }
+            });
+        }
+
+        private static void RunExtraction(VrfGuiContext vrfGuiContext, bool decompile, Action<ExtractProgressForm> queueFiles)
         {
             var exportData = new ExportData
             {
@@ -304,13 +322,7 @@ namespace GUI.Types.Exporter
 
             try
             {
-                // When queuing files this way, it'll preserve the original tree
-                // which is probably unwanted behaviour? It works tho /shrug
-                foreach (IBetterBaseItem item in items)
-                {
-                    extractDialog.QueueFiles(item);
-                }
-
+                queueFiles(extractDialog);
                 extractDialog.ExecuteMultipleFileExtract();
                 extractDialog = null;
             }
