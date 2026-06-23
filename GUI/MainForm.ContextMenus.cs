@@ -424,6 +424,13 @@ namespace GUI
                     throw new InvalidDataException("There is no export data for this tab");
                 }
 
+                // Extracting a package tab descends into it (mirrors extracting the root folder)
+                if (decompile && tabPage.Controls[nameof(TreeViewWithSearchResults)] is TreeViewWithSearchResults)
+                {
+                    ExportFile.ExtractEntirePackage(exportData.VrfGuiContext, decompile);
+                    return;
+                }
+
                 if (exportData.PackageEntry != null)
                 {
                     ExportFile.ExtractFileFromPackageEntry(exportData.PackageEntry, exportData.VrfGuiContext, decompile);
