@@ -81,6 +81,9 @@ namespace GUI.Forms
                 {
                     ProgressReporter = progressReporter,
                 };
+
+                // TODO: When the export UI is reworked, expose the glTF export options here as checkboxes
+                // (e.g. ExportLods for MSFT_lod multi-LOD export, like the CLI's --gltf_export_lods flag).
             }
         }
 

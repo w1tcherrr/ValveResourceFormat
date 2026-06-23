@@ -32,6 +32,7 @@ The binary name is `Source2Viewer-CLI`.
 | `--gltf_animation_list`      | Comma-separated list of animations to include in glTF export, example: "idle,dropped". Requires `--gltf_export_animations`. By default includes all animations. |
 | `--gltf_textures_adapt`      | Whether to perform any glTF spec adaptations on textures (e.g. split metallic map).                                                                             |
 | `--gltf_export_extras`       | Export additional Mesh properties into glTF extras                                                                                                              |
+| `--gltf_export_lods`         | Export every level of detail using the MSFT_lod extension, instead of only the highest-detail one.                                                              |
 | `--tools_asset_info_short`   | Whether to print only file paths for tools_asset_info files.                                                                                                    |
 | **Other**                    |                                                                                                                                                                 |
 | `--threads`                  | If higher than 1, files will be processed concurrently.                                                                                                         |

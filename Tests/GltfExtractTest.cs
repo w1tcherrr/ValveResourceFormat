@@ -187,7 +187,7 @@ namespace Tests
             return (scale - Vector3.One).Length();
         }
 
-        private static void WithExportedGlb(string fileName, Action<ModelRoot> assert)
+        private static void WithExportedGlb(string fileName, Action<ModelRoot> assert, bool exportLods = true)
         {
             using var resource = new Resource();
             resource.Read(Path.Combine(TestContext.CurrentContext.TestDirectory, "Files", fileName));
@@ -201,6 +201,7 @@ namespace Tests
                 new GltfModelExporter(new NullFileLoader())
                 {
                     ExportMaterials = false,
+                    ExportLods = exportLods,
                     ProgressReporter = new Progress<string>(_ => { }),
                 }.Export(resource, outPath);
 
@@ -210,6 +211,80 @@ namespace Tests
             {
                 Directory.Delete(dir, true);
             }
+        }
+
+        // lod_test is a synthetic 5-LOD fixture: masks 1,2,4,8,16 (one mesh per level), switches 0,5,10,15,20.
+        [Test]
+        public void TestLodExportEmitsMsftLod()
+        {
+            WithExportedGlb("lod_test.vmdl_c", root =>
+            {
+                var lodNode = root.LogicalNodes.SingleOrDefault(n => n.GetExtension<GltfMsftLod>() != null);
+                Assert.That(lodNode, Is.Not.Null, "the highest-detail node should carry the MSFT_lod extension");
+
+                var lod = lodNode.GetExtension<GltfMsftLod>();
+                var reachable = SceneReachableNodes(root);
+
+                using (Assert.EnterMultipleScope())
+                {
+                    Assert.That(lod.Ids, Has.Count.EqualTo(4), "4 lower LOD levels are referenced");
+                    Assert.That(root.LogicalMeshes, Has.Count.EqualTo(5), "every LOD level's mesh is present");
+                    Assert.That(root.ExtensionsUsed, Does.Contain(GltfMsftLod.SchemaName));
+                    Assert.That(reachable, Does.Contain(lodNode), "the highest-detail node is in the scene");
+
+                    foreach (var id in lod.Ids)
+                    {
+                        var lower = root.LogicalNodes[id];
+                        Assert.That(reachable, Does.Not.Contain(lower), $"lower LOD node {lower.Name} must be orphan");
+                    }
+
+                    var coverage = lodNode.Extras?["MSFT_screencoverage"]?.AsArray();
+                    Assert.That(coverage, Is.Not.Null, "MSFT_screencoverage hint should be present");
+                    Assert.That(coverage, Has.Count.EqualTo(5), "one screen-coverage value per level");
+                }
+            });
+        }
+
+        [Test]
+        public void TestLodExportDisabledEmitsSingleLod()
+        {
+            WithExportedGlb("lod_test.vmdl_c", root =>
+            {
+                using (Assert.EnterMultipleScope())
+                {
+                    Assert.That(root.LogicalNodes.Any(n => n.GetExtension<GltfMsftLod>() != null), Is.False,
+                        "no MSFT_lod when LOD export is disabled");
+                    Assert.That(root.LogicalMeshes, Has.Count.EqualTo(1), "only the lowest populated LOD is exported");
+                }
+            }, exportLods: false);
+        }
+
+        private static HashSet<Node> SceneReachableNodes(ModelRoot root)
+        {
+            var reachable = new HashSet<Node>();
+
+            void Collect(Node node)
+            {
+                if (!reachable.Add(node))
+                {
+                    return;
+                }
+
+                foreach (var child in node.VisualChildren)
+                {
+                    Collect(child);
+                }
+            }
+
+            foreach (var scene in root.LogicalScenes)
+            {
+                foreach (var node in scene.VisualChildren)
+                {
+                    Collect(node);
+                }
+            }
+
+            return reachable;
         }
 
         [Test]

@@ -68,6 +68,12 @@ namespace ValveResourceFormat.IO
         public bool ExportExtras { get; set; }
 
         /// <summary>
+        /// Gets or sets a value indicating whether to export every populated level of detail using the
+        /// <c>MSFT_lod</c> extension. When disabled, only the lowest populated LOD level is exported.
+        /// </summary>
+        public bool ExportLods { get; set; }
+
+        /// <summary>
         /// Gets the set of animation names to filter during export. An entry matches an animation by its
         /// full name or, for animation graph clips named by resource path, by its leaf name (e.g. "idle_knife"
         /// matches "animation/anims/.../idle_knife"). Empty means export every animation.
@@ -88,6 +94,13 @@ namespace ValveResourceFormat.IO
         private readonly Dictionary<string, Mesh> ExportedMeshes = [];
         private readonly List<(PhysAggregateData Phys, string? Classname, Matrix4x4 Transform)> PhysicsToExport = [];
         private bool IsExporting;
+
+        // MSFT_lod is not built into SharpGLTF, so register it once. RegisterExtension throws if the same
+        // extension is registered twice, which a static constructor (runs once per process) avoids.
+        static GltfModelExporter()
+        {
+            ExtensionsFactory.RegisterExtension<Node, GltfMsftLod>(GltfMsftLod.SchemaName, node => new GltfMsftLod((Node)node));
+        }
 
         /// <summary>
         /// Initializes a new instance of the <see cref="GltfModelExporter"/> class.
@@ -742,24 +755,14 @@ namespace ValveResourceFormat.IO
 
             var skinMaterialPath = skinName != null ? GetSkinPathFromModel(model, skinName) : null;
 
-            foreach (var m in LoadModelMeshes(model, name))
+            var lodInfo = model.LodInfo;
+            if (ExportLods && lodInfo.HasDistinctLevels)
             {
-                var meshName = m.Name;
-
-                // Apply mesh filter if specified
-                if (MeshFilter.Count > 0 && !MeshFilter.Contains(meshName.Split('.')[^1]))
-                {
-                    continue;
-                }
-
-                if (skinName != null)
-                {
-                    meshName = string.Concat(meshName, ".", skinName);
-                }
-
-                var boneRemapTable = model.GetRemapTable(m.MeshIndex);
-                var node = AddMeshNode(exportedModel, scene, meshName, tintColor, m.Mesh, m.Mesh.VBIB, joints, boneRemapTable, skinMaterialPath, entity);
-                if (node != null)
+                LoadModelLods(exportedModel, scene, model, name, nodeTransform, tintColor, skinName, skinMaterialPath, joints, entity);
+            }
+            else
+            {
+                foreach (var node in AddModelMeshNodes(exportedModel, scene, parent: null, model, name, lodInfo.LowestLevel, tintColor, skinName, skinMaterialPath, joints, entity))
                 {
                     node.WorldMatrix = nodeTransform;
 
@@ -776,23 +779,127 @@ namespace ValveResourceFormat.IO
         }
 
         /// <summary>
+        /// Adds the mesh nodes for a single LOD <paramref name="level"/>, parented to <paramref name="parent"/>
+        /// when grouping levels for <c>MSFT_lod</c> (otherwise directly under the scene). Yields the created
+        /// nodes that still need their placement transform applied (skinned meshes attach to the skeleton and
+        /// are not yielded).
+        /// </summary>
+        private IEnumerable<Node> AddModelMeshNodes(ModelRoot exportedModel, Scene scene, Node? parent, VModel model,
+            string name, int level, Vector4 tintColor, string? skinName, string? skinMaterialPath, Node[]? joints,
+            EntityLump.Entity? entity)
+        {
+            foreach (var m in LoadModelMeshes(model, name, level))
+            {
+                var meshName = m.Name;
+
+                // Apply mesh filter if specified
+                if (MeshFilter.Count > 0 && !MeshFilter.Contains(meshName.Split('.')[^1]))
+                {
+                    continue;
+                }
+
+                if (skinName != null)
+                {
+                    meshName = string.Concat(meshName, ".", skinName);
+                }
+
+                var boneRemapTable = model.GetRemapTable(m.MeshIndex);
+                var node = AddMeshNode(exportedModel, scene, parent, meshName, tintColor, m.Mesh, m.Mesh.VBIB, joints, boneRemapTable, skinMaterialPath, entity);
+                if (node != null)
+                {
+                    yield return node;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Exports every populated LOD level using the <c>MSFT_lod</c> extension. Each level's meshes are
+        /// grouped under a container node; the highest-detail container stays in the scene and carries the
+        /// extension, while the lower-detail containers are orphan nodes referenced only through <c>ids</c>.
+        /// </summary>
+        private void LoadModelLods(ModelRoot exportedModel, Scene scene, VModel model, string name,
+            Matrix4x4 nodeTransform, Vector4 tintColor, string? skinName, string? skinMaterialPath, Node[]? joints,
+            EntityLump.Entity? entity)
+        {
+            var lodInfo = model.LodInfo;
+            var levels = lodInfo.AvailableLevels;
+
+            Node? highestDetailContainer = null;
+            var lowerLevelNodeIndices = new List<int>();
+
+            for (var i = 0; i < levels.Count; i++)
+            {
+                var level = levels[i];
+
+                // The highest-detail level stays a scene node; lower levels are orphan nodes reachable only
+                // through MSFT_lod.ids, so importers that ignore the extension render just the highest level.
+                var container = i == 0 ? scene.CreateNode() : exportedModel.CreateLogicalNode();
+                container.Name = string.Concat(name, ".lod", level.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+                // The container carries the placement; its child mesh nodes stay at identity local.
+                container.WorldMatrix = nodeTransform;
+
+                foreach (var _ in AddModelMeshNodes(exportedModel, scene, container, model, name, level, tintColor, skinName, skinMaterialPath, joints, entity))
+                {
+                    DebugValidateGLTF();
+                }
+
+                if (i == 0)
+                {
+                    highestDetailContainer = container;
+                }
+                else
+                {
+                    lowerLevelNodeIndices.Add(container.LogicalIndex);
+                }
+            }
+
+            if (highestDetailContainer != null && lowerLevelNodeIndices.Count > 0)
+            {
+                highestDetailContainer.UseExtension<GltfMsftLod>().SetIds(lowerLevelNodeIndices);
+                AddScreenCoverageHint(highestDetailContainer, lodInfo, levels);
+            }
+        }
+
+        // Best-effort MSFT_screencoverage hint: maps each level's Valve switch metric (100 / on-screen size)
+        // to a descending fractional coverage. The exact value depends on camera parameters, so this is only
+        // an ordering hint, matching how the spec describes the field. Omitted when there is no switch data.
+        private static void AddScreenCoverageHint(Node highestDetailContainer, ModelLodInfo lodInfo, IReadOnlyList<int> levels)
+        {
+            if (lodInfo.SwitchDistances.Count == 0)
+            {
+                return;
+            }
+
+            var coverage = new System.Text.Json.Nodes.JsonNode?[levels.Count];
+            for (var i = 0; i < levels.Count; i++)
+            {
+                var (min, _) = lodInfo.GetMetricRange(levels[i]);
+                coverage[i] = 1f / (1f + Math.Max(min, 0f));
+            }
+
+            highestDetailContainer.Extras = new System.Text.Json.Nodes.JsonObject
+            {
+                ["MSFT_screencoverage"] = new System.Text.Json.Nodes.JsonArray(coverage),
+            };
+        }
+
+        /// <summary>
         /// Create a combined list of referenced and embedded meshes. Importantly retains the
         /// refMeshes order so it can be used for getting skeletons.
         /// </summary>
         /// <param name="model">The model to get the meshes from.</param>
         /// <param name="name">The base name used when generating mesh names.</param>
+        /// <param name="level">The LOD level whose meshes to load.</param>
         /// <returns>A tuple of meshes and their names.</returns>
-        private IEnumerable<(VMesh Mesh, int MeshIndex, string Name)> LoadModelMeshes(VModel model, string name)
+        private IEnumerable<(VMesh Mesh, int MeshIndex, string Name)> LoadModelMeshes(VModel model, string name, int level)
         {
-            // Export the lowest LoD level that actually has meshes. Usually LoD0, but some models leave it empty.
-            var lowestLod = model.LodInfo.LowestLevel;
-
-            foreach (var m in model.GetEmbeddedMeshesForLod(lowestLod))
+            foreach (var m in model.GetEmbeddedMeshesForLod(level))
             {
                 yield return (m.Mesh, m.MeshIndex, string.Concat(name, ".", m.Name));
             }
 
-            foreach (var m in model.GetReferenceMeshNamesForLod(lowestLod))
+            foreach (var m in model.GetReferenceMeshNamesForLod(level))
             {
                 var meshResource = FileLoader.LoadFileCompiled(m.MeshName);
                 var nodeName = Path.GetFileNameWithoutExtension(m.MeshName);
@@ -816,12 +923,12 @@ namespace ValveResourceFormat.IO
         {
             var exportedModel = CreateModelRoot(resourceName, out var scene);
             var name = Path.GetFileName(resourceName);
-            AddMeshNode(exportedModel, scene, name, Vector4.One, mesh, mesh.VBIB, joints: null);
+            AddMeshNode(exportedModel, scene, parent: null, name, Vector4.One, mesh, mesh.VBIB, joints: null);
 
             WriteModelFile(exportedModel, fileName);
         }
 
-        private Node? AddMeshNode(ModelRoot exportedModel, Scene scene, string name, Vector4 tintColor,
+        private Node? AddMeshNode(ModelRoot exportedModel, Scene scene, Node? parent, string name, Vector4 tintColor,
             VMesh mesh, Blocks.VBIB vbib, Node[]? joints, int[]? boneRemapTable = null,
             string? skinMaterialPath = null, EntityLump.Entity? entity = null)
         {
@@ -830,7 +937,8 @@ namespace ValveResourceFormat.IO
                 return null;
             }
 
-            var newNode = scene.CreateNode(name);
+            // Group under the LOD container node when present, otherwise add directly to the scene.
+            var newNode = parent != null ? parent.CreateNode(name) : scene.CreateNode(name);
             if (ExportedMeshes.TryGetValue(name, out var exportedMesh))
             {
                 // Make a new node that uses the existing mesh
