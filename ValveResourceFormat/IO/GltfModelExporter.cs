@@ -832,7 +832,9 @@ namespace ValveResourceFormat.IO
                 var level = levels[i];
 
                 // The highest-detail level stays a scene node; lower levels are orphan nodes reachable only
-                // through MSFT_lod.ids, so importers that ignore the extension render just the highest level.
+                // through MSFT_lod.ids. Scene-graph renderers (Babylon, engines) then draw only the highest
+                // level; importers that load every node regardless of the scene (e.g. Blender) bring in all
+                // levels as overlapping objects.
                 var container = i == 0 ? scene.CreateNode() : exportedModel.CreateLogicalNode();
                 container.Name = string.Concat(name, ".lod", level.ToString(System.Globalization.CultureInfo.InvariantCulture));
 
