@@ -402,27 +402,15 @@ namespace ValveResourceFormat.IO
             ExportPhysicsIfAny(resourceName, fileName);
         }
 
-        private void LoadEntityMeshes(ModelRoot exportedModel, Scene scene, VEntityLump entityLump, Matrix4x4 parentTransform)
+        private void LoadEntityMeshes(ModelRoot exportedModel, Scene scene, VEntityLump entityLump, Matrix4x4 rootTransform)
         {
-            var childEntities = entityLump.GetChildEntityNames();
-            var childEntityLumps = new Dictionary<string, VEntityLump>(childEntities.Length);
+            var traversed = EntityLumpTraversal.EnumerateEntities(
+                entityLump,
+                FileLoader,
+                rootTransform,
+                onMissingChildLump: name => ProgressReporter?.Report($"Failed to find child entity lump with name {name}."));
 
-            foreach (var childEntityName in childEntities)
-            {
-                var newResource = FileLoader.LoadFileCompiled(childEntityName);
-
-                if (newResource == null)
-                {
-                    continue;
-                }
-
-                var childLump = (VEntityLump)newResource.DataBlock!;
-                var childName = childLump.Name;
-
-                childEntityLumps.Add(childName, childLump);
-            }
-
-            foreach (var entity in entityLump.GetEntities())
+            foreach (var (entity, parentTransform, _) in traversed)
             {
                 var transform = EntityTransformHelper.CalculateTransformationMatrix(entity) * parentTransform;
                 var modelName = entity.GetStringProperty("model");
@@ -435,37 +423,26 @@ namespace ValveResourceFormat.IO
                     // TODO: Add point and spot lights
                     if (className == "light_environment")
                     {
-                        if (!Matrix4x4.Decompose(transform, out var scale, out var _, out var positionVector))
+                        if (!Matrix4x4.Decompose(transform, out var _, out var _, out var positionVector))
                         {
                             throw new InvalidOperationException("Matrix decompose failed");
                         }
 
-                        var pitchYawRoll = entity.GetVector3Property("angles");
-                        var rollMatrix = Matrix4x4.CreateRotationX(float.DegreesToRadians(pitchYawRoll.Z));
-                        var pitchMatrix = Matrix4x4.CreateRotationY(float.DegreesToRadians(pitchYawRoll.X - 90)); // copypasta because of this
-                        var yawMatrix = Matrix4x4.CreateRotationZ(float.DegreesToRadians(pitchYawRoll.Y));
-                        var rotationMatrix = rollMatrix * pitchMatrix * yawMatrix;
+                        // glTF directional lights emit along node-local -Z; orient the node so that
+                        // -Z matches the sun's forward (travel) direction, i.e. the entity's local +X.
+                        var rotation = EntityTransformHelper.CreateRotationMatrixFromEulerAngles(entity.GetVector3Property("angles"));
+                        var direction = Vector3.Transform(Vector3.UnitX, rotation);
 
-                        var scaleMatrix = Matrix4x4.CreateScale(scale);
-                        var positionMatrix = Matrix4x4.CreateTranslation(positionVector);
-                        var lightMatrix = scaleMatrix * rotationMatrix * positionMatrix;
+                        var directionGltf = Vector3.Transform(direction, SourceToGltfRotation);
+                        var positionGltf = Vector3.Transform(positionVector, TransformSourceToGltf);
+
+                        // 'up' only anchors the meaningless roll around the beam, but CreateWorld degenerates
+                        // when it is parallel to the direction, so for a near-vertical sun (along Y) use Z instead.
+                        var up = MathF.Abs(directionGltf.Y) > 0.999f ? Vector3.UnitZ : Vector3.UnitY;
 
                         var node = scene.CreateNode(className);
                         node.PunctualLight = CreateGltfLightEnvironment(exportedModel, entity);
-                        node.LocalMatrix = lightMatrix * TransformSourceToGltf;
-                    }
-                    else if (className == "point_template")
-                    {
-                        var entityLumpName = entity.GetStringProperty("entitylumpname");
-
-                        if (entityLumpName != null && childEntityLumps.TryGetValue(entityLumpName, out var childLump))
-                        {
-                            LoadEntityMeshes(exportedModel, scene, childLump, transform);
-                        }
-                        else
-                        {
-                            ProgressReporter?.Report($"Failed to find child entity lump with name {entityLumpName}.");
-                        }
+                        node.LocalMatrix = Matrix4x4.CreateWorld(positionGltf, directionGltf, up);
                     }
 
                     continue;
