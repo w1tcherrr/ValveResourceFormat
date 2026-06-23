@@ -241,6 +241,15 @@ namespace Tests
                     var coverage = lodNode.Extras?["MSFT_screencoverage"]?.AsArray();
                     Assert.That(coverage, Is.Not.Null, "MSFT_screencoverage hint should be present");
                     Assert.That(coverage, Has.Count.EqualTo(5), "one screen-coverage value per level");
+
+                    // Per spec, entry i is where level i switches to the next, descending, last is the cull
+                    // threshold. The highest level must not start at full coverage (the old off-by-one bug).
+                    var coverageValues = coverage.Select(v => v.GetValue<float>()).ToList();
+                    Assert.That(coverageValues[0], Is.LessThan(1f), "highest level must not start at full coverage");
+                    for (var i = 1; i < coverageValues.Count; i++)
+                    {
+                        Assert.That(coverageValues[i], Is.LessThan(coverageValues[i - 1]), "coverage must be strictly descending");
+                    }
                 }
             });
         }

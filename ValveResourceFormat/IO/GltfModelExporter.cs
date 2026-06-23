@@ -861,9 +861,12 @@ namespace ValveResourceFormat.IO
             }
         }
 
-        // Best-effort MSFT_screencoverage hint: maps each level's Valve switch metric (100 / on-screen size)
-        // to a descending fractional coverage. The exact value depends on camera parameters, so this is only
-        // an ordering hint, matching how the spec describes the field. Omitted when there is no switch data.
+        // Best-effort MSFT_screencoverage hint. Per the spec, entry i is the coverage at which level i is
+        // replaced by the next (lower) level - i.e. the level's lower bound, descending - and the last entry
+        // is the cull threshold below which nothing renders. We derive each from the metric at which the next
+        // level takes over (Valve's 100 / on-screen size), mapped to a fractional coverage. The mapping is
+        // approximate (the real value depends on camera parameters), so this is only an ordering hint, as the
+        // spec describes. Omitted when there is no switch data.
         private static void AddScreenCoverageHint(Node highestDetailContainer, ModelLodInfo lodInfo, IReadOnlyList<int> levels)
         {
             if (lodInfo.SwitchDistances.Count == 0)
@@ -874,8 +877,8 @@ namespace ValveResourceFormat.IO
             var coverage = new System.Text.Json.Nodes.JsonNode?[levels.Count];
             for (var i = 0; i < levels.Count; i++)
             {
-                var (min, _) = lodInfo.GetMetricRange(levels[i]);
-                coverage[i] = 1f / (1f + Math.Max(min, 0f));
+                var (_, max) = lodInfo.GetMetricRange(levels[i]);
+                coverage[i] = max is float metric ? 1f / (1f + metric) : 0f;
             }
 
             highestDetailContainer.Extras = new System.Text.Json.Nodes.JsonObject
