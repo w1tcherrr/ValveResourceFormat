@@ -98,7 +98,7 @@ namespace CLI
         /// <param name="decompile">-d|--vpk_decompile, Decompile supported resource files.</param>
         /// <param name="texture_decode_flags">Decompile textures with the specified decode flags, example: "none", "auto", "ForceLDR".</param>
         /// <param name="recursive">If specified and given input is a folder, all sub directories will be scanned too.</param>
-        /// <param name="recursive_vpk">If specified along with --recursive, will also recurse into VPK archives.</param>
+        /// <param name="recursive_vpk">Recurse into VPK archives: .vpk files found while scanning a folder (with --recursive), and vpks nested inside a vpk.</param>
         /// <param name="all">-a, Print the content of each resource block in the file.</param>
         /// <param name="block">-b, Print the content of a specific block, example: DATA, RERL, REDI, NTRO.</param>
         /// <param name="threads">If higher than 1, files will be processed concurrently.</param>
@@ -287,14 +287,6 @@ namespace CLI
                 if (RecursiveSearch)
                 {
                     Console.Error.WriteLine("File passed in with --recursive option. Either pass in a folder or remove --recursive.");
-
-                    return 1;
-                }
-
-                // TODO: Support recursing vpks inside of vpk?
-                if (RecursiveSearchArchives && !CollectStats)
-                {
-                    Console.Error.WriteLine("File passed in with --recursive_vpk option, this is not supported.");
 
                     return 1;
                 }
@@ -1276,6 +1268,16 @@ namespace CLI
                 {
                     package.ReadEntry(file, rawFileData);
 
+                    // Descend into nested vpks and process their contents with the same options
+                    if (type == "vpk" && RecursiveSearchArchives && OutputFile != null)
+                    {
+                        var nestedPath = Path.Combine(parentPath, filePath);
+                        using var nestedStream = new MemoryStream(rawFileData, 0, totalLength);
+                        ProcessFile(nestedPath, nestedStream, parentPath);
+
+                        continue;
+                    }
+
                     // Not a file that can be decompiled, or no decompilation was requested
                     var isVcsFile = type == "vcs";
 
@@ -1285,7 +1287,7 @@ namespace CLI
                         {
                             var outputFile = filePath;
 
-                            if (RecursiveSearchArchives)
+                            if (RecursiveSearchArchives && IsInputFolder)
                             {
                                 outputFile = Path.Combine(parentPath, outputFile);
                             }
@@ -1355,7 +1357,7 @@ namespace CLI
                             }
                         }
 
-                        if (RecursiveSearchArchives)
+                        if (RecursiveSearchArchives && IsInputFolder)
                         {
                             outputFile = Path.Combine(parentPath, outputFile);
                         }

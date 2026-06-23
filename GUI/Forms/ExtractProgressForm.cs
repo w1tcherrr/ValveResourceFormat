@@ -26,13 +26,18 @@ namespace GUI.Forms
             public int Count = 1;
         }
 
+        // A file to extract, carrying the package and context it belongs to (which differ for nested vpks)
+        private readonly record struct QueuedFile(Package Package, VrfGuiContext Context, PackageEntry Entry);
+
         private readonly bool decompile;
         private string? path;
         private readonly ExportData exportData;
-        private readonly Dictionary<string, Queue<PackageEntry>> filesToExtractSorted = [];
+        private readonly Dictionary<string, Queue<QueuedFile>> filesToExtractSorted = [];
         private readonly Dictionary<string, FileTypeToExtract> fileTypesToExtract = [];
-        private readonly Queue<PackageEntry> filesToExtract = new();
+        private readonly Queue<QueuedFile> filesToExtract = new();
         private readonly HashSet<string> extractedFiles = [];
+        // Nested vpks opened while queuing; kept alive until extraction finishes
+        private readonly List<VrfGuiContext> nestedContexts = [];
         private CancellationTokenSource cancellationTokenSource = new();
         private readonly GltfModelExporter? gltfExporter;
         private readonly IProgress<string> progressReporter;
@@ -121,7 +126,10 @@ namespace GUI.Forms
             using var typesDialog = new ExtractOutputTypesForm();
             typesDialog.ChangeTypeEvent += OnTypesDialogSelectedValueChanged;
 
-            var hasVmap = fileTypesToExtract.Any(x => x.Key == "vmap_c");
+            // Only when decompiling a single vmap on its own do we default everything else off
+            // (its pulled-in dependencies). Extracting a bundle (vpk/folder) defaults every type to export.
+            var onlyVmap = fileTypesToExtract.Sum(x => x.Value.Count) == 1
+                && fileTypesToExtract.ContainsKey("vmap_c");
 
             foreach (var type in fileTypesToExtract.OrderByDescending(x => x.Value.Count))
             {
@@ -158,8 +166,7 @@ namespace GUI.Forms
                 }
 
                 // Select first suggested type, the 0th item is always "do not export"
-                // For folders containing a map, default to "do not export", except for the map itself.
-                var selectedIndex = hasVmap
+                var selectedIndex = onlyVmap
                     ? firstType is "vmap" ? 1 : 0
                     : 1;
 
@@ -238,6 +245,13 @@ namespace GUI.Forms
         {
             exportStopwatch.Stop();
 
+            foreach (var context in nestedContexts)
+            {
+                context.Dispose();
+            }
+
+            nestedContexts.Clear();
+
             if (t.IsFaulted)
             {
                 var ex = t.Exception.ToString();
@@ -304,6 +318,26 @@ namespace GUI.Forms
 
         public void QueueFiles(PackageEntry file)
         {
+            var package = exportData.VrfGuiContext.CurrentPackage;
+            if (package == null)
+            {
+                Log.Error(nameof(ExtractProgressForm), "CurrentPackage is null, cannot queue file");
+                return;
+            }
+
+            QueueFile(package, exportData.VrfGuiContext, file);
+        }
+
+        private void QueueFile(Package package, VrfGuiContext context, PackageEntry file)
+        {
+            // When decompiling, descend into nested vpks so their contents flow through the
+            // same type selection dialog and extraction logic as top-level files.
+            if (decompile && file.TypeName == "vpk")
+            {
+                QueueNestedVpk(package, context, file);
+                return;
+            }
+
             if (fileTypesToExtract.TryGetValue(file.TypeName, out var fileType))
             {
                 fileType.Count++;
@@ -313,16 +347,59 @@ namespace GUI.Forms
                 fileTypesToExtract[file.TypeName] = new FileTypeToExtract(); // Type to be filled in later
             }
 
+            var queued = new QueuedFile(package, context, file);
+
             if (decompile && filesToExtractSorted.TryGetValue(file.TypeName, out var specializedQueue))
             {
-                specializedQueue.Enqueue(file);
+                specializedQueue.Enqueue(queued);
                 return;
             }
 
-            filesToExtract.Enqueue(file);
+            filesToExtract.Enqueue(queued);
         }
 
-        private async Task ExtractFilesAsync(Queue<PackageEntry> filesToExtract)
+        private void QueueNestedVpk(Package parentPackage, VrfGuiContext parentContext, PackageEntry vpkEntry)
+        {
+            VrfGuiContext? childContext = null;
+
+            try
+            {
+                var stream = GameFileLoader.GetPackageEntryStream(parentPackage, vpkEntry);
+                childContext = new VrfGuiContext(vpkEntry.GetFullPath(), parentContext);
+                var nestedPackage = new Package();
+                nestedPackage.SetFileName(childContext.FileName);
+                nestedPackage.Read(stream); // Package takes ownership of the stream
+                childContext.CurrentPackage = nestedPackage;
+
+                nestedContexts.Add(childContext);
+                var ownedContext = childContext;
+                childContext = null; // ownership transferred to nestedContexts
+
+                if (nestedPackage.Entries == null)
+                {
+                    return;
+                }
+
+                foreach (var fileType in nestedPackage.Entries.Values)
+                {
+                    foreach (var entry in fileType)
+                    {
+                        QueueFile(nestedPackage, ownedContext, entry);
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                filesFailedToExport++;
+                Log.Error(nameof(ExtractProgressForm), $"Failed to open nested vpk '{vpkEntry.GetFullPath()}': {e}");
+            }
+            finally
+            {
+                childContext?.Dispose();
+            }
+        }
+
+        private async Task ExtractFilesAsync(Queue<QueuedFile> filesToExtract)
         {
             if (path == null)
             {
@@ -334,7 +411,7 @@ namespace GUI.Forms
             {
                 cancellationTokenSource.Token.ThrowIfCancellationRequested();
 
-                var packageFile = filesToExtract.Dequeue();
+                var (package, context, packageFile) = filesToExtract.Dequeue();
                 var fileFullName = packageFile.GetFullPath();
 
                 if (extractedFiles.Contains(fileFullName))
@@ -347,14 +424,7 @@ namespace GUI.Forms
                     extractProgressBar.Value = 100 - (int)(filesToExtract.Count / (float)initialCount * 100.0f);
                 }).ConfigureAwait(false);
 
-                var currentPackage = exportData.VrfGuiContext.CurrentPackage;
-                if (currentPackage == null)
-                {
-                    Log.Error(nameof(ExtractProgressForm), "CurrentPackage is null, cannot extract file");
-                    continue;
-                }
-
-                var stream = GameFileLoader.GetPackageEntryStream(currentPackage, packageFile);
+                var stream = GameFileLoader.GetPackageEntryStream(package, packageFile);
                 var outFilePath = Path.Combine(path, fileFullName);
                 var outFolder = Path.GetDirectoryName(outFilePath);
 
@@ -404,16 +474,18 @@ namespace GUI.Forms
                     continue;
                 }
 
-                await ExtractFile(resource, fileFullName, outFilePath).ConfigureAwait(false);
+                await ExtractFile(resource, fileFullName, outFilePath, context: context).ConfigureAwait(false);
             }
         }
 
-        public async Task ExtractFile(Resource resource, string inFilePath, string outFilePath, bool flatSubfiles = false)
+        public async Task ExtractFile(Resource resource, string inFilePath, string outFilePath, bool flatSubfiles = false, VrfGuiContext? context = null)
         {
             if (path == null)
             {
                 throw new InvalidOperationException("Path must be set before extracting files");
             }
+
+            context ??= exportData.VrfGuiContext;
 
             var outExtension = Path.GetExtension(outFilePath);
 
@@ -463,7 +535,7 @@ namespace GUI.Forms
 
             try
             {
-                contentFile = FileExtract.Extract(resource, exportData.VrfGuiContext, progressReporter);
+                contentFile = FileExtract.Extract(resource, context, progressReporter);
 
                 if (contentFile.Data != null)
                 {

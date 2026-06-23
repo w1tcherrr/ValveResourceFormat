@@ -191,12 +191,82 @@ namespace GUI.Types.Exporter
             }
         }
 
+        public static void ExtractEntirePackage(VrfGuiContext vrfGuiContext, bool decompile)
+        {
+            var package = vrfGuiContext.CurrentPackage;
+            if (package?.Entries == null)
+            {
+                Log.Error(nameof(ExportFile), "CurrentPackage is null, cannot extract package");
+                return;
+            }
+
+            var exportData = new ExportData
+            {
+                VrfGuiContext = vrfGuiContext,
+            };
+
+            var extractDialog = new ExtractProgressForm(exportData, null, decompile);
+
+            try
+            {
+                foreach (var fileType in package.Entries.Values)
+                {
+                    foreach (var entry in fileType)
+                    {
+                        extractDialog.QueueFiles(entry);
+                    }
+                }
+
+                extractDialog.ExecuteMultipleFileExtract();
+                extractDialog = null;
+            }
+            finally
+            {
+                extractDialog?.Dispose();
+            }
+        }
+
+        public static void ExtractNestedPackage(PackageEntry vpkEntry, VrfGuiContext parentContext, bool decompile)
+        {
+            var parentPackage = parentContext.CurrentPackage;
+            if (parentPackage == null)
+            {
+                Log.Error(nameof(ExportFile), "CurrentPackage is null, cannot extract nested package");
+                return;
+            }
+
+            var childContext = new VrfGuiContext(vpkEntry.GetFullPath(), parentContext);
+
+            try
+            {
+                var stream = GameFileLoader.GetPackageEntryStream(parentPackage, vpkEntry);
+                var package = new Package();
+                package.SetFileName(childContext.FileName);
+                package.Read(stream); // Package takes ownership of the stream
+                childContext.CurrentPackage = package;
+
+                ExtractEntirePackage(childContext, decompile);
+            }
+            finally
+            {
+                childContext.Dispose();
+            }
+        }
+
         public static void ExtractFilesFromTreeNode(IBetterBaseItem selectedNode, VrfGuiContext vrfGuiContext, bool decompile)
         {
             if (!selectedNode.IsFolder)
             {
                 var file = selectedNode.PackageEntry;
                 Debug.Assert(file != null);
+
+                // Extracting a nested VPK descends into it (mirrors extracting the root folder)
+                if (decompile && file.TypeName == "vpk")
+                {
+                    ExtractNestedPackage(file, vrfGuiContext, decompile);
+                    return;
+                }
+
                 // We are a file
                 ExtractFileFromPackageEntry(file, vrfGuiContext, decompile);
             }

@@ -11,7 +11,7 @@ The binary name is `Source2Viewer-CLI`.
 | **Input**                    |                                                                                                                                                                 |
 | `--input` (or `-i`)          | Input file to be processed. With no additional arguments, a summary of the input(s) will be displayed.                                                          |
 | `--recursive`                | If specified and given input is a folder, all sub directories will be scanned too.                                                                              |
-| `--recursive_vpk`            | If specified along with `--recursive`, will also recurse into VPK archives.                                                                                     |
+| `--recursive_vpk`            | Recurse into VPK archives: `.vpk` files found while scanning a folder (with `--recursive`), and vpks nested inside a vpk.                                        |
 | `--vpk_extensions` (or `-e`) | File extension(s) filter, example: "vcss_c,vjs_c,vxml_c".                                                                                                       |
 | `--vpk_filepath` (or `-f`)   | File path filter(s), supports comma-separated values. Example: "panorama/,sounds/" or "scripts/items/items_game.txt".                                           |
 | `--vpk_cache`                | Use cached VPK manifest to keep track of updates. Only changed files will be written to disk.                                                                   |
