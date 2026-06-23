@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -27,6 +28,109 @@ namespace GUI.Types.PackageViewer
         protected override void OnPaint(PaintEventArgs e)
         {
             base.OnPaint(e);
+        }
+
+        /// <summary>
+        /// The set of currently selected nodes. Mirrors the list view's multi-select so several files and folders
+        /// can be exported at once. Always contains at least the focused <see cref="TreeView.SelectedNode"/>.
+        /// </summary>
+        public readonly HashSet<BetterTreeNode> SelectedNodes = [];
+        private BetterTreeNode? selectionAnchor;
+
+        /// <summary>
+        /// Applies a click to the multi-selection: a plain click selects only <paramref name="node"/>, Ctrl toggles
+        /// it, and Shift selects the visible range from the previous anchor to <paramref name="node"/>.
+        /// </summary>
+        public void HandleClickSelection(BetterTreeNode node, bool ctrl, bool shift)
+        {
+            if (shift && selectionAnchor != null)
+            {
+                ClearSelectionHighlight();
+                SelectedNodes.Clear();
+
+                foreach (var rangeNode in VisibleRange(selectionAnchor, node))
+                {
+                    SelectedNodes.Add(rangeNode);
+                }
+            }
+            else if (ctrl)
+            {
+                if (!SelectedNodes.Add(node))
+                {
+                    SelectedNodes.Remove(node);
+                    ResetNodeColor(node);
+                }
+
+                selectionAnchor = node;
+            }
+            else
+            {
+                SelectSingle(node);
+                return;
+            }
+
+            ApplySelectionHighlight();
+            SelectedNode = SelectedNodes.Contains(node) ? node : SelectedNodes.FirstOrDefault() ?? node;
+        }
+
+        /// <summary>Collapses the multi-selection down to a single node.</summary>
+        public void SelectSingle(BetterTreeNode node)
+        {
+            ClearSelectionHighlight();
+            SelectedNodes.Clear();
+            SelectedNodes.Add(node);
+            selectionAnchor = node;
+            ApplySelectionHighlight();
+            SelectedNode = node;
+        }
+
+        // Walks the visible nodes and returns the inclusive run between the two endpoints, in either click order.
+        private IEnumerable<BetterTreeNode> VisibleRange(BetterTreeNode a, BetterTreeNode b)
+        {
+            var inRange = false;
+
+            for (TreeNode? node = Nodes.Count > 0 ? Nodes[0] : null; node != null; node = node.NextVisibleNode)
+            {
+                var isEndpoint = node == a || node == b;
+
+                if ((isEndpoint || inRange) && node is BetterTreeNode betterNode)
+                {
+                    yield return betterNode;
+                }
+
+                if (isEndpoint)
+                {
+                    if (inRange || a == b)
+                    {
+                        yield break;
+                    }
+
+                    inRange = true;
+                }
+            }
+        }
+
+        private void ApplySelectionHighlight()
+        {
+            foreach (var node in SelectedNodes)
+            {
+                node.BackColor = Themer.CurrentThemeColors.Accent;
+                node.ForeColor = Color.White;
+            }
+        }
+
+        private void ClearSelectionHighlight()
+        {
+            foreach (var node in SelectedNodes)
+            {
+                ResetNodeColor(node);
+            }
+        }
+
+        private static void ResetNodeColor(BetterTreeNode node)
+        {
+            node.BackColor = Color.Empty;
+            node.ForeColor = Color.Empty;
         }
 
         /// <summary>

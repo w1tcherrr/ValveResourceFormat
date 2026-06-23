@@ -255,6 +255,13 @@ namespace GUI.Types.PackageViewer
 
             var realNode = (BetterTreeNode)e.Node;
 
+            // Keyboard navigation collapses any multi-selection back to the focused node (mouse clicks are
+            // handled in MainTreeView_NodeMouseClick to support Ctrl/Shift).
+            if (e.Action == TreeViewAction.ByKeyboard)
+            {
+                mainTreeView.SelectSingle(realNode);
+            }
+
             // if user selected a folder, show the contents of that folder in the list view
             if (realNode.IsFolder)
             {
@@ -765,9 +772,35 @@ namespace GUI.Types.PackageViewer
 
         private void MainTreeView_NodeMouseClick(object? sender, TreeNodeMouseClickEventArgs e)
         {
-            if (e.Button == MouseButtons.Right && e.Node is BetterTreeNode node)
+            if (e.Node is not BetterTreeNode node)
             {
-                mainTreeView.SelectedNode = e.Node;
+                return;
+            }
+
+            var ctrl = (ModifierKeys & Keys.Control) == Keys.Control;
+            var shift = (ModifierKeys & Keys.Shift) == Keys.Shift;
+
+            if (e.Button == MouseButtons.Left)
+            {
+                // Clicking the expand/collapse glyph should not change the selection
+                var hit = mainTreeView.HitTest(e.Location);
+                if (hit.Location is TreeViewHitTestLocations.PlusMinus or TreeViewHitTestLocations.None)
+                {
+                    return;
+                }
+
+                mainTreeView.HandleClickSelection(node, ctrl, shift);
+                return;
+            }
+
+            if (e.Button == MouseButtons.Right)
+            {
+                // Right-clicking a node outside the current selection resets to it; right-clicking a selected
+                // node keeps the whole multi-selection so it can be exported together.
+                if (!mainTreeView.SelectedNodes.Contains(node))
+                {
+                    mainTreeView.SelectSingle(node);
+                }
 
                 if (node.PackageEntry != null)
                 {
@@ -775,7 +808,7 @@ namespace GUI.Types.PackageViewer
                     {
                         Location = e.Location,
                         PackageEntry = node.PackageEntry,
-                        TreeNode = (BetterTreeNode)e.Node
+                        TreeNode = node
                     });
                 }
                 else if (node.PkgNode != null)
@@ -784,7 +817,7 @@ namespace GUI.Types.PackageViewer
                     {
                         Location = e.Location,
                         PkgNode = node.PkgNode,
-                        TreeNode = (BetterTreeNode)e.Node
+                        TreeNode = node
                     });
                 }
             }

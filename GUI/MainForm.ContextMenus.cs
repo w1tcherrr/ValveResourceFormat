@@ -389,7 +389,17 @@ namespace GUI
             // Clicking context menu item in left side of the package view
             if (owner is BetterTreeView tree)
             {
-                if (tree.SelectedNode is IBetterBaseItem treeNode && tree.VrfGuiContext != null)
+                if (tree.VrfGuiContext == null)
+                {
+                    return;
+                }
+
+                if (tree.SelectedNodes.Count > 1)
+                {
+                    // We're selecting multiple files/folders
+                    ExportFile.ExtractFilesFromTreeNodes(tree.SelectedNodes, tree.VrfGuiContext, decompile);
+                }
+                else if (tree.SelectedNode is IBetterBaseItem treeNode)
                 {
                     ExportFile.ExtractFilesFromTreeNode(treeNode, tree.VrfGuiContext, decompile);
                 }
