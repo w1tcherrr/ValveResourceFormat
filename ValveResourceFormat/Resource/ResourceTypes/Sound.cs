@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
+using ValveKeyValue;
 using ValveResourceFormat.Serialization.KeyValues;
 
 namespace ValveResourceFormat.ResourceTypes
@@ -49,14 +50,12 @@ namespace ValveResourceFormat.ResourceTypes
     /// Represents a sentence with phoneme and emphasis data for voice playback.
     /// </summary>
     /// <seealso href="https://s2v.app/SchemaExplorer/cs2/soundsystem_voicecontainers/CAudioSentence">CAudioSentence</seealso>
-    public class Sentence
+    public partial class Sentence
     {
-        /*
         /// <summary>
         /// Gets a value indicating whether voice ducking should be applied.
         /// </summary>
         public bool ShouldVoiceDuck { get; init; }
-        */
 
         /// <summary>
         /// Gets the phoneme tags for lip-sync.
@@ -327,7 +326,7 @@ namespace ValveResourceFormat.ResourceTypes
             Duration = sound.GetFloatProperty("m_flDuration");
             StreamingDataSize = sound.GetUInt32Property("m_nStreamingSize");
 
-            // TODO: m_Sentences
+            ReadSentenceFromCtrl(sound);
 
             return true;
         }
@@ -408,6 +407,38 @@ namespace ValveResourceFormat.ResourceTypes
                 };
 
                 Sentence.RunTimePhonemes[i] = phonemeTag;
+            }
+        }
+
+        private void ReadSentenceFromCtrl(KVObject sound)
+        {
+            var sentences = sound.GetArray("m_Sentences");
+
+            if (sentences == null || sentences.Count == 0)
+            {
+                return;
+            }
+
+            var phonemes = sentences[0].GetArray("m_RunTimePhonemes");
+
+            if (phonemes == null)
+            {
+                return;
+            }
+
+            Sentence = new Sentence
+            {
+                RunTimePhonemes = new PhonemeTag[phonemes.Count]
+            };
+
+            for (var i = 0; i < phonemes.Count; i++)
+            {
+                Sentence.RunTimePhonemes[i] = new PhonemeTag
+                {
+                    StartTime = phonemes[i].GetFloatProperty("m_flStartTime"),
+                    EndTime = phonemes[i].GetFloatProperty("m_flEndTime"),
+                    PhonemeCode = (ushort)phonemes[i].GetInt32Property("m_nPhonemeCode"),
+                };
             }
         }
 
