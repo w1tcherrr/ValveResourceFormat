@@ -1483,6 +1483,17 @@ namespace ValveResourceFormat.Renderer
             }
         }
 
+        /// <summary>
+        /// Reassigns node ids and recreates the per-object GPU buffers (tint, transform, envmap
+        /// visibility). Call after adding or removing nodes at runtime, once the new nodes have
+        /// their lighting bindings assigned; without this they render with another node's object data.
+        /// </summary>
+        public void RecreateObjectBuffers()
+        {
+            UpdateNodeIndices();
+            CreateInstanceTransformBuffers(deletePrevious: true);
+        }
+
         /// <summary>Assigns sequential scene-unique IDs to all static and dynamic nodes, starting at 1 (0 is reserved as an invalid ID).</summary>
         public void UpdateNodeIndices()
         {
