@@ -7,11 +7,59 @@ using ValveResourceFormat.Serialization.KeyValues;
 namespace ValveResourceFormat.ResourceTypes.SmartProps
 {
     /// <summary>
-    /// Derivation of the value domains of exposed parameters, so UIs can offer valid choices
-    /// instead of free-form input.
+    /// Builds the exposed parameters and choices of a document at load time, deriving the value
+    /// domains of parameters so UIs can offer valid choices instead of free-form input.
     /// </summary>
-    public static partial class SmartPropEvaluator
+    static class SmartPropParameterBuilder
     {
+        internal static SmartPropParameterType GetParameterType(string className) => className switch
+        {
+            "CSmartPropVariable_Float" => SmartPropParameterType.Float,
+            "CSmartPropVariable_Int" => SmartPropParameterType.Int,
+            "CSmartPropVariable_Bool" => SmartPropParameterType.Bool,
+            "CSmartPropVariable_Color" => SmartPropParameterType.Color,
+            "CSmartPropVariable_Vector2D" => SmartPropParameterType.Vector2,
+            "CSmartPropVariable_Vector3D" => SmartPropParameterType.Vector3,
+            "CSmartPropVariable_Vector4D" => SmartPropParameterType.Vector4,
+            "CSmartPropVariable_String" => SmartPropParameterType.String,
+            "CSmartPropVariable_MaterialGroup" => SmartPropParameterType.MaterialGroup,
+            "CSmartPropVariable_Model" => SmartPropParameterType.Model,
+            "CSmartPropVariable_Material" => SmartPropParameterType.Material,
+            _ when className.StartsWith("CSmartPropVariable_", StringComparison.Ordinal) => SmartPropParameterType.String,
+            _ => SmartPropParameterType.Unknown,
+        };
+
+        internal static object GetVariableDefault(KVObject variable, SmartPropParameterType type, SmartPropEvaluationContext ctx)
+        {
+            var resolved = variable.TryGetValue("m_DefaultValue", out var defaultNode)
+                ? SmartPropValue.Resolve(defaultNode!, ctx)
+                : null;
+
+            switch (type)
+            {
+                case SmartPropParameterType.Float:
+                case SmartPropParameterType.Int:
+                    // Hammer 5 Tools sometimes writes numeric defaults as empty strings
+                    if (resolved is string s && s.Length == 0)
+                    {
+                        return 0.0;
+                    }
+
+                    return resolved == null ? 0.0 : SmartPropExpression.ToNumber(resolved);
+                case SmartPropParameterType.Bool:
+                    return resolved != null && SmartPropExpression.ToBool(resolved);
+                case SmartPropParameterType.Color:
+                    return SmartPropValue.ToColor(resolved, Vector4.One);
+                case SmartPropParameterType.Vector2:
+                case SmartPropParameterType.Vector3:
+                    return SmartPropValue.ToVector3(resolved);
+                case SmartPropParameterType.Vector4:
+                    return resolved is RawComponents raw ? raw.Value : SmartPropValue.ToColor(resolved, Vector4.Zero);
+                default:
+                    return resolved as string ?? string.Empty;
+            }
+        }
+
         private static readonly Dictionary<string, string[]> VariableEnumMembers = new(StringComparer.Ordinal)
         {
             ["CSmartPropVariable_ApplyColorMode"] = ["MULTIPLY_OBJECT", "MULTIPLY_CURRENT", "REPLACE"],
@@ -433,7 +481,7 @@ namespace ValveResourceFormat.ResourceTypes.SmartProps
 
                                 if (!string.IsNullOrEmpty(target))
                                 {
-                                    values[target] = ConvertDataTypedValue(variableValue, ctx);
+                                    values[target] = SmartPropValue.ConvertDataTypedValue(variableValue, ctx);
                                 }
                             }
                         }

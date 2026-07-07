@@ -66,6 +66,7 @@ namespace ValveResourceFormat.ResourceTypes.SmartProps
 
         public required SmartPropEvaluationResult Result { get; init; }
         public required ConcurrentDictionary<string, SmartPropExpression.Node> ExpressionCache { get; init; }
+        public required ConcurrentDictionary<string, SmartPropDocument?> NestedDocumentCache { get; init; }
         public IFileLoader? FileLoader { get; init; }
         public Func<string, KVObject?>? NestedDocumentResolver { get; init; }
         public bool Strict { get; init; }
