@@ -9,8 +9,6 @@ using SteamDatabase.ValvePak;
 using ValveResourceFormat.Blocks;
 using ValveResourceFormat.IO;
 using ValveResourceFormat.NavMesh;
-using ValveResourceFormat.Renderer.Particles;
-using ValveResourceFormat.Renderer.Particles.Utils;
 using ValveResourceFormat.Renderer.SceneEnvironment;
 using ValveResourceFormat.Renderer.SceneNodes;
 using ValveResourceFormat.ResourceTypes;
@@ -1870,6 +1868,18 @@ namespace ValveResourceFormat.Renderer.World
                 }
             }
 
+            var nodesByEntity = new Dictionary<Entity, SceneNode>();
+
+            foreach (var node in scene.AllNodes)
+            {
+                // A particle entity also spawns its own effect node, whose transform follows the
+                // simulation rather than staying at the origin the entity was authored at.
+                if (node.EntityData != null && node is not ParticleSceneNode)
+                {
+                    nodesByEntity.TryAdd(node.EntityData, node);
+                }
+            }
+
             foreach (var particleNode in entityParticleNodes)
             {
                 var entity = particleNode.EntityData!;
@@ -1887,7 +1897,7 @@ namespace ValveResourceFormat.Renderer.World
                     {
                         if (string.Equals(targetName, "!self", StringComparison.OrdinalIgnoreCase))
                         {
-                            SetControlPointTransform(particleNode.GetControlPoint(index), GetEntityWorldTransform(entity));
+                            particleNode.SetControlPoint(index, GetEntityWorldTransform(entity));
                         }
                         else
                         {
@@ -1905,7 +1915,16 @@ namespace ValveResourceFormat.Renderer.World
                         continue;
                     }
 
-                    SetControlPointTransform(particleNode.GetControlPoint(index), GetEntityWorldTransform(target));
+                    var transform = GetEntityWorldTransform(target);
+
+                    if (nodesByEntity.TryGetValue(target, out var targetNode))
+                    {
+                        particleNode.BindControlPoint(index, targetNode, transform);
+                    }
+                    else
+                    {
+                        particleNode.SetControlPoint(index, transform);
+                    }
                 }
 
                 ApplyLiteralControlPointValues(entity, particleNode);
@@ -1948,20 +1967,6 @@ namespace ValveResourceFormat.Renderer.World
             var index = Math.Clamp(entity.GetInt32Property(key, -1), -1, 64);
 
             return index < ControlPointKeys.Length ? index : -1;
-        }
-
-        // The control point takes the entity's position and full orientation frame, as cp0 does.
-        private static void SetControlPointTransform(ControlPoint controlPoint, Matrix4x4 transform)
-        {
-            controlPoint.Position = transform.Translation;
-
-            var forward = Vector3.TransformNormal(Vector3.UnitX, transform);
-
-            if (forward.LengthSquared() > Epsilon.LengthSquared)
-            {
-                controlPoint.Orientation = Vector3.Normalize(forward);
-                controlPoint.Rotation = Quaternion.Normalize(Quaternion.CreateFromRotationMatrix(transform));
-            }
         }
 
         /// <summary>

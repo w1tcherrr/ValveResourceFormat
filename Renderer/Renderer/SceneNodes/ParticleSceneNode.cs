@@ -255,6 +255,60 @@ namespace ValveResourceFormat.Renderer.SceneNodes
         /// <returns>The control point at the specified index.</returns>
         public ControlPoint GetControlPoint(int index) => particleRenderer.GetControlPoint(index);
 
+        /// <summary>
+        /// Places a control point at a transform, taking its position and full orientation frame the
+        /// same way control point 0 is seeded from this node's transform.
+        /// </summary>
+        /// <param name="index">The index of the control point to place.</param>
+        /// <param name="transform">The world transform the control point takes.</param>
+        public void SetControlPoint(int index, Matrix4x4 transform)
+        {
+            var controlPoint = particleRenderer.GetControlPoint(index);
+            controlPoint.Position = transform.Translation;
+
+            var forward = Vector3.TransformNormal(Vector3.UnitX, transform);
+
+            if (forward.LengthSquared() > Epsilon.LengthSquared)
+            {
+                controlPoint.Orientation = Vector3.Normalize(forward);
+                controlPoint.Rotation = Quaternion.Normalize(Quaternion.CreateFromRotationMatrix(transform));
+            }
+        }
+
+        /// <summary>
+        /// Places a control point at a transform and keeps it there relative to a scene node, so a
+        /// control point bound to an entity follows that entity when something moves it.
+        /// </summary>
+        /// <param name="index">The index of the control point to place.</param>
+        /// <param name="target">The node the control point follows.</param>
+        /// <param name="transform">The world transform the control point takes while the node is still.</param>
+        public void BindControlPoint(int index, SceneNode target, Matrix4x4 transform)
+        {
+            controlPointBindings ??= [];
+            controlPointBindings.Add(new ControlPointBinding(index, target, target.Transform, transform));
+            SetControlPoint(index, transform);
+        }
+
+        private List<ControlPointBinding>? controlPointBindings;
+
+        private readonly record struct ControlPointBinding(int Index, SceneNode Target, Matrix4x4 TargetOrigin, Matrix4x4 Transform);
+
+        private void UpdateBoundControlPoints()
+        {
+            foreach (var binding in controlPointBindings!)
+            {
+                var moved = binding.Target.Transform;
+                var transform = binding.Transform;
+
+                if (moved != binding.TargetOrigin && Matrix4x4.Invert(binding.TargetOrigin, out var toOrigin))
+                {
+                    transform *= toOrigin * moved;
+                }
+
+                SetControlPoint(binding.Index, transform);
+            }
+        }
+
         private ModelSceneNode? CreatePreviewModel(ParticleSystem particleSystem)
         {
             var configurations = particleSystem.Data.GetArray("m_controlPointConfigurations");
@@ -424,6 +478,11 @@ namespace ValveResourceFormat.Renderer.SceneNodes
             // non-follow attachment in game. Between seeds the control point belongs to the simulation:
             // particle functions may move it, and the node transform reflects it back after each step.
             // Preview drives the control point separately.
+            if (controlPointBindings != null)
+            {
+                UpdateBoundControlPoints();
+            }
+
             if (seededTransform != Transform)
             {
                 var controlPoint = particleRenderer.MainControlPoint;
