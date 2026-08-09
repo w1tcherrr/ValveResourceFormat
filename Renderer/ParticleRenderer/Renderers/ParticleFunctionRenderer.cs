@@ -60,7 +60,7 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
         /// Distance along the view direction the depth is re-taken from, in world units, leaving the
         /// drawn position alone. Pulls a card in front of geometry it would otherwise intersect.
         /// </summary>
-        protected float DepthBias { get; }
+        protected INumberProvider DepthBias { get; } = new LiteralNumberProvider(0f);
 
         protected ParticleFunctionRenderer(ParticleDefinitionParser parse) : base(parse)
         {
@@ -68,7 +68,7 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
             AlphaScale = parse.NumberProvider("m_flAlphaScale", AlphaScale);
             ColorScale = parse.VectorProvider("m_vecColorScale", ColorScale);
             OverbrightFactor = parse.NumberProvider("m_flOverbrightFactor", OverbrightFactor);
-            DepthBias = parse.Float("m_flDepthBias", DepthBias);
+            DepthBias = parse.NumberProvider("m_flDepthBias", DepthBias);
             DiffuseAmount = parse.NumberProvider("m_flDiffuseAmount", DiffuseAmount);
             SelfIllumAmount = parse.NumberProvider("m_flSelfIllumAmount", SelfIllumAmount);
             Desaturation = parse.NumberProvider("m_flDesaturation", Desaturation);
@@ -110,7 +110,7 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
             shader.SetUniform2("uAlphaRemapRange", GetAlphaRemapRange(systemRenderState));
             shader.SetUniform3("uColorScale", ColorScale.NextVector(systemRenderState));
             shader.SetUniform1("uGammaCorrectVertexColors", GammaCorrectVertexColors);
-            shader.SetUniform1("uDepthBias", DepthBias);
+            shader.SetUniform1("uDepthBias", DepthBias.NextNumber(systemRenderState));
             shader.SetUniform1("uSaturateColorPreAlphaBlend", SaturateColorPreAlphaBlend);
             shader.SetUniform1("uMaxLuminanceFrameBlend", MaxLuminanceFrameBlend);
         }
