@@ -196,6 +196,25 @@ namespace ValveResourceFormat.Renderer.Particles
         public float NextNumber(ref Particle particle, ParticleSystemRenderState renderState) => mapping.ApplyMapping(particle.GetScalar(field));
     }
 
+    /// <summary>
+    /// PF_TYPE_PARTICLE_INITIAL_FLOAT. Reads the particle's current attribute value, which equals
+    /// the initial value for attributes that never mutate after spawn (creation time, particle id);
+    /// for attributes operators rewrite it is an approximation.
+    /// </summary>
+    class PerParticleInitialNumberProvider : INumberProvider
+    {
+        private readonly ParticleField field;
+
+        private readonly AttributeMapping mapping;
+
+        public PerParticleInitialNumberProvider(ParticleDefinitionParser parse)
+        {
+            field = parse.ParticleField("m_nScalarAttribute");
+            mapping = new AttributeMapping(parse);
+        }
+        public float NextNumber(ref Particle particle, ParticleSystemRenderState renderState) => mapping.ApplyMapping(particle.GetScalar(field));
+    }
+
     // Particle Vector Component
     class PerParticleVectorComponentNumberProvider : INumberProvider
     {

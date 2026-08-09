@@ -61,10 +61,12 @@ record struct ParticleDefinitionParser(KVObject Data, ILogger Logger, int[] Inpu
     private readonly float Float(string k)
     {
         // Newer content authors many scalar fields as full float-input structures; the call site
-        // must read those with NumberProvider instead of as a literal.
-        if (Data.GetSubCollection(k) is { IsCollection: true })
+        // should read those with NumberProvider instead. Fall back to the block's literal value so
+        // such content still loads.
+        if (Data.GetSubCollection(k) is { IsCollection: true } block)
         {
             Logger.LogWarning("Field {Key} is authored as a number provider, but is parsed as a literal float; it should be read with NumberProvider", k);
+            return block.ContainsKey("m_flLiteralValue") ? block.GetFloatProperty("m_flLiteralValue") : 0f;
         }
 
         return Data.GetFloatProperty(k);
@@ -75,9 +77,10 @@ record struct ParticleDefinitionParser(KVObject Data, ILogger Logger, int[] Inpu
 
     private readonly int Int32(string k)
     {
-        if (Data.GetSubCollection(k) is { IsCollection: true })
+        if (Data.GetSubCollection(k) is { IsCollection: true } block)
         {
             Logger.LogWarning("Field {Key} is authored as a number provider, but is parsed as a literal int; it should be read with NumberProvider", k);
+            return block.ContainsKey("m_flLiteralValue") ? (int)block.GetFloatProperty("m_flLiteralValue") : 0;
         }
 
         return Data.GetInt32Property(k);
@@ -223,6 +226,8 @@ record struct ParticleDefinitionParser(KVObject Data, ILogger Logger, int[] Inpu
                     return new ParticleAgeNormalizedNumberProvider(parse);
                 case "PF_TYPE_PARTICLE_FLOAT":
                     return new PerParticleNumberProvider(parse);
+                case "PF_TYPE_PARTICLE_INITIAL_FLOAT":
+                    return new PerParticleInitialNumberProvider(parse);
                 case "PF_TYPE_PARTICLE_VECTOR_COMPONENT":
                     return new PerParticleVectorComponentNumberProvider(parse);
                 case "PF_TYPE_PARTICLE_SPEED":
