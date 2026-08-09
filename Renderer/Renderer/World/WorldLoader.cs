@@ -26,6 +26,10 @@ namespace ValveResourceFormat.Renderer.World
         private readonly Scene scene;
         private readonly RendererContext RendererContext;
 
+        // A template child's own keyvalues are in template space, so the spawning point_template's
+        // transform is kept here to compose a world transform for entities looked up by name.
+        private readonly Dictionary<Entity, Matrix4x4> entityParentTransforms = [];
+
         /// <summary>The directory path of the map, e.g. <c>maps/de_dust2</c>.</summary>
         public string MapName { get; }
 
@@ -530,6 +534,14 @@ namespace ValveResourceFormat.Renderer.World
                 .OrderByDescending(x => IsCubemapOrProbe(x.Classname) || IsFog(x.Classname));
 
             Entities.AddRange(traversed.Select(t => t.Entity));
+
+            foreach (var t in traversed)
+            {
+                if (t.ParentTransform != Matrix4x4.Identity)
+                {
+                    entityParentTransforms[t.Entity] = t.ParentTransform;
+                }
+            }
 
             void LoadEntity(string classname, Entity entity, Matrix4x4 parentTransform, bool fromTemplate)
             {
@@ -1580,10 +1592,16 @@ namespace ValveResourceFormat.Renderer.World
 
                 // Do not use transformationMatrix because scales need to be ignored
                 EntityTransformHelper.DecomposeTransformationMatrix(entity, out _, out var rotationMatrix, out var positionVector);
+                var boxTransform = rotationMatrix * Matrix4x4.CreateTranslation(positionVector);
+
+                if (entityParentTransforms.TryGetValue(entity, out var boxParentTransform))
+                {
+                    boxTransform *= boxParentTransform;
+                }
 
                 var boxNode = new SimpleBoxSceneNode(scene, color, new Vector3(16f))
                 {
-                    Transform = rotationMatrix * Matrix4x4.CreateTranslation(positionVector),
+                    Transform = boxTransform,
                     LayerName = layerName,
                     Name = filename,
                     EntityData = entity,
@@ -1652,7 +1670,7 @@ namespace ValveResourceFormat.Renderer.World
                     }
 
                     var end = transformationMatrix.Translation;
-                    var start = EntityTransformHelper.CalculateTransformationMatrix(startEntity).Translation;
+                    var start = GetEntityWorldTransform(startEntity).Translation;
 
                     if (line.EndKey != null && line.EndValueKey != null)
                     {
@@ -1668,7 +1686,7 @@ namespace ValveResourceFormat.Renderer.World
                             continue;
                         }
 
-                        end = EntityTransformHelper.CalculateTransformationMatrix(endEntity).Translation;
+                        end = GetEntityWorldTransform(endEntity).Translation;
                     }
 
                     var origin = (start + end) / 2f;
@@ -1794,7 +1812,7 @@ namespace ValveResourceFormat.Renderer.World
                 return transformationMatrix;
             }
 
-            return EntityTransformHelper.CalculateTransformationMatrix(target);
+            return GetEntityWorldTransform(target);
         }
 
         private static void ApplyParticleGlowProperties(Entity entity, ParticleSceneNode particleNode)
@@ -1811,6 +1829,19 @@ namespace ValveResourceFormat.Renderer.World
             {
                 particleNode.SetTextureOverride(textureOverride);
             }
+        }
+
+        /// <summary>
+        /// Gets the world transform of an entity, composing the transform of the
+        /// <c>point_template</c> that spawned it when it came from a template child lump.
+        /// </summary>
+        private Matrix4x4 GetEntityWorldTransform(Entity entity)
+        {
+            var transform = EntityTransformHelper.CalculateTransformationMatrix(entity);
+
+            return entityParentTransforms.TryGetValue(entity, out var parentTransform)
+                ? transform * parentTransform
+                : transform;
         }
 
         private Entity? FindEntityByKeyValue(string keyToFind, string valueToFind)
