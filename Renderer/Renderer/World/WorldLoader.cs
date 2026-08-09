@@ -1125,7 +1125,7 @@ namespace ValveResourceFormat.Renderer.World
                                 }
                             }
 
-                            var particleNode = new ParticleSceneNode(scene, particleSystem, particleSnapshot)
+                            var particleNode = new ParticleSceneNode(scene, particleSystem, particleSnapshot, playedByEntity: true)
                             {
                                 Name = particle,
                                 Transform = ResolveControlPoint0Transform(entity, transformationMatrix),

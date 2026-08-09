@@ -37,7 +37,11 @@ namespace ValveResourceFormat.Renderer.SceneNodes
         /// <param name="particleSystem">The particle system resource to simulate and render.</param>
         /// <param name="particleSnapshot">Optional snapshot to provide initial particle data (e.g. from a map entity).</param>
         /// <param name="preview">Whether to load preview control point state, and loop playback when finished.</param>
-        public ParticleSceneNode(Scene scene, ParticleSystem particleSystem, ParticleSnapshot? particleSnapshot = null, bool preview = false)
+        /// <param name="playedByEntity">
+        /// Whether a map entity plays this effect, in which case its control points come from that entity
+        /// rather than from a control point configuration.
+        /// </param>
+        public ParticleSceneNode(Scene scene, ParticleSystem particleSystem, ParticleSnapshot? particleSnapshot = null, bool preview = false, bool playedByEntity = false)
             : base(scene)
         {
             particleRenderer = new ParticleRenderer(particleSystem, Scene.RendererContext, scene, particleSnapshot)
@@ -57,18 +61,14 @@ namespace ValveResourceFormat.Renderer.SceneNodes
                     Scene.Add(PreviewModel, true);
                 }
             }
-            else
+            else if (!playedByEntity)
             {
                 ApplyRuntimeControlPointValues(particleSystem);
             }
         }
 
-        // Outside the editor an effect is played under one of its control point configurations, and the
-        // configuration is where several constants its operators depend on actually live - a global scale
-        // control point that has to read 0.5 rather than 0, or a flag switching an effect into its
-        // first-person sizing. Those arrive as a driver's literal offset, so seed the control points that
-        // carry one. Points a driver leaves at zero are skipped: control point 0 is the effect's placement
-        // and comes from the node transform, and the rest we would only be writing their default back.
+        // An effect dispatched by code plays under a control point configuration, which carries constants its
+        // operators depend on as driver offsets. Control point 0 is skipped, it is the effect's placement.
         private void ApplyRuntimeControlPointValues(ParticleSystem particleSystem)
         {
             var configurations = particleSystem.Data.GetArray("m_controlPointConfigurations");
@@ -190,26 +190,21 @@ namespace ValveResourceFormat.Renderer.SceneNodes
             return nodes;
         }
 
-        // Maps a ParticleAttachment_t kind onto the model's generic attach primitives (no placement math
-        // of its own): *_follow kinds track the model or a named attachment point, the rest are placed once,
-        // and kinds with no distinct viewer anchor (eyes/overhead/rootbone/center/...) fall back to the model origin.
+        // Maps a ParticleAttachment_t kind onto the model's generic attach primitives: custom origin and
+        // world origin are placed once, every other kind tracks the model or its named attachment point.
         private static void AttachOnModel(ModelSceneNode modelNode, SceneNode node, ParticleAttachment attachType, string attachmentName, Vector3 offset)
         {
             switch (attachType)
             {
+                case ParticleAttachment.PATTACH_POINT:
                 case ParticleAttachment.PATTACH_POINT_FOLLOW:
                     modelNode.AttachNode(node, attachmentName, offset);
-                    break;
-
-                case ParticleAttachment.PATTACH_POINT:
-                    modelNode.PlaceNode(node, attachmentName, offset);
                     break;
 
                 case ParticleAttachment.PATTACH_WORLDORIGIN:
                     node.Transform = Matrix4x4.CreateTranslation(offset);
                     break;
 
-                case ParticleAttachment.PATTACH_ABSORIGIN:
                 case ParticleAttachment.PATTACH_CUSTOMORIGIN:
                     modelNode.PlaceNode(node, string.Empty, offset);
                     break;
