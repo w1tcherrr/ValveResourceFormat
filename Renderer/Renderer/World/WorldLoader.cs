@@ -1908,11 +1908,46 @@ namespace ValveResourceFormat.Renderer.World
                     SetControlPointTransform(particleNode.GetControlPoint(index), GetEntityWorldTransform(target));
                 }
 
+                ApplyLiteralControlPointValues(entity, particleNode);
+
                 if (entity.GetStringProperty("classname") == "env_particle_glow")
                 {
                     ApplyParticleGlowProperties(entity, particleNode);
                 }
             }
+        }
+
+        /// <summary>
+        /// Pins control points to the literal values authored on the entity: <c>data_cp</c> takes a
+        /// vector and <c>tint_cp</c> a colour, both fed through as authored. Applied after the
+        /// <c>cpointN</c> bindings, which is the order the engine resolves the two in.
+        /// </summary>
+        private static void ApplyLiteralControlPointValues(Entity entity, ParticleSceneNode particleNode)
+        {
+            var dataControlPoint = LiteralControlPointIndex(entity, "data_cp");
+
+            if (dataControlPoint >= 0)
+            {
+                particleNode.GetControlPoint(dataControlPoint).Position = entity.GetVector3Property("data_cp_value");
+            }
+
+            var tintControlPoint = LiteralControlPointIndex(entity, "tint_cp");
+
+            if (tintControlPoint >= 0)
+            {
+                particleNode.GetControlPoint(tintControlPoint).Position = entity.GetVector3Property("tint_cp_color", new Vector3(255f));
+            }
+        }
+
+        /// <summary>
+        /// Reads a literal control point index, clamped the way the engine clamps it at spawn. Returns
+        /// -1 when unused, which is also what an index past the last control point resolves to.
+        /// </summary>
+        private static int LiteralControlPointIndex(Entity entity, string key)
+        {
+            var index = Math.Clamp(entity.GetInt32Property(key, -1), -1, 64);
+
+            return index < ControlPointKeys.Length ? index : -1;
         }
 
         // The control point takes the entity's position and full orientation frame, as cp0 does.
