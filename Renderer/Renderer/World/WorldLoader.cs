@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -8,6 +9,8 @@ using SteamDatabase.ValvePak;
 using ValveResourceFormat.Blocks;
 using ValveResourceFormat.IO;
 using ValveResourceFormat.NavMesh;
+using ValveResourceFormat.Renderer.Particles;
+using ValveResourceFormat.Renderer.Particles.Utils;
 using ValveResourceFormat.Renderer.SceneEnvironment;
 using ValveResourceFormat.Renderer.SceneNodes;
 using ValveResourceFormat.ResourceTypes;
@@ -29,6 +32,9 @@ namespace ValveResourceFormat.Renderer.World
         // A template child's own keyvalues are in template space, so the spawning point_template's
         // transform is kept here to compose a world transform for entities looked up by name.
         private readonly Dictionary<Entity, Matrix4x4> entityParentTransforms = [];
+        private readonly List<ParticleSceneNode> entityParticleNodes = [];
+
+        private static readonly string[] ControlPointKeys = CreateControlPointKeys();
 
         /// <summary>The directory path of the map, e.g. <c>maps/de_dust2</c>.</summary>
         public string MapName { get; }
@@ -255,6 +261,7 @@ namespace ValveResourceFormat.Renderer.World
             }
 
             ResolveAttachmentParenting();
+            ResolveParticleControlPoints();
 
             Action<List<SceneLight>> lightEntityStore = (scene.LightingInfo.LightmapVersionNumber, scene.LightingInfo.LightmapGameVersionNumber) switch
             {
@@ -1128,11 +1135,7 @@ namespace ValveResourceFormat.Renderer.World
                                 EntityData = entity,
                             };
 
-                            if (classname == "env_particle_glow")
-                            {
-                                ApplyParticleGlowProperties(entity, particleNode);
-                            }
-
+                            entityParticleNodes.Add(particleNode);
                             scene.Add(particleNode, true);
                         }
                         catch (Exception e)
@@ -1828,6 +1831,101 @@ namespace ValveResourceFormat.Renderer.World
             if (!string.IsNullOrEmpty(textureOverride))
             {
                 particleNode.SetTextureOverride(textureOverride);
+            }
+        }
+
+        private static string[] CreateControlPointKeys()
+        {
+            var keys = new string[64];
+
+            for (var i = 0; i < keys.Length; i++)
+            {
+                keys[i] = string.Concat("cpoint", i.ToString(CultureInfo.InvariantCulture));
+            }
+
+            return keys;
+        }
+
+        /// <summary>
+        /// Applies the control point overrides authored on particle entities: <c>cpoint1</c> to
+        /// <c>cpoint63</c> each name an entity whose transform that control point takes. Runs once
+        /// every lump is loaded, so a target in another lump resolves regardless of load order.
+        /// </summary>
+        private void ResolveParticleControlPoints()
+        {
+            if (entityParticleNodes.Count == 0)
+            {
+                return;
+            }
+
+            var entitiesByTargetName = new Dictionary<string, Entity>(Entities.Count, StringComparer.OrdinalIgnoreCase);
+
+            foreach (var entity in Entities)
+            {
+                var targetName = entity.TargetName;
+
+                if (!string.IsNullOrEmpty(targetName))
+                {
+                    entitiesByTargetName.TryAdd(targetName, entity);
+                }
+            }
+
+            foreach (var particleNode in entityParticleNodes)
+            {
+                var entity = particleNode.EntityData!;
+
+                for (var index = 1; index < ControlPointKeys.Length; index++)
+                {
+                    var targetName = entity.GetStringProperty(ControlPointKeys[index]);
+
+                    if (string.IsNullOrEmpty(targetName))
+                    {
+                        continue;
+                    }
+
+                    if (targetName[0] == '!')
+                    {
+                        if (string.Equals(targetName, "!self", StringComparison.OrdinalIgnoreCase))
+                        {
+                            SetControlPointTransform(particleNode.GetControlPoint(index), GetEntityWorldTransform(entity));
+                        }
+                        else
+                        {
+                            RendererContext.Logger.LogDebug("Particle entity '{Target}' points {Key} at '{ControlPointTarget}', which only exists at runtime",
+                                entity.TargetName, ControlPointKeys[index], targetName);
+                        }
+
+                        continue;
+                    }
+
+                    if (!entitiesByTargetName.TryGetValue(targetName, out var target))
+                    {
+                        RendererContext.Logger.LogWarning("Particle entity '{Target}' points {Key} at '{ControlPointTarget}', which does not exist",
+                            entity.TargetName, ControlPointKeys[index], targetName);
+                        continue;
+                    }
+
+                    SetControlPointTransform(particleNode.GetControlPoint(index), GetEntityWorldTransform(target));
+                }
+
+                if (entity.GetStringProperty("classname") == "env_particle_glow")
+                {
+                    ApplyParticleGlowProperties(entity, particleNode);
+                }
+            }
+        }
+
+        // The control point takes the entity's position and full orientation frame, as cp0 does.
+        private static void SetControlPointTransform(ControlPoint controlPoint, Matrix4x4 transform)
+        {
+            controlPoint.Position = transform.Translation;
+
+            var forward = Vector3.TransformNormal(Vector3.UnitX, transform);
+
+            if (forward.LengthSquared() > Epsilon.LengthSquared)
+            {
+                controlPoint.Orientation = Vector3.Normalize(forward);
+                controlPoint.Rotation = Quaternion.Normalize(Quaternion.CreateFromRotationMatrix(transform));
             }
         }
 
