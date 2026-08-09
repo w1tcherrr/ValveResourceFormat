@@ -87,10 +87,11 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
             public float ScalarCoordinate;
         }
 
-        private readonly struct RopeSample
+        private struct RopeSample
         {
             public Vector3 Position { get; init; }
-            public Vector3 WidthAxis { get; init; }
+            public Vector3 WidthAxis { get; set; }
+            public Vector3 Tangent { get; init; }
             public float Radius { get; init; }
             public Vector4 Color { get; init; }
         }
@@ -449,6 +450,8 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
 
             try
             {
+                var stripAxis = Vector3.Zero;
+
                 for (var segment = 0; segment < segmentCount && quadCount < maxQuads; segment++)
                 {
                     ref readonly var n0 = ref nodes[ResolveIndex(segment - 1, nodeCount)];
@@ -467,11 +470,13 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
                     }
 
                     var previous = EvaluateSample(n0, n1, n2, n3, 0f, camera);
+                    AlignWidthAxis(ref previous, ref stripAxis);
 
                     for (var step = 1; step <= subdivisions && quadCount < maxQuads; step++)
                     {
                         var t = step / (float)subdivisions;
                         var current = EvaluateSample(n0, n1, n2, n3, t, camera);
+                        AlignWidthAxis(ref current, ref stripAxis);
 
                         WriteQuad(rawVertices, quadCount, previous, current,
                             MapV(float.Lerp(vStart, vEnd, (step - 1) / (float)subdivisions), oneOverWorldSize, vOffset),
@@ -531,6 +536,7 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
             {
                 Position = position,
                 WidthAxis = widthAxis,
+                Tangent = tangent,
                 Radius = radius,
                 Color = Vector4.Clamp(
                     new Vector4(Vector3.Lerp(n1.Color, n2.Color, t), float.Lerp(n1.Alpha, n2.Alpha, t)),
@@ -590,6 +596,21 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
             }
         }
 
+        /// <summary>
+        /// Keeps the ribbon side vector on one hemisphere along the strip. The sign of the width axis
+        /// is visually symmetric per sample, but letting it flip between neighboring samples folds
+        /// their shared quad into a bowtie where the tangent passes through the view direction.
+        /// </summary>
+        private static void AlignWidthAxis(ref RopeSample sample, ref Vector3 stripAxis)
+        {
+            if (Vector3.Dot(sample.WidthAxis, stripAxis) < 0f)
+            {
+                sample.WidthAxis = -sample.WidthAxis;
+            }
+
+            stripAxis = sample.WidthAxis;
+        }
+
         private float ViewAngleFade(in RopeSample sample, Camera camera)
         {
             var toCamera = camera.Location - sample.Position;
@@ -599,7 +620,7 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
                 return 1f;
             }
 
-            var facing = MathF.Abs(Vector3.Dot(sample.WidthAxis, Vector3.Normalize(toCamera)));
+            var facing = MathF.Abs(Vector3.Dot(sample.Tangent, Vector3.Normalize(toCamera)));
 
             return 1f - MathUtils.Smoothstep(startFadeDot, endFadeDot, facing);
         }
