@@ -793,7 +793,7 @@ namespace ValveResourceFormat.Renderer.World
                                     if (skyEntity != null)
                                     {
                                         material = skyEntity.GetStringProperty("skyname") ?? skyEntity.GetStringProperty("skybox_material_day");
-                                        var rotationOnly = EntityTransformHelper.CalculateTransformationMatrix(skyEntity) with { Translation = transformationMatrix.Translation };
+                                        var rotationOnly = GetEntityWorldTransform(skyEntity) with { Translation = transformationMatrix.Translation };
                                         transformationMatrix = rotationOnly;  // steal rotation from env_sky
 
                                         var scale = skyEntity.GetFloatProperty("brightnessscale", 1.0f);
@@ -1481,6 +1481,11 @@ namespace ValveResourceFormat.Renderer.World
             EntityTransformHelper.DecomposeTransformationMatrix(entity, out _, out var skyboxReferenceRotationMatrix, out var skyboxReferencePositionMatrix);
             var skyboxReference = skyboxReferenceRotationMatrix * Matrix4x4.CreateTranslation(skyboxReferencePositionMatrix);
 
+            if (entityParentTransforms.TryGetValue(entity, out var skyboxParentTransform))
+            {
+                skyboxReference *= skyboxParentTransform;
+            }
+
             var offsetTransform = Matrix4x4.CreateTranslation(-skyboxResult.WorldOffset);
             var offsetAndScaleTransform = offsetTransform;
 
@@ -1737,7 +1742,7 @@ namespace ValveResourceFormat.Renderer.World
                     continue;
                 }
 
-                var end = EntityTransformHelper.CalculateTransformationMatrix(endEntity).Translation;
+                var end = GetEntityWorldTransform(endEntity).Translation;
 
                 var origin = (start + end) / 2f;
                 end -= origin;
@@ -1782,7 +1787,7 @@ namespace ValveResourceFormat.Renderer.World
 
                 visited[current] = nodes.Count;
                 nodes.Add(new FloraMoverPathNode(
-                    EntityTransformHelper.CalculateTransformationMatrix(current).Translation,
+                    GetEntityWorldTransform(current).Translation,
                     current.GetFloatProperty("speed"),
                     current.GetFloatProperty("wait")));
 
@@ -1973,7 +1978,9 @@ namespace ValveResourceFormat.Renderer.World
         /// Gets the world transform of an entity, composing the transform of the
         /// <c>point_template</c> that spawned it when it came from a template child lump.
         /// </summary>
-        private Matrix4x4 GetEntityWorldTransform(Entity entity)
+        /// <param name="entity">The entity to place.</param>
+        /// <returns>The entity's transform in world space.</returns>
+        public Matrix4x4 GetEntityWorldTransform(Entity entity)
         {
             var transform = EntityTransformHelper.CalculateTransformationMatrix(entity);
 
