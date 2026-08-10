@@ -20,7 +20,7 @@ namespace ValveResourceFormat.ResourceTypes
         /// </summary>
         public KVObject GetUpgradedData()
         {
-            upgradedData ??= ParticleFormatUpgrader.UpgradeToLatest(Data, Document?.Header?.Format);
+            upgradedData ??= ParticleFormatUpgrader.UpgradeToLatest(Data, Format);
             return upgradedData;
         }
 
