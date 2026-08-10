@@ -18,6 +18,12 @@ namespace ValveResourceFormat.Renderer.Particles.Emitters
         private readonly INumberProvider emissionMin = new LiteralNumberProvider(0);
         private readonly INumberProvider emissionMax = new LiteralNumberProvider(100f);
         private readonly float noiseOffset;
+        private readonly bool absVal;
+        private readonly bool absValInv;
+        private readonly int worldNoisePoint = -1;
+        private readonly float worldNoiseScale = 0.001f;
+        private readonly Vector3 offsetLoc;
+        private readonly float worldTimeScale;
 
         private Action<float>? particleEmitCallback;
 
@@ -33,6 +39,12 @@ namespace ValveResourceFormat.Renderer.Particles.Emitters
             emissionMin = parse.NumberProvider("m_flOutputMin", emissionMin);
             emissionMax = parse.NumberProvider("m_flOutputMax", emissionMax);
             noiseOffset = parse.Float("m_flOffset", noiseOffset);
+            absVal = parse.Boolean("m_bAbsVal", absVal);
+            absValInv = parse.Boolean("m_bAbsValInv", absValInv);
+            worldNoisePoint = parse.Int32("m_nWorldNoisePoint", worldNoisePoint);
+            worldNoiseScale = parse.Float("m_flWorldNoiseScale", worldNoiseScale);
+            offsetLoc = parse.Vector3("m_vecOffsetLoc", offsetLoc);
+            worldTimeScale = parse.Float("m_flWorldTimeScale", worldTimeScale);
         }
 
         public override void Start(Action<float> particleEmitCallback)
@@ -66,10 +78,27 @@ namespace ValveResourceFormat.Renderer.Particles.Emitters
 
             if (TryGetEmissionWindow(frameStart, time, nextStartTime, nextEmissionDuration, out var windowStart, out var windowEnd))
             {
-                var noise = (Noise.ValueDiagonal((time + noiseOffset) * noiseScale.NextNumber(particleSystemState)) * 0.5f) + 0.5f;
+                var basePosition = worldNoisePoint < 0
+                    ? Vector3.Zero
+                    : (particleSystemState.GetControlPoint(worldNoisePoint).Position + offsetLoc) * worldNoiseScale;
+
+                // The engine's world time term ticks in milliseconds
+                var sampleTime = ((time + noiseOffset) * noiseScale.NextNumber(particleSystemState))
+                    + (particleSystemState.WorldTime * 1000f * worldTimeScale);
+                var noise = Noise.Value3D(basePosition + new Vector3(sampleTime));
+
+                var absScale = absVal ? 1f : 0.5f;
+                var normalized = absVal ? MathF.Abs(noise) : noise;
+
+                if (absValInv)
+                {
+                    normalized = 1f - normalized;
+                }
+
                 var emissionMinValue = emissionMin.NextNumber(particleSystemState);
                 var emissionMaxValue = emissionMax.NextNumber(particleSystemState);
-                var emissionRate = (emissionMinValue + noise * (emissionMaxValue - emissionMinValue)) * strength;
+                var span = emissionMaxValue - emissionMinValue;
+                var emissionRate = MathF.Max(0f, emissionMinValue + ((1f - absScale) * span) + (absScale * span * normalized)) * strength;
 
                 accumulator.Charge(emissionRate, windowStart, windowEnd, time, particleEmitCallback);
             }
