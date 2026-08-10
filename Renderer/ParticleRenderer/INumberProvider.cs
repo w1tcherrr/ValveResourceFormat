@@ -286,6 +286,15 @@ namespace ValveResourceFormat.Renderer.Particles
         }
     }
 
+    /// <summary>PF_TYPE_RENDERER_CAMERA_DISTANCE. Distance from the render camera to the particle.</summary>
+    class RendererCameraDistanceNumberProvider : INumberProvider
+    {
+        private readonly AttributeMapping attributeMapping;
+        public RendererCameraDistanceNumberProvider(ParticleDefinitionParser parse) { attributeMapping = new AttributeMapping(parse); }
+        public float NextNumber(ref Particle particle, ParticleSystemRenderState renderState)
+            => attributeMapping.ApplyMapping(Vector3.Distance(renderState.CameraPosition, particle.Position));
+    }
+
     // Control Point Speed
     class ControlPointSpeedNumberProvider : INumberProvider
     {

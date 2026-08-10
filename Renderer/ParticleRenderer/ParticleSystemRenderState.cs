@@ -59,6 +59,9 @@ namespace ValveResourceFormat.Renderer.Particles
         public long ParticleCount { get; set; }
         public float Age { get; set; }
 
+        /// <summary>World-space position of the render camera, updated once per simulation step.</summary>
+        public Vector3 CameraPosition { get; set; }
+
         public bool EndEarly { get; set; }
 
         public bool DestroyInstantlyOnEnd { get; private set; }
