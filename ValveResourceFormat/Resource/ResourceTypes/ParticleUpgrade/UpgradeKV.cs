@@ -93,6 +93,28 @@ internal static class UpgradeKV
     public static bool IsFloatingPoint(this KVObject value)
         => value.ValueType is KVValueType.FloatingPoint or KVValueType.FloatingPoint64;
 
+    public static bool TryGetNumber(this KVObject value, out double number)
+    {
+        switch (value.ValueType)
+        {
+            case KVValueType.Int16 or KVValueType.Int32 or KVValueType.Int64:
+                number = value.ToInt64(CultureInfo.InvariantCulture);
+                return true;
+            case KVValueType.UInt16 or KVValueType.UInt32 or KVValueType.UInt64:
+                number = value.ToUInt64(CultureInfo.InvariantCulture);
+                return true;
+            case KVValueType.FloatingPoint:
+                number = value.ToSingle(CultureInfo.InvariantCulture);
+                return true;
+            case KVValueType.FloatingPoint64:
+                number = value.ToDouble(CultureInfo.InvariantCulture);
+                return true;
+            default:
+                number = 0.0;
+                return false;
+        }
+    }
+
     public static void SetMember(this KVObject obj, string name, KVObject value)
         => obj[name] = value;
 
@@ -107,6 +129,18 @@ internal static class UpgradeKV
 
     public static void SetString(this KVObject obj, string name, string value)
         => obj.SetMember(name, new KVObject(value));
+
+    public static void SetFloatArray(this KVObject obj, string name, params float[] values)
+    {
+        var array = KVObject.Array(values.Length);
+
+        foreach (var value in values)
+        {
+            array.Add(new KVObject(value));
+        }
+
+        obj.SetMember(name, array);
+    }
 
     /// <summary>
     /// Finds or creates the named member and resets its value to an empty object,
