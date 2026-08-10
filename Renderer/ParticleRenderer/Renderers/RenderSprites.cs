@@ -185,7 +185,9 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
             distanceAlpha = parse.Boolean("m_bDistanceAlpha", distanceAlpha);
             startFadeDot = parse.Float("m_flStartFadeDot", startFadeDot);
             endFadeDot = parse.Float("m_flEndFadeDot", endFadeDot);
-            animationType = parse.Enum<ParticleAnimationType>("m_nAnimationType", animationType);
+            animationType = parse.BehaviorVersion >= 10
+                ? parse.Enum<ParticleAnimationType>("m_nAnimationType", animationType)
+                : ParticleAnimationType.ANIMATION_TYPE_FIXED_RATE;
             blendFrames = parse.Boolean("m_bBlendFramesSeq0", blendFrames);
 
             outline = parse.Boolean("m_bOutline", outline);
