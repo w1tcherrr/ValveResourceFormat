@@ -183,6 +183,16 @@ internal static class UpgradeKV
     }
 
     /// <summary>
+    /// Finds the named member's object value for in-place member merging, creating an empty
+    /// object member at the tail when absent and resetting a non-object value in place.
+    /// </summary>
+    public static KVObject MergeObject(this KVObject obj, string name)
+    {
+        var value = obj.Find(name);
+        return value is { IsCollection: true } ? value : obj.SetObject(name);
+    }
+
+    /// <summary>
     /// Finds the named member, creating it as a null member at the object tail when absent.
     /// </summary>
     public static KVObject EnsureMember(this KVObject obj, string name)
