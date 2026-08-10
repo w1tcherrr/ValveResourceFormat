@@ -138,6 +138,7 @@ namespace ValveResourceFormat.Renderer.Particles
                 ["C_OP_OscillateScalarSimple"] = operatorInfo => new OscillateScalarSimple(operatorInfo),
                 ["C_OP_OscillateVector"] = operatorInfo => new OscillateVector(operatorInfo),
                 ["C_OP_OscillateVectorSimple"] = operatorInfo => new OscillateVectorSimple(operatorInfo),
+                ["C_OP_PercentageBetweenTransforms"] = operatorInfo => new PercentageBetweenTransforms(operatorInfo),
                 ["C_OP_PlaneCull"] = operatorInfo => new PlaneCull(operatorInfo),
                 ["C_OP_RestartAfterDuration"] = operatorInfo => new RestartAfterDuration(operatorInfo),
                 ["C_OP_PositionLock"] = operatorInfo => new PositionLock(operatorInfo),
