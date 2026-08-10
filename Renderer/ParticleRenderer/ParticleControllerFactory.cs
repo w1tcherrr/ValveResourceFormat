@@ -1,4 +1,4 @@
-using System.Diagnostics.CodeAnalysis;
+﻿using System.Diagnostics.CodeAnalysis;
 using Microsoft.Extensions.Logging;
 using ValveKeyValue;
 using ValveResourceFormat.Renderer;
@@ -96,11 +96,11 @@ namespace ValveResourceFormat.Renderer.Particles
                 ["C_INIT_RandomYawFlip"] = initializerInfo => new RandomYawFlip(initializerInfo),
                 ["C_INIT_NormalAlignToCP"] = initializerInfo => new NormalAlignToCP(initializerInfo),
                 ["C_INIT_NormalOffset"] = initializerInfo => new NormalOffset(initializerInfo),
-                ["C_INIT_RemapScalar"] = initializerInfo => new RemapScalar(initializerInfo),
+                ["C_INIT_RemapScalar"] = initializerInfo => new Initializers.RemapScalar(initializerInfo),
                 ["C_INIT_RemapScalarToVector"] = initializerInfo => new RemapScalarToVector(initializerInfo),
                 ["C_INIT_RemapSpeedToScalar"] = initializerInfo => new RemapSpeedToScalar(initializerInfo),
-                ["C_INIT_RemapTransformOrientationToRotations"] = initializerInfo => new RemapTransformOrientationToRotationsInit(initializerInfo),
-                ["C_INIT_RemapParticleCountToScalar"] = initializerInfo => new RemapParticleCountToScalar(initializerInfo),
+                ["C_INIT_RemapTransformOrientationToRotations"] = initializerInfo => new Initializers.RemapTransformOrientationToRotations(initializerInfo),
+                ["C_INIT_RemapParticleCountToScalar"] = initializerInfo => new Initializers.RemapParticleCountToScalar(initializerInfo),
                 ["C_INIT_RingWave"] = initializerInfo => new RingWave(initializerInfo),
                 ["C_INIT_VelocityFromCP"] = initializerInfo => new VelocityFromCP(initializerInfo),
                 ["C_INIT_InheritVelocity"] = initializerInfo => new InheritVelocity(initializerInfo),
@@ -162,13 +162,14 @@ namespace ValveResourceFormat.Renderer.Particles
                 ["C_OP_RemapCPtoScalar"] = operatorInfo => new RemapCPtoScalar(operatorInfo),
                 ["C_OP_RemapCPtoVector"] = operatorInfo => new RemapCPtoVector(operatorInfo),
                 ["C_OP_SetCPtoVector"] = operatorInfo => new SetCPtoVector(operatorInfo),
-                ["C_OP_RemapParticleCountToScalar"] = operatorInfo => new OpRemapParticleCountToScalar(operatorInfo),
+                ["C_OP_RemapParticleCountToScalar"] = operatorInfo => new Operators.RemapParticleCountToScalar(operatorInfo),
                 ["C_OP_RemapParticleCountOnScalarEndCap"] = operatorInfo => new RemapParticleCountOnScalarEndCap(operatorInfo),
                 ["C_OP_ReinitializeScalarEndCap"] = operatorInfo => new ReinitializeScalarEndCap(operatorInfo),
+                ["C_OP_RemapScalar"] = operatorInfo => new Operators.RemapScalar(operatorInfo),
                 ["C_OP_RemapScalarEndCap"] = operatorInfo => new RemapScalarEndCap(operatorInfo),
                 ["C_OP_RemapSpeed"] = operatorInfo => new RemapSpeed(operatorInfo),
                 ["C_OP_RemapVelocityToVector"] = operatorInfo => new RemapVelocityToVector(operatorInfo),
-                ["C_OP_RemapTransformOrientationToRotations"] = operatorInfo => new RemapTransformOrientationToRotations(operatorInfo),
+                ["C_OP_RemapTransformOrientationToRotations"] = operatorInfo => new Operators.RemapTransformOrientationToRotations(operatorInfo),
                 ["C_OP_RotateVector"] = operatorInfo => new RotateVector(operatorInfo),
                 ["C_OP_SetAttributeToScalarExpression"] = operatorInfo => new SetAttributeToScalarExpression(operatorInfo),
                 ["C_OP_SetFloat"] = operatorInfo => new SetFloat(operatorInfo),
