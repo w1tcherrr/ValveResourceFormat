@@ -1,5 +1,6 @@
 using System.Linq;
 using ValveKeyValue;
+using ValveResourceFormat.ResourceTypes.ParticleUpgrade;
 using ValveResourceFormat.Serialization.KeyValues;
 
 namespace ValveResourceFormat.ResourceTypes
@@ -10,6 +11,19 @@ namespace ValveResourceFormat.ResourceTypes
     /// <seealso href="https://s2v.app/SchemaExplorer/cs2/particles/CParticleSystemDefinition">CParticleSystemDefinition</seealso>
     public class ParticleSystem : KeyValuesOrNTRO
     {
+        private KVObject? upgradedData;
+
+        /// <summary>
+        /// Gets the particle system data upgraded through the vpcf format-conversion chain to the
+        /// newest implemented format. Computed once and cached; <see cref="KeyValuesOrNTRO.Data"/>
+        /// is never mutated.
+        /// </summary>
+        public KVObject GetUpgradedData()
+        {
+            upgradedData ??= ParticleFormatUpgrader.UpgradeToLatest(Data, Document?.Header?.Format);
+            return upgradedData;
+        }
+
         /// <summary>
         /// Gets the renderers in the particle system.
         /// </summary>
