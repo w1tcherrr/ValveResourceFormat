@@ -243,9 +243,11 @@ record struct ParticleDefinitionParser(KVObject Data, ILogger Logger, int[] Inpu
                     return new PerParticleCountNormalizedNumberProvider(parse);
                 case "PF_TYPE_CONTROL_POINT_SPEED":
                     return new ControlPointSpeedNumberProvider(parse);
+                case "PF_TYPE_PARTICLE_NOISE":
+                    return new NoiseNumberProvider(parse);
                 // KNOWN TYPES WE DON'T SUPPORT:
-                // PF_TYPE_PARTICLE_NOISE, PF_TYPE_CONTROL_POINT_CHANGE_AGE, PF_TYPE_NAMED_VALUE (needs game
-                // VData), PF_TYPE_SNAPSHOT_COUNT, PF_TYPE_PARTICLE_ROPE_SEGMENT_NORMALIZED, PF_TYPE_RANGE
+                // PF_TYPE_CONTROL_POINT_CHANGE_AGE, PF_TYPE_NAMED_VALUE (needs game VData),
+                // PF_TYPE_SNAPSHOT_COUNT, PF_TYPE_PARTICLE_ROPE_SEGMENT_NORMALIZED, PF_TYPE_RANGE
                 default:
                     if (type == null)
                     {

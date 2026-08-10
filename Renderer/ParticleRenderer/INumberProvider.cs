@@ -295,6 +295,121 @@ namespace ValveResourceFormat.Renderer.Particles
             => attributeMapping.ApplyMapping(Vector3.Distance(renderState.CameraPosition, particle.Position));
     }
 
+    /// <summary>
+    /// PF_TYPE_PARTICLE_NOISE. Fractal noise over a particle vector attribute with the engine's
+    /// turbulence and modifier post-passes. The simplex, worley and curl primitives fall back to
+    /// perlin, the engine default. The octave sum is unweighted against amplitude-falloff divisors,
+    /// exactly as the engine computes it.
+    /// </summary>
+    class NoiseNumberProvider : INumberProvider
+    {
+        private static readonly float[] OctaveDivisors = [1f, 1.5f, 1.75f, 1.875f];
+
+        private readonly ParticleField inputField = ParticleField.Position;
+        private readonly float outputMin;
+        private readonly float outputMax = 1f;
+        private readonly float noiseScale = 0.1f;
+        private readonly Vector3 offsetRate;
+        private readonly float noiseOffset;
+        private readonly int octaves = 1;
+        private readonly ParticleNoiseTurbulence turbulence;
+        private readonly ParticleNoiseModifier modifier;
+        private readonly float turbulenceScale = 1.25f;
+        private readonly float turbulenceMix = 0.5f;
+        private readonly AttributeMapping mapping;
+
+        public NoiseNumberProvider(ParticleDefinitionParser parse)
+        {
+            inputField = parse.ParticleField("m_nNoiseInputVectorAttribute", inputField);
+            outputMin = parse.Float("m_flNoiseOutputMin", outputMin);
+            outputMax = parse.Float("m_flNoiseOutputMax", outputMax);
+            noiseScale = parse.Float("m_flNoiseScale", noiseScale);
+            offsetRate = parse.Vector3("m_vecNoiseOffsetRate", offsetRate);
+            noiseOffset = parse.Float("m_flNoiseOffset", noiseOffset);
+            octaves = Math.Clamp(parse.Int32("m_nNoiseOctaves", octaves), 1, 4);
+            turbulence = parse.Enum("m_nNoiseTurbulence", turbulence);
+            modifier = parse.Enum("m_nNoiseModifier", modifier);
+            turbulenceScale = parse.Float("m_flNoiseTurbulenceScale", turbulenceScale);
+            turbulenceMix = parse.Float("m_flNoiseTurbulenceMix", turbulenceMix);
+            mapping = new AttributeMapping(parse);
+        }
+
+        public float NextNumber(ref Particle particle, ParticleSystemRenderState renderState)
+        {
+            var coord = ((particle.GetVector(inputField) + Vector3.One) * (noiseScale * 0.1f))
+                + new Vector3(noiseOffset) + (renderState.Age * 0.1f * offsetRate);
+
+            var sum = 0f;
+            var frequency = 1f;
+
+            for (var i = 0; i < octaves; i++)
+            {
+                sum += Utils.Noise.Value3D(coord * frequency);
+                frequency *= 2f;
+            }
+
+            var value = ApplyTurbulence(sum / OctaveDivisors[octaves - 1], coord);
+            value = Math.Clamp(ApplyModifier(value), 0f, 1f);
+
+            return mapping.ApplyMapping((value * (outputMax - outputMin)) + outputMin);
+        }
+
+        private float ApplyTurbulence(float value, Vector3 coord)
+        {
+            if (turbulence == ParticleNoiseTurbulence.PF_NOISE_TURB_NONE)
+            {
+                return value;
+            }
+
+            var scaled = coord * turbulenceScale;
+            float target;
+
+            switch (turbulence)
+            {
+                case ParticleNoiseTurbulence.PF_NOISE_TURB_HIGHLIGHT:
+                    target = 1f - (2f * MathF.Abs(Utils.Noise.Value3D(scaled + new Vector3(2.804f, 1.98f, 2.43f))));
+                    break;
+                case ParticleNoiseTurbulence.PF_NOISE_TURB_FEEDBACK:
+                    target = Utils.Noise.Value3D(scaled + (value * new Vector3(1.804f, 2.98f, 1.43f)));
+                    break;
+                case ParticleNoiseTurbulence.PF_NOISE_TURB_LOOPY:
+                {
+                    var magnitude = MathF.Abs(value);
+                    var fraction = magnitude - MathF.Truncate(magnitude);
+                    var triangle = (4f - (4f * fraction)) * fraction;
+                    var wave = MathF.CopySign(triangle, value);
+
+                    if (((int)magnitude & 1) == 1)
+                    {
+                        wave = -wave;
+                    }
+
+                    target = Utils.Noise.Value3D(scaled + (wave * new Vector3(1.244f, -1.15f, 2.37f)));
+                    break;
+                }
+                case ParticleNoiseTurbulence.PF_NOISE_TURB_CONTRAST:
+                    target = Math.Clamp(2f * Utils.Noise.Value3D(scaled + ((2f - value) * new Vector3(2.93f, 2.734f, 2.13f))), -1f, 1f);
+                    break;
+                case ParticleNoiseTurbulence.PF_NOISE_TURB_ALTERNATE:
+                    target = value * Utils.Noise.Value3D(scaled + (value * new Vector3(3.393f, 3.734f, 3.313f)));
+                    break;
+                default:
+                    return value;
+            }
+
+            return float.Lerp(value, target, turbulenceMix);
+        }
+
+        private float ApplyModifier(float value) => modifier switch
+        {
+            ParticleNoiseModifier.PF_NOISE_MODIFIER_NONE => (value * 0.5f) + 0.5f,
+            ParticleNoiseModifier.PF_NOISE_MODIFIER_LINES => MathF.Pow(MathF.Sin(value * (3f * MathF.PI)), 2f),
+            ParticleNoiseModifier.PF_NOISE_MODIFIER_CLUMPS => (2.5f * MathF.Abs(value)) - 0.5f,
+            ParticleNoiseModifier.PF_NOISE_MODIFIER_RINGS => Math.Clamp((MathF.Abs(MathF.Sin(value * MathF.PI)) + 0.25f) / 1.25f, 0f, 1f),
+            _ => 1f,
+        };
+    }
+
     // Control Point Speed
     class ControlPointSpeedNumberProvider : INumberProvider
     {
