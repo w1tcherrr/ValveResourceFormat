@@ -105,7 +105,7 @@ namespace ValveResourceFormat.Renderer.Particles
             {
                 var parse = new ParticleDefinitionParser(childInfo, rendererContext.Logger, BehaviorVersion);
 
-                if (parse.Boolean("m_bDisableChild", false))
+                if (BehaviorVersion >= 5 && parse.Boolean("m_bDisableChild", false))
                 {
                     continue;
                 }

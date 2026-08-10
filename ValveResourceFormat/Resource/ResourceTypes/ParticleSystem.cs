@@ -68,7 +68,8 @@ namespace ValveResourceFormat.ResourceTypes
             => Data.GetArray("m_PreEmissionOperators") ?? Enumerable.Empty<KVObject>();
 
         /// <summary>
-        /// Gets the names of child particles.
+        /// Gets the names of child particles. <c>m_bDisableChild</c> only removes a child from
+        /// behavior version 5 on; older definitions keep disabled children.
         /// </summary>
         public IEnumerable<string> GetChildParticleNames(bool enabledOnly = false)
         {
@@ -79,7 +80,7 @@ namespace ValveResourceFormat.ResourceTypes
                 return [];
             }
 
-            if (enabledOnly)
+            if (enabledOnly && Data.GetInt32Property("m_nBehaviorVersion") >= 5)
             {
                 children = children.Where(c => !c.GetBooleanProperty("m_bDisableChild"));
             }
