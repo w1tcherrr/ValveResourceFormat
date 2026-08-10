@@ -71,14 +71,11 @@ namespace ValveResourceFormat.Renderer.Particles.Operators
                     ? particle.NormalizedAge
                     : particle.Age;
 
-                if (particleSystemState.Data?.BehaviorVersion == 10)
-                {
-                    var startTime = particleSystemState.Random.ForParticleBetween(particle.ParticleId, StartTimeOffset, startTimeMin, startTimeMax);
-                    var endTime = particleSystemState.Random.ForParticleBetween(particle.ParticleId, EndTimeOffset, endTimeMin, endTimeMax);
+                var startTime = particleSystemState.Random.ForParticleBetween(particle.ParticleId, StartTimeOffset, startTimeMin, startTimeMax);
+                var endTime = particleSystemState.Random.ForParticleBetween(particle.ParticleId, EndTimeOffset, endTimeMin, endTimeMax);
 
-                    // The randomized window bounds can come out inverted.
-                    t = Math.Clamp(t, Math.Min(startTime, endTime), Math.Max(startTime, endTime));
-                }
+                // The randomized window bounds can come out inverted.
+                t = Math.Clamp(t, Math.Min(startTime, endTime), Math.Max(startTime, endTime));
 
                 var multiplier = oscillationMultiplier.NextNumber(ref particle, particleSystemState);
                 var offset = oscillationOffset.NextNumber(ref particle, particleSystemState);
