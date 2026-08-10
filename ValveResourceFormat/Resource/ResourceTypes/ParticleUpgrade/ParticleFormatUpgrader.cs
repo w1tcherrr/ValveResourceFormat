@@ -16,6 +16,7 @@ public static class ParticleFormatUpgrader
     public static IReadOnlyList<ParticleUpgradeStep> Steps { get; } =
     [
         new GenericToVpcf1(),
+        new Vpcf1ToVpcf2(),
     ];
 
     private static readonly Guid[] ChainIds = BuildChainIds();
