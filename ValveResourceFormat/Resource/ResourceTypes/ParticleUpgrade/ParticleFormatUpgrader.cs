@@ -13,7 +13,10 @@ public static class ParticleFormatUpgrader
     /// <summary>
     /// Gets the implemented conversion steps in chain order.
     /// </summary>
-    public static IReadOnlyList<ParticleUpgradeStep> Steps { get; } = [];
+    public static IReadOnlyList<ParticleUpgradeStep> Steps { get; } =
+    [
+        new GenericToVpcf1(),
+    ];
 
     private static readonly Guid[] ChainIds = BuildChainIds();
 
