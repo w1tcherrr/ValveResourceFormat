@@ -19,6 +19,11 @@ namespace ValveResourceFormat.ResourceTypes
         /// </summary>
         public KVObject Data { get; private set; } = null!;
 
+        /// <summary>
+        /// Gets the KV3 document including its header with the format id, or null for NTRO-backed data.
+        /// </summary>
+        public KVDocument? Document => (BackingData as BinaryKV3)?.Data;
+
         private Block BackingData = null!;
 
         /// <summary>
