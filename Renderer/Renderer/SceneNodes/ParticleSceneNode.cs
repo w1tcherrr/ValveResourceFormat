@@ -71,14 +71,15 @@ namespace ValveResourceFormat.Renderer.SceneNodes
         // and comes from the node transform, and the rest we would only be writing their default back.
         private void ApplyRuntimeControlPointValues(ParticleSystem particleSystem)
         {
-            var configurations = particleSystem.Data.GetArray("m_controlPointConfigurations");
+            var data = particleSystem.GetUpgradedData();
+            var configurations = data.GetArray("m_controlPointConfigurations");
             if (configurations == null)
             {
                 return;
             }
 
             // Viewmodel effects carry a first-person configuration; everything else plays under "game".
-            var viewModelEffect = particleSystem.Data.GetStringProperty("m_nViewModelEffect") == "INHERITABLE_BOOL_TRUE";
+            var viewModelEffect = data.GetStringProperty("m_nViewModelEffect") == "INHERITABLE_BOOL_TRUE";
             var wantedConfiguration = viewModelEffect ? "fps_view" : "game";
 
             KVObject? chosen = null;
@@ -257,7 +258,7 @@ namespace ValveResourceFormat.Renderer.SceneNodes
 
         private ModelSceneNode? CreatePreviewModel(ParticleSystem particleSystem)
         {
-            var configurations = particleSystem.Data.GetArray("m_controlPointConfigurations");
+            var configurations = particleSystem.GetUpgradedData().GetArray("m_controlPointConfigurations");
             if (configurations == null)
             {
                 return null;
