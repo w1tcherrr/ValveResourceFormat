@@ -183,6 +183,22 @@ internal static class UpgradeKV
     }
 
     /// <summary>
+    /// Reads and removes the named member, coercing it like <see cref="GetInt"/> with a zero
+    /// fallback; an absent member yields the default and leaves the object untouched.
+    /// </summary>
+    public static long TakeInt(this KVObject obj, string name, long defaultValue)
+    {
+        if (!obj.ContainsKey(name))
+        {
+            return defaultValue;
+        }
+
+        var value = obj.GetInt(name, 0);
+        obj.Remove(name);
+        return value;
+    }
+
+    /// <summary>
     /// Finds the named member's object value for in-place member merging, creating an empty
     /// object member at the tail when absent and resetting a non-object value in place.
     /// </summary>
