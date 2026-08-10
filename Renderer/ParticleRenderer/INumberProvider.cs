@@ -296,24 +296,33 @@ namespace ValveResourceFormat.Renderer.Particles
     }
 
     /// <summary>
-    /// PF_TYPE_PARTICLE_NOISE. Fractal noise over a particle vector attribute; the evaluation
-    /// pipeline lives in <see cref="Utils.NoiseEvaluator"/>.
+    /// PF_TYPE_PARTICLE_NOISE. Fractal noise over a particle vector attribute, or over the live
+    /// position of the input's control point when evaluated at collection level (emitters,
+    /// renderers); a negative control point index samples the origin. The evaluation pipeline
+    /// lives in <see cref="Utils.NoiseEvaluator"/>.
     /// </summary>
     class NoiseNumberProvider : INumberProvider
     {
         private readonly ParticleField inputField = ParticleField.Position;
+        private readonly int controlPoint;
         private readonly Utils.NoiseEvaluator noise;
         private readonly AttributeMapping mapping;
 
         public NoiseNumberProvider(ParticleDefinitionParser parse)
         {
             inputField = parse.ParticleField("m_nNoiseInputVectorAttribute", inputField);
+            controlPoint = parse.Int32("m_nControlPoint", controlPoint);
             noise = new Utils.NoiseEvaluator(parse);
             mapping = new AttributeMapping(parse);
         }
 
         public float NextNumber(ref Particle particle, ParticleSystemRenderState renderState)
             => mapping.ApplyMapping(noise.Evaluate(particle.GetVector(inputField), renderState.Age));
+
+        public float NextNumber(ParticleSystemRenderState renderState)
+            => mapping.ApplyMapping(noise.Evaluate(
+                controlPoint < 0 ? Vector3.Zero : renderState.GetControlPoint(controlPoint).Position,
+                renderState.Age));
     }
 
     // Control Point Speed
