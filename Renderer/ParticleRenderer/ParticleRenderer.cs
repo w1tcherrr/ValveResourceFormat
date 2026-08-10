@@ -160,6 +160,7 @@ namespace ValveResourceFormat.Renderer.Particles
             var rootData = particleSystem.GetUpgradedData();
             var parse = new ParticleDefinitionParser(rootData, rendererContext.Logger);
             BehaviorVersion = parse.Int32("m_nBehaviorVersion", 0);
+            parse = parse with { BehaviorVersion = BehaviorVersion };
             groupId = parse.Int32("m_nGroupID", 0);
             initialParticles = parse.Int32("m_nInitialParticles", 0);
             maxParticles = parse.Int32("m_nMaxParticles", 1000);
@@ -390,7 +391,7 @@ namespace ValveResourceFormat.Renderer.Particles
         }
 
 
-        private delegate bool TryCreateFunction<T>(string className, KVObject data, ILogger logger, [MaybeNullWhen(false)] out T result);
+        private delegate bool TryCreateFunction<T>(string className, KVObject data, ILogger logger, int behaviorVersion, [MaybeNullWhen(false)] out T result);
 
         private void SetupFunctions<T>(IEnumerable<KVObject> data, TryCreateFunction<T> tryCreate, List<T> target, string label)
         {
@@ -402,7 +403,7 @@ namespace ValveResourceFormat.Renderer.Particles
                 }
 
                 var className = info.GetStringProperty("_class");
-                if (tryCreate(className, info, rendererContext.Logger, out var function))
+                if (tryCreate(className, info, rendererContext.Logger, BehaviorVersion, out var function))
                 {
                     target.Add(function);
                 }
@@ -426,7 +427,7 @@ namespace ValveResourceFormat.Renderer.Particles
             {
                 if (op.GetStringProperty("_class") == "C_OP_BasicMovement")
                 {
-                    var parse = new ParticleDefinitionParser(op, rendererContext.Logger);
+                    var parse = new ParticleDefinitionParser(op, rendererContext.Logger, BehaviorVersion);
                     passes = Math.Max(passes, parse.Int32("m_nMaxConstraintPasses", 3));
                 }
             }
@@ -444,7 +445,7 @@ namespace ValveResourceFormat.Renderer.Particles
                 }
 
                 var rendererClass = rendererInfo.GetStringProperty("_class");
-                if (ParticleControllerFactory.TryCreateRender(rendererClass, rendererInfo, rendererContext, scene, out var renderer))
+                if (ParticleControllerFactory.TryCreateRender(rendererClass, rendererInfo, rendererContext, scene, BehaviorVersion, out var renderer))
                 {
                     renderers.Add(renderer);
                 }
