@@ -115,6 +115,35 @@ internal static class UpgradeKV
         }
     }
 
+    /// <summary>
+    /// Reads a member holding an exactly-three-element numeric array; any other shape yields
+    /// the default.
+    /// </summary>
+    public static Vector3 GetFloat3(this KVObject obj, string name, Vector3 defaultValue)
+    {
+        var value = obj.Find(name);
+
+        if (value is not { IsArray: true } || value.Count != 3)
+        {
+            return defaultValue;
+        }
+
+        Span<float> components = stackalloc float[3];
+        var index = 0;
+
+        foreach (var component in value.Values)
+        {
+            if (!component.TryGetNumber(out var number))
+            {
+                return defaultValue;
+            }
+
+            components[index++] = (float)number;
+        }
+
+        return new Vector3(components[0], components[1], components[2]);
+    }
+
     public static void SetMember(this KVObject obj, string name, KVObject value)
         => obj[name] = value;
 
