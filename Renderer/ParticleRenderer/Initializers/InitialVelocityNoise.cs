@@ -17,6 +17,7 @@ namespace ValveResourceFormat.Renderer.Particles.Initializers
         private readonly IVectorProvider offsetLoc = new LiteralVectorProvider(Vector3.Zero);
         private readonly Vector3 absVal;
         private readonly Vector3 absValInv;
+        private readonly bool ignoreDt;
         private readonly ITransformProvider transformInput;
 
         public InitialVelocityNoise(ParticleDefinitionParser parse) : base(parse)
@@ -29,6 +30,7 @@ namespace ValveResourceFormat.Renderer.Particles.Initializers
             offsetLoc = parse.VectorProvider("m_vecOffsetLoc", offsetLoc);
             absVal = parse.Vector3("m_vecAbsVal", absVal);
             absValInv = parse.Vector3("m_vecAbsValInv", absValInv);
+            ignoreDt = parse.Boolean("m_bIgnoreDt", ignoreDt);
             transformInput = parse.TransformInput("m_TransformInput", new IdentityTransformProvider());
         }
 
@@ -58,7 +60,16 @@ namespace ValveResourceFormat.Renderer.Particles.Initializers
                 MapComponent(noise.Z, absVal.Z != 0f, absValInv.Z != 0f, anyInverted, min.Z, max.Z));
 
             var transform = transformInput.NextTransform(ref particle, particleSystemState);
-            particle.Velocity += Vector3.TransformNormal(velocity, transform);
+            var transformed = Vector3.TransformNormal(velocity, transform);
+
+            // The engine skips the timestep multiply on its previous-position subtraction, which in
+            // velocity terms divides by the spawn frame's timestep
+            if (ignoreDt && particles.CurrentFrameTime > 0f)
+            {
+                transformed /= particles.CurrentFrameTime;
+            }
+
+            particle.Velocity += transformed;
 
             return particle;
         }

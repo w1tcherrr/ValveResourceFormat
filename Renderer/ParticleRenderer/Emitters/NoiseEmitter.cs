@@ -20,6 +20,9 @@ namespace ValveResourceFormat.Renderer.Particles.Emitters
         private readonly float noiseOffset;
         private readonly bool absVal;
         private readonly bool absValInv;
+        private readonly float emissionScale;
+        private readonly int scaleControlPoint = -1;
+        private readonly int scaleControlPointField;
         private readonly int worldNoisePoint = -1;
         private readonly float worldNoiseScale = 0.001f;
         private readonly Vector3 offsetLoc;
@@ -41,6 +44,9 @@ namespace ValveResourceFormat.Renderer.Particles.Emitters
             noiseOffset = parse.Float("m_flOffset", noiseOffset);
             absVal = parse.Boolean("m_bAbsVal", absVal);
             absValInv = parse.Boolean("m_bAbsValInv", absValInv);
+            emissionScale = parse.Float("m_flEmissionScale", emissionScale);
+            scaleControlPoint = parse.Int32("m_nScaleControlPoint", scaleControlPoint);
+            scaleControlPointField = parse.Int32("m_nScaleControlPointField", scaleControlPointField);
             worldNoisePoint = parse.Int32("m_nWorldNoisePoint", worldNoisePoint);
             worldNoiseScale = parse.Float("m_flWorldNoiseScale", worldNoiseScale);
             offsetLoc = parse.Vector3("m_vecOffsetLoc", offsetLoc);
@@ -99,6 +105,23 @@ namespace ValveResourceFormat.Renderer.Particles.Emitters
                 var emissionMaxValue = emissionMax.NextNumber(particleSystemState);
                 var span = emissionMaxValue - emissionMinValue;
                 var emissionRate = MathF.Max(0f, emissionMinValue + ((1f - absScale) * span) + (absScale * span * normalized)) * strength;
+
+                if (scaleControlPoint >= 0 && scaleControlPointField != -1)
+                {
+                    var component = scaleControlPointField is >= 0 and <= 2
+                        ? particleSystemState.GetControlPoint(scaleControlPoint).Position.GetComponent(scaleControlPointField)
+                        : 0f;
+
+                    emissionRate *= MathF.Max(0f, component);
+                }
+
+                // The highest index scales the rate without the +1 the continuous emitter applies
+                var indexScale = particleSystemState.HighestControlPoint * emissionScale;
+
+                if (indexScale != 0f)
+                {
+                    emissionRate *= indexScale;
+                }
 
                 accumulator.Charge(emissionRate, windowStart, windowEnd, time, particleEmitCallback);
             }

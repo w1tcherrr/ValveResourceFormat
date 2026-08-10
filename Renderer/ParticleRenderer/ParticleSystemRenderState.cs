@@ -182,6 +182,9 @@ namespace ValveResourceFormat.Renderer.Particles
             return Data?.GetControlPointSnapshot(cp) ?? ParentSystem?.GetControlPointSnapshot(cp);
         }
 
+        /// <summary>Highest control point index this system has touched; some emitters scale their rate by it.</summary>
+        public int HighestControlPoint { get; private set; }
+
         public void SetControlPoint(int cp, ControlPoint point)
         {
             if (ParentSystem != null)
@@ -189,6 +192,7 @@ namespace ValveResourceFormat.Renderer.Particles
                 ParentSystem.SetControlPoint(cp, point);
             }
 
+            HighestControlPoint = Math.Max(HighestControlPoint, cp);
             controlPoints[cp] = point;
         }
 
