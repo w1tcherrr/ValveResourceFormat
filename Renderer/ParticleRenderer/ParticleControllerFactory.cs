@@ -55,7 +55,6 @@ namespace ValveResourceFormat.Renderer.Particles
         internal static readonly Dictionary<string, Func<ParticleDefinitionParser, ParticleFunctionInitializer>> InitializerDictionary
             = new()
             {
-                ["C_INIT_AddVectorToVector"] = initializerInfo => new AddVectorToVector(initializerInfo),
                 ["C_INIT_AgeNoise"] = initializerInfo => new AgeNoise(initializerInfo),
                 ["C_INIT_CreateAlongPath"] = initializerInfo => new CreateAlongPath(initializerInfo),
                 ["C_INIT_CreateOnGrid"] = initializerInfo => new CreateOnGrid(initializerInfo),
@@ -75,7 +74,6 @@ namespace ValveResourceFormat.Renderer.Particles
                 ["C_INIT_InitFloatCollection"] = initializerInfo => new InitFloat(initializerInfo), // initfloat but the numberprovider has fewer options
                 ["C_INIT_InitVec"] = initializerInfo => new InitVec(initializerInfo),
                 ["C_INIT_InitialVelocityNoise"] = initializerInfo => new InitialVelocityNoise(initializerInfo),
-                ["C_INIT_OffsetVectorToVector"] = initializerInfo => new OffsetVectorToVector(initializerInfo),
                 ["C_INIT_PointList"] = initializerInfo => new PointList(initializerInfo),
                 ["C_INIT_PositionOffset"] = initializerInfo => new PositionOffset(initializerInfo),
                 ["C_INIT_PositionWarp"] = initializerInfo => new PositionWarp(initializerInfo),
@@ -87,9 +85,7 @@ namespace ValveResourceFormat.Renderer.Particles
                 ["C_INIT_RandomYawFlip"] = initializerInfo => new RandomYawFlip(initializerInfo),
                 ["C_INIT_NormalAlignToCP"] = initializerInfo => new NormalAlignToCP(initializerInfo),
                 ["C_INIT_NormalOffset"] = initializerInfo => new NormalOffset(initializerInfo),
-                ["C_INIT_RemapScalar"] = initializerInfo => new RemapScalar(initializerInfo),
                 ["C_INIT_RemapScalarToVector"] = initializerInfo => new RemapScalarToVector(initializerInfo),
-                ["C_INIT_RemapSpeedToScalar"] = initializerInfo => new RemapSpeedToScalar(initializerInfo),
                 ["C_INIT_RemapTransformOrientationToRotations"] = initializerInfo => new RemapTransformOrientationToRotationsInit(initializerInfo),
                 ["C_INIT_RemapParticleCountToScalar"] = initializerInfo => new RemapParticleCountToScalar(initializerInfo),
                 ["C_INIT_RingWave"] = initializerInfo => new RingWave(initializerInfo),
