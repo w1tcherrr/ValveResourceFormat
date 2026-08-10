@@ -51,4 +51,18 @@ namespace ValveResourceFormat.Renderer.Particles
         /// <summary>Curl of a vector-valued lattice; scalar inputs read its first component.</summary>
         PF_NOISE_TYPE_CURL = 3,
     }
+
+    /// <summary>
+    /// Vector noise selection for direction noise forces.
+    /// </summary>
+    /// <seealso href="https://s2v.app/SchemaExplorer/cs2/particleslib/ParticleDirectionNoiseType_t">ParticleDirectionNoiseType_t</seealso>
+    public enum ParticleDirectionNoiseType
+    {
+        /// <summary>Vector-valued lattice noise.</summary>
+        PARTICLE_DIR_NOISE_PERLIN = 0,
+        /// <summary>Curl combination of three decorrelated lattice samples.</summary>
+        PARTICLE_DIR_NOISE_CURL = 1,
+        /// <summary>Offset to the nearest jittered worley feature point.</summary>
+        PARTICLE_DIR_NOISE_WORLEY_BASIC = 2,
+    }
 }

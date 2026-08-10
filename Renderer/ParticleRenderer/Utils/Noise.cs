@@ -57,15 +57,15 @@ namespace ValveResourceFormat.Renderer.Particles.Utils
             var fy = position.Y - iy;
             var fz = position.Z - iz;
 
-            var c00 = Vector3.Lerp(HashVector(ix, iy, iz), HashVector(ix + 1, iy, iz), fx);
-            var c10 = Vector3.Lerp(HashVector(ix, iy + 1, iz), HashVector(ix + 1, iy + 1, iz), fx);
-            var c01 = Vector3.Lerp(HashVector(ix, iy, iz + 1), HashVector(ix + 1, iy, iz + 1), fx);
-            var c11 = Vector3.Lerp(HashVector(ix, iy + 1, iz + 1), HashVector(ix + 1, iy + 1, iz + 1), fx);
+            var c00 = Lerp(HashVector(ix, iy, iz), HashVector(ix + 1, iy, iz), fx);
+            var c10 = Lerp(HashVector(ix, iy + 1, iz), HashVector(ix + 1, iy + 1, iz), fx);
+            var c01 = Lerp(HashVector(ix, iy, iz + 1), HashVector(ix + 1, iy, iz + 1), fx);
+            var c11 = Lerp(HashVector(ix, iy + 1, iz + 1), HashVector(ix + 1, iy + 1, iz + 1), fx);
 
-            var c0 = Vector3.Lerp(c00, c10, fy);
-            var c1 = Vector3.Lerp(c01, c11, fy);
+            var c0 = Lerp(c00, c10, fy);
+            var c1 = Lerp(c01, c11, fy);
 
-            return Vector3.Lerp(c0, c1, fz);
+            return Lerp(c0, c1, fz);
         }
 
         /// <summary>
@@ -221,6 +221,63 @@ namespace ValveResourceFormat.Renderer.Particles.Utils
             }
 
             return (MathF.Min(1f, MathF.Max(0f, nearest)) * 2f) - 1f;
+        }
+
+        /// <summary>
+        /// Samples the cellular primitive's vector variant: the offset from the sample point to the
+        /// nearest jittered feature point in the surrounding 3x3x3 cells, in lattice units. Ties keep
+        /// the earlier cell. The offset seeds the feature hash by its raw bit pattern.
+        /// </summary>
+        public static Vector3 WorleyOffset3D(Vector3 position, float jitter, float offset)
+        {
+            var seed = BitConverter.SingleToUInt32Bits(offset);
+
+            var ix = (int)MathF.Floor(position.X);
+            var iy = (int)MathF.Floor(position.Y);
+            var iz = (int)MathF.Floor(position.Z);
+
+            var fx = position.X - ix;
+            var fy = position.Y - iy;
+            var fz = position.Z - iz;
+
+            var nearest = float.MaxValue;
+            var best = Vector3.Zero;
+
+            for (var i = -1; i <= 1; i++)
+            {
+                var dx = i - fx;
+
+                for (var j = -1; j <= 1; j++)
+                {
+                    var dy = j - fy;
+
+                    for (var k = -1; k <= 1; k++)
+                    {
+                        var dz = k - fz;
+
+                        uint h;
+                        unchecked
+                        {
+                            h = HashSeeded((ix + i) + ((iy + j) << 10) + ((iz + k) << 20), seed);
+                        }
+
+                        var px = ((h & 255) * (1f / 255f) * jitter) + dx;
+                        var py = (((h >> 8) & 255) * (1f / 255f) * jitter) + dy;
+                        var pz = (((h >> 16) & 255) * (1f / 255f) * jitter) + dz;
+
+                        var distance = (px * px) + (py * py) + (pz * pz);
+
+                        if (distance < nearest)
+                        {
+                            best = new Vector3(px, py, pz);
+                        }
+
+                        nearest = MathF.Min(nearest, distance);
+                    }
+                }
+            }
+
+            return best;
         }
 
         /// <summary>
