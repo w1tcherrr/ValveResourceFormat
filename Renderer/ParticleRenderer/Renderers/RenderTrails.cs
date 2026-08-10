@@ -53,8 +53,6 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
         private readonly ParticleOrientation orientationType;
         private readonly ParticleField prevPositionSource = ParticleField.PositionPrevious; // this is a real thing
 
-        private readonly float finalTextureScaleU = 1f;
-        private readonly float finalTextureScaleV = 1f;
 
         private readonly float maxLength = 2000f;
         private readonly float minLength;
@@ -84,18 +82,11 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
 
             string? textureName = null;
 
-            if (parse.Data.ContainsKey("m_hTexture"))
+            var textures = parse.Array("m_vecTexturesInput");
+            if (textures.Length > 0)
             {
-                textureName = parse.Data.GetStringProperty("m_hTexture");
-            }
-            else
-            {
-                var textures = parse.Array("m_vecTexturesInput");
-                if (textures.Length > 0)
-                {
-                    // TODO: Support more than one texture
-                    textureName = textures[0].Data.GetStringProperty("m_hTexture");
-                }
+                // TODO: Support more than one texture
+                textureName = textures[0].Data.GetStringProperty("m_hTexture");
             }
 
             texture = rendererContext.MaterialLoader.GetTexture(textureName ?? DefaultTextureName, srgbRead: true);
@@ -108,8 +99,6 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
 
             orientationType = parse.Enum("m_nOrientationType", orientationType);
             animationRate = parse.Float("m_flAnimationRate", animationRate);
-            finalTextureScaleU = parse.Float("m_flFinalTextureScaleU", finalTextureScaleU);
-            finalTextureScaleV = parse.Float("m_flFinalTextureScaleV", finalTextureScaleV);
             maxLength = parse.Float("m_flMaxLength", maxLength);
             minLength = parse.Float("m_flMinLength", minLength);
             lengthScale = parse.Float("m_flLengthScale", lengthScale);
@@ -328,7 +317,7 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
                     }
 
                     var uvOffset = Vector2.Zero;
-                    var uvScale = new Vector2(finalTextureScaleU, finalTextureScaleV);
+                    var uvScale = Vector2.One;
                     var uvNextOffset = uvOffset;
                     var uvNextScale = uvScale;
                     var frameBlend = 0f;
