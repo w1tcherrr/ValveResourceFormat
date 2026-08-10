@@ -35,4 +35,20 @@ namespace ValveResourceFormat.Renderer.Particles
         /// <summary>Concentric ring response.</summary>
         PF_NOISE_MODIFIER_RINGS = 3,
     }
+
+    /// <summary>
+    /// Primitive selection for noise-typed particle float inputs.
+    /// </summary>
+    /// <seealso href="https://s2v.app/SchemaExplorer/cs2/particleslib/PFNoiseType_t">PFNoiseType_t</seealso>
+    public enum ParticleNoiseType
+    {
+        /// <summary>Value-noise lattice, the default.</summary>
+        PF_NOISE_TYPE_PERLIN = 0,
+        /// <summary>Gradient noise with a quintic fade.</summary>
+        PF_NOISE_TYPE_SIMPLEX = 1,
+        /// <summary>Squared distance to the nearest jittered cell feature point.</summary>
+        PF_NOISE_TYPE_WORLEY = 2,
+        /// <summary>Curl of a vector-valued lattice; scalar inputs read its first component.</summary>
+        PF_NOISE_TYPE_CURL = 3,
+    }
 }

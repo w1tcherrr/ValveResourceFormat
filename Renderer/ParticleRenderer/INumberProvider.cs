@@ -297,9 +297,11 @@ namespace ValveResourceFormat.Renderer.Particles
 
     /// <summary>
     /// PF_TYPE_PARTICLE_NOISE. Fractal noise over a particle vector attribute with the engine's
-    /// turbulence and modifier post-passes. The simplex, worley and curl primitives fall back to
-    /// perlin, the engine default. The octave sum is unweighted against amplitude-falloff divisors,
-    /// exactly as the engine computes it.
+    /// turbulence and modifier post-passes. The noise type picks the primitive for both the octave
+    /// sum and the turbulence resample, but turbulence overrides worley with fixed per-mode jitter
+    /// and seed values, and its alternate mode swaps a worley input to a simplex resample and every
+    /// other input to a worley resample. The octave sum is unweighted against amplitude-falloff
+    /// divisors, exactly as the engine computes it.
     /// </summary>
     class NoiseNumberProvider : INumberProvider
     {
@@ -312,10 +314,12 @@ namespace ValveResourceFormat.Renderer.Particles
         private readonly Vector3 offsetRate;
         private readonly float noiseOffset;
         private readonly int octaves = 1;
+        private readonly ParticleNoiseType noiseType;
         private readonly ParticleNoiseTurbulence turbulence;
         private readonly ParticleNoiseModifier modifier;
         private readonly float turbulenceScale = 1.25f;
         private readonly float turbulenceMix = 0.5f;
+        private readonly float worleyJitter;
         private readonly AttributeMapping mapping;
 
         public NoiseNumberProvider(ParticleDefinitionParser parse)
@@ -327,10 +331,12 @@ namespace ValveResourceFormat.Renderer.Particles
             offsetRate = parse.Vector3("m_vecNoiseOffsetRate", offsetRate);
             noiseOffset = parse.Float("m_flNoiseOffset", noiseOffset);
             octaves = Math.Clamp(parse.Int32("m_nNoiseOctaves", octaves), 1, 4);
+            noiseType = parse.Enum("m_nNoiseType", noiseType);
             turbulence = parse.Enum("m_nNoiseTurbulence", turbulence);
             modifier = parse.Enum("m_nNoiseModifier", modifier);
             turbulenceScale = parse.Float("m_flNoiseTurbulenceScale", turbulenceScale);
             turbulenceMix = parse.Float("m_flNoiseTurbulenceMix", turbulenceMix);
+            worleyJitter = Utils.Noise.WorleyJitter(noiseOffset);
             mapping = new AttributeMapping(parse);
         }
 
@@ -344,7 +350,7 @@ namespace ValveResourceFormat.Renderer.Particles
 
             for (var i = 0; i < octaves; i++)
             {
-                sum += Utils.Noise.Value3D(coord * frequency);
+                sum += SampleNoise(coord * frequency);
                 frequency *= 2f;
             }
 
@@ -367,10 +373,10 @@ namespace ValveResourceFormat.Renderer.Particles
             switch (turbulence)
             {
                 case ParticleNoiseTurbulence.PF_NOISE_TURB_HIGHLIGHT:
-                    target = 1f - (2f * MathF.Abs(Utils.Noise.Value3D(scaled + new Vector3(2.804f, 1.98f, 2.43f))));
+                    target = 1f - (2f * MathF.Abs(SampleTurbulence(scaled + new Vector3(2.804f, 1.98f, 2.43f), 132f)));
                     break;
                 case ParticleNoiseTurbulence.PF_NOISE_TURB_FEEDBACK:
-                    target = Utils.Noise.Value3D(scaled + (value * new Vector3(1.804f, 2.98f, 1.43f)));
+                    target = SampleTurbulence(scaled + (value * new Vector3(1.804f, 2.98f, 1.43f)), 324f);
                     break;
                 case ParticleNoiseTurbulence.PF_NOISE_TURB_LOOPY:
                 {
@@ -384,21 +390,44 @@ namespace ValveResourceFormat.Renderer.Particles
                         wave = -wave;
                     }
 
-                    target = Utils.Noise.Value3D(scaled + (wave * new Vector3(1.244f, -1.15f, 2.37f)));
+                    target = SampleTurbulence(scaled + (wave * new Vector3(1.244f, -1.15f, 2.37f)), 132f);
                     break;
                 }
                 case ParticleNoiseTurbulence.PF_NOISE_TURB_CONTRAST:
-                    target = Math.Clamp(2f * Utils.Noise.Value3D(scaled + ((2f - value) * new Vector3(2.93f, 2.734f, 2.13f))), -1f, 1f);
+                    target = Math.Clamp(2f * SampleTurbulence(scaled + ((2f - value) * new Vector3(2.93f, 2.734f, 2.13f)), 132f), -1f, 1f);
                     break;
                 case ParticleNoiseTurbulence.PF_NOISE_TURB_ALTERNATE:
-                    target = value * Utils.Noise.Value3D(scaled + (value * new Vector3(3.393f, 3.734f, 3.313f)));
+                {
+                    var warped = scaled + (value * new Vector3(3.393f, 3.734f, 3.313f));
+                    var resampled = noiseType == ParticleNoiseType.PF_NOISE_TYPE_WORLEY
+                        ? Utils.Noise.Simplex3D(warped)
+                        : Utils.Noise.Worley3D(warped, 0.97f, 22f);
+
+                    target = value * resampled;
                     break;
+                }
                 default:
                     return value;
             }
 
             return float.Lerp(value, target, turbulenceMix);
         }
+
+        private float SampleNoise(Vector3 coord) => noiseType switch
+        {
+            ParticleNoiseType.PF_NOISE_TYPE_SIMPLEX => Utils.Noise.Simplex3D(coord),
+            ParticleNoiseType.PF_NOISE_TYPE_WORLEY => Utils.Noise.Worley3D(coord, worleyJitter, noiseOffset),
+            ParticleNoiseType.PF_NOISE_TYPE_CURL => Utils.Noise.Curl3D(coord).X,
+            _ => Utils.Noise.Value3D(coord),
+        };
+
+        private float SampleTurbulence(Vector3 coord, float worleySeed) => noiseType switch
+        {
+            ParticleNoiseType.PF_NOISE_TYPE_SIMPLEX => Utils.Noise.Simplex3D(coord),
+            ParticleNoiseType.PF_NOISE_TYPE_WORLEY => Utils.Noise.Worley3D(coord, 0.9f, worleySeed),
+            ParticleNoiseType.PF_NOISE_TYPE_CURL => Utils.Noise.Curl3D(coord).X,
+            _ => Utils.Noise.Value3D(coord),
+        };
 
         private float ApplyModifier(float value) => modifier switch
         {
