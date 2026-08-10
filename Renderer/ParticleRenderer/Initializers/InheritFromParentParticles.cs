@@ -16,6 +16,9 @@ namespace ValveResourceFormat.Renderer.Particles.Initializers
         private readonly bool randomDistribution;
         private readonly int randomSeed;
 
+        /// <summary>The parent particle index attribute is only written from behavior version 9.</summary>
+        private readonly bool writeParentIndex;
+
         private int runningIndex;
         private int randomCounter;
 
@@ -26,6 +29,7 @@ namespace ValveResourceFormat.Renderer.Particles.Initializers
             increment = parse.Int32("m_nIncrement", increment);
             randomDistribution = parse.Boolean("m_bRandomDistribution", randomDistribution);
             randomSeed = parse.Int32("m_nRandomSeed", randomSeed);
+            writeParentIndex = parse.BehaviorVersion >= 9;
         }
 
         public override void Reset()
@@ -95,7 +99,10 @@ namespace ValveResourceFormat.Renderer.Particles.Initializers
                 particle.SetScalar(fieldOutput, value);
             }
 
-            particle.ParentParticleIndex = index;
+            if (writeParentIndex)
+            {
+                particle.ParentParticleIndex = index;
+            }
 
             runningIndex += increment;
 
