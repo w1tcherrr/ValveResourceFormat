@@ -107,6 +107,7 @@ namespace ValveResourceFormat.Renderer.Particles
                 ["C_OP_DampenToCP"] = operatorInfo => new DampenToCP(operatorInfo),
                 ["C_OP_Decay"] = operatorInfo => new Decay(operatorInfo),
                 ["C_OP_DistanceCull"] = operatorInfo => new DistanceCull(operatorInfo),
+                ["C_OP_DistanceToTransform"] = operatorInfo => new DistanceToTransform(operatorInfo),
                 ["C_OP_EndCapDecay"] = operatorInfo => new EndCapDecay(operatorInfo),
                 ["C_OP_EndCapTimedDecay"] = operatorInfo => new EndCapTimedDecay(operatorInfo),
                 ["C_OP_EndCapTimedFreeze"] = operatorInfo => new EndCapTimedFreeze(operatorInfo),
