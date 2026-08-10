@@ -35,6 +35,7 @@ public static class ParticleFormatUpgrader
         new Vpcf17ToVpcf18(),
         new Vpcf18ToVpcf19(),
         new Vpcf19ToVpcf20(),
+        new Vpcf20ToVpcf21(),
     ];
 
     private static readonly Guid[] ChainIds = BuildChainIds();
