@@ -25,6 +25,8 @@ namespace ValveResourceFormat.Renderer.Particles.Initializers
             randomExponent = parse.Float("m_flRotationRandExponent", randomExponent);
         }
 
+        public override ulong WrittenFields => FieldMask(fieldOutput);
+
         public override Particle Initialize(ref Particle particle, ParticleCollection particles, ParticleSystemRenderState particleSystemState)
         {
             var degrees = degreesOffset + particleSystemState.Random.NextWithExponentBetween(randomExponent, degreesMin, degreesMax);

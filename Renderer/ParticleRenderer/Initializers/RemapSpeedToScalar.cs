@@ -29,6 +29,8 @@ namespace ValveResourceFormat.Renderer.Particles.Initializers
             perParticle = parse.Boolean("m_bPerParticle", perParticle);
         }
 
+        public override ulong WrittenFields => FieldMask(fieldOutput);
+
         public override Particle Initialize(ref Particle particle, ParticleCollection particles, ParticleSystemRenderState particleSystemState)
         {
             float speed;

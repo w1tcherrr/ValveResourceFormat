@@ -19,6 +19,8 @@ namespace ValveResourceFormat.Renderer.Particles.Initializers
             exponent = parse.Float("m_flExponent", exponent);
         }
 
+        public override ulong WrittenFields => FieldMask(fieldOutput);
+
         public override Particle Initialize(ref Particle particle, ParticleCollection particles, ParticleSystemRenderState particleSystemState)
         {
             var value = particleSystemState.Random.NextWithExponentBetween(exponent, scalarMin, scalarMax);

@@ -65,6 +65,13 @@ namespace ValveResourceFormat.Renderer.Particles
         public int BehaviorVersion { get; }
 
         /// <summary>
+        /// First initializer list index allowed to overwrite an already-initialized attribute below
+        /// behavior version 6 (<c>m_nFirstMultipleOverride_BackwardCompat</c>); -1 applies
+        /// first-writer-wins to the whole list.
+        /// </summary>
+        private readonly int firstMultipleOverride;
+
+        /// <summary>
         /// The group this system belongs to when it is used as a child, matched by
         /// <see cref="ChooseRandomChildrenInGroup"/> on the parent.
         /// </summary>
@@ -161,6 +168,7 @@ namespace ValveResourceFormat.Renderer.Particles
             var parse = new ParticleDefinitionParser(rootData, rendererContext.Logger);
             BehaviorVersion = parse.Int32("m_nBehaviorVersion", 0);
             parse = parse with { BehaviorVersion = BehaviorVersion };
+            firstMultipleOverride = parse.Int32("m_nFirstMultipleOverride_BackwardCompat", -1);
             groupId = parse.Int32("m_nGroupID", 0);
             initialParticles = parse.Int32("m_nInitialParticles", 0);
             maxParticles = parse.Int32("m_nMaxParticles", 1000);
@@ -395,22 +403,32 @@ namespace ValveResourceFormat.Renderer.Particles
 
         private void SetupFunctions<T>(IEnumerable<KVObject> data, TryCreateFunction<T> tryCreate, List<T> target, string label)
         {
+            var definitionIndex = 0;
+
             foreach (var info in data)
             {
                 if (IsOperatorDisabled(info, rendererContext.Logger))
                 {
+                    definitionIndex++;
                     continue;
                 }
 
                 var className = info.GetStringProperty("_class");
                 if (tryCreate(className, info, rendererContext.Logger, BehaviorVersion, out var function))
                 {
+                    if (function is ParticleFunctionInitializer initializer)
+                    {
+                        initializer.DefinitionIndex = definitionIndex;
+                    }
+
                     target.Add(function);
                 }
                 else
                 {
                     rendererContext.Logger.LogUniqueWarningFor([label, className], UnsupportedClassWarning, label, className, Name);
                 }
+
+                definitionIndex++;
             }
         }
 

@@ -15,6 +15,8 @@ namespace ValveResourceFormat.Renderer.Particles.Initializers
             maxLength = parse.Float("m_flMaxLength", maxLength);
         }
 
+        public override ulong WrittenFields => FieldMask(ParticleField.TrailLength);
+
         public override Particle Initialize(ref Particle particle, ParticleCollection particles, ParticleSystemRenderState particleSystemState)
         {
             particle.TrailLength = particleSystemState.Random.NextBetween(minLength, maxLength);

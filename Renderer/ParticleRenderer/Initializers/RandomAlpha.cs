@@ -20,6 +20,8 @@ namespace ValveResourceFormat.Renderer.Particles.Initializers
             alphaExponent = Math.Clamp(parse.Float("m_flAlphaRandExponent", alphaExponent), -255f, 255f);
         }
 
+        public override ulong WrittenFields => FieldMask(outputField);
+
         public override Particle Initialize(ref Particle particle, ParticleCollection particles, ParticleSystemRenderState particleSystemState)
         {
             particle.SetScalar(outputField, particleSystemState.Random.NextWithExponentBetween(alphaExponent, alphaMin, alphaMax));

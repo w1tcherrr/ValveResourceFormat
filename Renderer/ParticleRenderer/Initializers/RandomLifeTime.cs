@@ -18,6 +18,8 @@ namespace ValveResourceFormat.Renderer.Particles.Initializers
             lifetimeRandomExponent = parse.Float("m_fLifetimeRandExponent", lifetimeRandomExponent);
         }
 
+        public override ulong WrittenFields => FieldMask(ParticleField.LifeDuration);
+
         public override Particle Initialize(ref Particle particle, ParticleCollection particles, ParticleSystemRenderState particleSystemState)
         {
             var lifetime = particleSystemState.Random.NextWithExponentBetween(lifetimeRandomExponent, lifetimeMin, lifetimeMax);

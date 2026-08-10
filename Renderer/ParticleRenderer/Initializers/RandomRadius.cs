@@ -18,6 +18,8 @@ namespace ValveResourceFormat.Renderer.Particles.Initializers
             radiusRandomExponent = parse.Float("m_flRadiusRandExponent", radiusRandomExponent);
         }
 
+        public override ulong WrittenFields => FieldMask(ParticleField.Radius);
+
         public override Particle Initialize(ref Particle particle, ParticleCollection particles, ParticleSystemRenderState particleSystemState)
         {
             particle.Radius = particleSystemState.Random.NextWithExponentBetween(radiusRandomExponent, radiusMin, radiusMax);
