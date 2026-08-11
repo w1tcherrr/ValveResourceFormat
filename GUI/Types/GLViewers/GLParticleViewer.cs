@@ -4,7 +4,6 @@ using System.IO;
 using System.Windows.Forms;
 using GUI.Controls;
 using GUI.Utils;
-using ValveKeyValue;
 using ValveResourceFormat.Renderer;
 using ValveResourceFormat.Renderer.Particles;
 using ValveResourceFormat.Renderer.SceneNodes;
@@ -35,8 +34,6 @@ namespace GUI.Types.GLViewers
             ("Constraints", "m_Constraints", ParticleSupportInfo.IsConstraintSupported),
             ("Renderers", "m_Renderers", ParticleSupportInfo.IsRendererSupported),
         ];
-
-        private const int MaxChildDepth = 8;
 
         private readonly ParticleSystem particleSystem;
         private ParticleSceneNode? particleSceneNode;
@@ -158,19 +155,18 @@ namespace GUI.Types.GLViewers
                 AddFunctionGroup(title, functionLists[listName], isSupported);
             }
 
-            AddChildSystems(particleSystem.GetUpgradedData(), parentLabel: string.Empty, [], [], depth: 1);
+            AddChildList();
         }
 
-        private void AddChildSystems(KVObject parentData, string parentLabel, HashSet<string> pathStack, Dictionary<string, int> labelCounts, int depth)
+        private void AddChildList()
         {
-            if (depth > MaxChildDepth)
-            {
-                return;
-            }
+            Debug.Assert(UiControl != null);
 
-            var behaviorVersion = parentData.GetInt32Property("m_nBehaviorVersion");
+            var upgradedData = particleSystem.GetUpgradedData();
+            var behaviorVersion = upgradedData.GetInt32Property("m_nBehaviorVersion");
+            var children = new List<ChildSystemItem>();
 
-            foreach (var childInfo in parentData.GetArray("m_Children") ?? [])
+            foreach (var childInfo in upgradedData.GetArray("m_Children") ?? [])
             {
                 var childRef = childInfo.GetStringProperty("m_ChildRef");
 
@@ -179,82 +175,61 @@ namespace GUI.Types.GLViewers
                     continue;
                 }
 
+                var disabled = behaviorVersion >= 5 && childInfo.GetBooleanProperty("m_bDisableChild");
                 var shortName = Path.GetFileNameWithoutExtension(childRef);
-                var label = parentLabel.Length == 0 ? shortName : $"{parentLabel} / {shortName}";
-                var occurrence = labelCounts.GetValueOrDefault(label);
-                labelCounts[label] = occurrence + 1;
-
-                if (occurrence > 0)
-                {
-                    label = $"{label} ({occurrence + 1})";
-                }
-
-                if (behaviorVersion >= 5 && childInfo.GetBooleanProperty("m_bDisableChild"))
-                {
-                    AddChildSystemGroup($"{label} (disabled)", null);
-                    continue;
-                }
-
-                if (!pathStack.Add(childRef))
-                {
-                    continue;
-                }
-
-                ParticleSystem? childSystem = null;
-
-                try
-                {
-                    childSystem = Scene.RendererContext.FileLoader.LoadFileCompiled(childRef)?.DataBlock as ParticleSystem;
-                }
-                catch (Exception e)
-                {
-                    Log.Error(nameof(GLParticleViewer), $"Failed to load child particle system '{childRef}': {e.Message}");
-                }
-
-                if (childSystem == null)
-                {
-                    AddChildSystemGroup($"{label} (failed to load)", null);
-                }
-                else
-                {
-                    AddChildSystemGroup(label, ParticleUpgradeTrace.TraceFunctions(childSystem.Data, childSystem.Format));
-                    AddChildSystems(childSystem.GetUpgradedData(), label, pathStack, labelCounts, depth + 1);
-                }
-
-                pathStack.Remove(childRef);
+                children.Add(new ChildSystemItem(disabled ? $"{shortName} (disabled)" : shortName, childRef, disabled));
             }
-        }
 
-        private void AddChildSystemGroup(string title, IReadOnlyDictionary<string, IReadOnlyList<ParticleUpgradeTrace.TracedFunction>>? functionLists)
-        {
-            Debug.Assert(UiControl != null);
-
-            using var group = UiControl.BeginGroup(title);
-
-            if (functionLists == null)
+            if (children.Count == 0)
             {
                 return;
             }
 
-            foreach (var (listTitle, listName, isSupported) in FunctionGroups)
+            var listBox = new ListBox
             {
-                var functions = functionLists[listName];
+                Dock = DockStyle.Fill,
+                DrawMode = DrawMode.OwnerDrawFixed,
+                BorderStyle = BorderStyle.None,
+                SelectionMode = SelectionMode.None,
+                IntegralHeight = false,
+                Cursor = Cursors.Hand,
+            };
 
-                if (functions.Count == 0)
+            listBox.Items.AddRange([.. children]);
+
+            listBox.DrawItem += (_, e) =>
+            {
+                if (e.Index < 0)
                 {
-                    continue;
+                    return;
                 }
 
-                var header = new Label
-                {
-                    Text = listTitle,
-                    AutoSize = true,
-                    Font = new Font(UiControl.Font, FontStyle.Bold),
-                    Padding = new Padding(0, 4, 0, 1),
-                };
+                using var brush = new SolidBrush(listBox.BackColor);
+                e.Graphics.FillRectangle(brush, e.Bounds);
 
-                UiControl.AddControl(header);
-                UiControl.AddControl(BuildFunctionList(functions, isSupported));
+                var item = (ChildSystemItem)listBox.Items[e.Index];
+                var color = item.Disabled ? RemovedColor : listBox.ForeColor;
+
+                System.Windows.Forms.TextRenderer.DrawText(e.Graphics, item.Text, e.Font, e.Bounds, color, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+            };
+
+            listBox.MouseDoubleClick += (_, e) =>
+            {
+                var index = listBox.IndexFromPoint(e.Location);
+
+                if (index >= 0)
+                {
+                    Viewers.Resource.OpenExternalReference(GuiContext, ((ChildSystemItem)listBox.Items[index]).ChildRef);
+                }
+            };
+
+            Themer.ThemeControl(listBox);
+
+            listBox.Height = listBox.ItemHeight * children.Count + 2;
+
+            using (UiControl.BeginGroup("Children"))
+            {
+                UiControl.AddControl(listBox);
             }
         }
 
@@ -354,6 +329,8 @@ namespace GUI.Types.GLViewers
         }
 
         private sealed record ParticleFunctionItem(string Text, FunctionSupport Support);
+
+        private sealed record ChildSystemItem(string Text, string ChildRef, bool Disabled);
 
         protected override void OnPicked(object? sender, PickingTexture.PickingResponse pixelInfo)
         {
