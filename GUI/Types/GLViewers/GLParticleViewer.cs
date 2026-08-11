@@ -21,6 +21,10 @@ namespace GUI.Types.GLViewers
     {
         private static readonly Color UnsupportedColor = Color.FromArgb(224, 80, 80);
         private static readonly Color RemovedColor = Color.FromArgb(140, 140, 140);
+        private static readonly Color LinkColorDark = Color.FromArgb(99, 161, 255);
+        private static readonly Color LinkColorLight = Color.FromArgb(0, 102, 204);
+        private static readonly Color DisabledLinkColorDark = Color.FromArgb(122, 138, 160);
+        private static readonly Color DisabledLinkColorLight = Color.FromArgb(112, 128, 148);
 
         // Order matches the CS2 particle editor (PET): pre-emission first, then emit/init/operate,
         // forces, constraints, and renderers last.
@@ -197,6 +201,11 @@ namespace GUI.Types.GLViewers
 
             listBox.Items.AddRange([.. children]);
 
+            var darkMode = Application.IsDarkModeEnabled;
+            var linkColor = darkMode ? LinkColorDark : LinkColorLight;
+            var disabledLinkColor = darkMode ? DisabledLinkColorDark : DisabledLinkColorLight;
+            Font? linkFont = null;
+
             listBox.DrawItem += (_, e) =>
             {
                 if (e.Index < 0)
@@ -207,14 +216,23 @@ namespace GUI.Types.GLViewers
                 using var brush = new SolidBrush(listBox.BackColor);
                 e.Graphics.FillRectangle(brush, e.Bounds);
 
-                var item = (ChildSystemItem)listBox.Items[e.Index];
-                var color = item.Disabled ? RemovedColor : listBox.ForeColor;
+                linkFont ??= new Font(e.Font!, FontStyle.Underline);
 
-                System.Windows.Forms.TextRenderer.DrawText(e.Graphics, item.Text, e.Font, e.Bounds, color, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+                var item = (ChildSystemItem)listBox.Items[e.Index];
+                var color = item.Disabled ? disabledLinkColor : linkColor;
+
+                System.Windows.Forms.TextRenderer.DrawText(e.Graphics, item.Text, linkFont, e.Bounds, color, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
             };
 
-            listBox.MouseDoubleClick += (_, e) =>
+            listBox.Disposed += (_, _) => linkFont?.Dispose();
+
+            listBox.MouseClick += (_, e) =>
             {
+                if (e.Button != MouseButtons.Left)
+                {
+                    return;
+                }
+
                 var index = listBox.IndexFromPoint(e.Location);
 
                 if (index >= 0)
