@@ -191,6 +191,12 @@ public class UserInput
                 if (Released(TrackedKeys.Alt))
                 {
                     PlayerMovement.Initialize = !NoClip;
+
+                    if (!NoClip)
+                    {
+                        // Orbiting zooms with a transition of its own, so the same settling applies
+                        SettleCamera();
+                    }
                 }
             }
             else if (Pressed(TrackedKeys.Alt))
@@ -227,6 +233,12 @@ public class UserInput
             MoveCamera(new Vector3(0, 0, 32), transition: true);
             CurrentSpeedModifier = 7;
         }
+        else if (!wasClipping && !NoClip)
+        {
+            // Only reachable on the frame X hands control back, since otherwise the two agree. The body
+            // is about to be seeded from the camera, so the view has to stop trailing it first.
+            SettleCamera();
+        }
 
         Camera.Roll = 0f;
 
@@ -253,7 +265,7 @@ public class UserInput
             }
 
             Velocity = PlayerMovement.Velocity;
-            Camera.Pitch -= MouseDeltaPitchYaw.X;
+            Camera.Pitch += MouseDeltaPitchYaw.X;
             Camera.Yaw -= MouseDeltaPitchYaw.Y;
             Camera.ClampRotation();
         }
@@ -265,7 +277,7 @@ public class UserInput
         // The landing punch tilts the rendered view down without touching the stored aim.
         var viewPunchPitch = float.DegreesToRadians(PlayerMovement.ViewPunchPitchDegrees);
 
-        renderCamera.SetLocationPitchYaw(finalCamera.Location, finalCamera.Pitch - viewPunchPitch, finalCamera.Yaw);
+        renderCamera.SetLocationPitchYaw(finalCamera.Location, finalCamera.Pitch + viewPunchPitch, finalCamera.Yaw);
         renderCamera.ClampRotation();
 
         renderCamera.Roll = Camera.Roll;
@@ -295,6 +307,24 @@ public class UserInput
 
         NoClip = true;
         TransitionCamera(transitionDuration);
+    }
+
+    /// <summary>
+    /// Ends any camera transition where it has got to, so the view stops lagging behind the camera it is
+    /// lerping towards.
+    /// </summary>
+    /// <remarks>
+    /// Handing control to the player means the camera stops being something the view chases and starts
+    /// being the body's eyes: the body is seeded from where the camera is, and drawn there, so a view
+    /// still lerping in from behind would watch itself materialise in front of it. Adopting the pose the
+    /// transition had reached rather than its destination keeps the player where they were looking from.
+    /// </remarks>
+    private void SettleCamera()
+    {
+        var view = GetInterpolatedCamera();
+
+        Camera.SetLocationPitchYaw(view.Location, view.Pitch, view.Yaw);
+        TransitionEndTime = -1f;
     }
 
     private void TransitionCamera(float transitionDuration = 1.5f)
@@ -336,7 +366,7 @@ public class UserInput
         if ((keyboardState & TrackedKeys.MouseLeft) != 0 || walking)
         {
             Camera.Yaw -= MouseDeltaPitchYaw.Y;
-            Camera.Pitch -= MouseDeltaPitchYaw.X;
+            Camera.Pitch += MouseDeltaPitchYaw.X;
             Camera.ClampRotation();
         }
 
@@ -361,7 +391,9 @@ public class UserInput
         if (clipped)
         {
             Camera.Location = clippedPos;
-            Camera.Yaw = float.Lerp(previousCamera.Yaw, Camera.Yaw, clippedTime);
+            // Yaw wraps, so the two ends can sit either side of the cut and a plain lerp would take the
+            // long way round, whipping the camera half a turn
+            Camera.Yaw = MathUtils.LerpAngle(previousCamera.Yaw, Camera.Yaw, clippedTime);
             Camera.Pitch = float.Lerp(previousCamera.Pitch, Camera.Pitch, clippedTime);
 
             var direction = clippedPos - target;
@@ -405,7 +437,9 @@ public class UserInput
         {
             // Camera truck and pedestal movement (blender calls this pan)
             var speed = AltMovementSpeed * deltaTime * SpeedModifiers[CurrentSpeedModifier];
-            var screenRight = Vector3.Normalize(Vector3.Cross(Vector3.UnitZ, Camera.Forward));
+            // Cross(worldUp, forward) is the camera's left, and unlike that cross it stays defined when
+            // the camera looks straight down
+            var screenRight = -Camera.Right;
             var screenUp = Vector3.Cross(Camera.Forward, screenRight);
 
             Camera.Location -= screenRight * speed * MouseDelta2D.X;
@@ -416,7 +450,7 @@ public class UserInput
         // Use the keyboard state to update position
         HandleKeyboardInput(deltaTime, keyboardState);
 
-        Camera.Pitch -= MouseDeltaPitchYaw.X;
+        Camera.Pitch += MouseDeltaPitchYaw.X;
         Camera.Yaw -= MouseDeltaPitchYaw.Y;
         Camera.ClampRotation();
     }

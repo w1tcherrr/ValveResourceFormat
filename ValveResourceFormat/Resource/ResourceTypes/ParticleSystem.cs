@@ -23,6 +23,13 @@ namespace ValveResourceFormat.ResourceTypes
             upgradedData ??= ParticleFormatUpgrader.UpgradeToLatest(Data, Format);
             return upgradedData;
         }
+        /// <summary>Builds a particle system from the provided keyvalues.</summary>
+        public static ParticleSystem Create(KVObject data)
+            => new()
+            {
+                Resource = null!,
+                Data = data,
+            };
 
         /// <summary>
         /// Gets the renderers in the particle system.

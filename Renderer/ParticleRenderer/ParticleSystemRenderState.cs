@@ -382,19 +382,7 @@ namespace ValveResourceFormat.Renderer.Particles
                 return Quaternion.Identity;
             }
 
-            var forward = Vector3.Normalize(orientation);
-            var reference = MathF.Abs(forward.Z) < 0.999f ? Vector3.UnitZ : Vector3.UnitY;
-            var left = Vector3.Normalize(Vector3.Cross(reference, forward));
-            var up = Vector3.Cross(forward, left);
-
-            var matrix = new Matrix4x4(
-                forward.X, forward.Y, forward.Z, 0,
-                left.X, left.Y, left.Z, 0,
-                up.X, up.Y, up.Z, 0,
-                0, 0, 0, 1
-            );
-
-            return Quaternion.CreateFromRotationMatrix(matrix);
+            return EntityTransformHelper.ForwardDirectionToQuaternion(orientation);
         }
 
         /// <summary>

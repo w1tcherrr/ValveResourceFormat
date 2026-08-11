@@ -1305,16 +1305,24 @@ public sealed class MapExtract
 
             var mapEntity = new CMapEntity();
             var entityLineage = AddProperties(className, compiledEntity, mapEntity);
-            var localTransform = EntityTransformHelper.CalculateTransformationMatrix(compiledEntity);
+            var localTransform = EntityTransformHelper.ToTransformationMatrix(compiledEntity);
             var worldTransform = parentTransform is { } parent ? localTransform * parent : localTransform;
             if (parentTransform is not null)
             {
                 // parent transform is rigid (rotation and translation only), so worldTransform is affine and
-                // decomposes cleanly unless the child itself shears (non-uniform scale + rotation)
-                _ = Matrix4x4.Decompose(worldTransform, out var scales, out var rotation, out var translation);
-                mapEntity.Origin = translation;
-                mapEntity.Angles = EntityTransformHelper.ToEulerAngles(rotation);
-                mapEntity.Scales = scales;
+                // decomposes cleanly unless the child itself shears (non-uniform scale + rotation). Where it
+                // does shear, keep the entity's own placement rather than silently writing out an identity
+                // rotation the decompose left behind.
+                if (Matrix4x4.Decompose(worldTransform, out var scales, out var rotation, out var translation))
+                {
+                    mapEntity.Origin = translation;
+                    mapEntity.Angles = EntityTransformHelper.ToEulerAngles(rotation);
+                    mapEntity.Scales = scales;
+                }
+                else
+                {
+                    ProgressReporter?.Report($"Failed to decompose transform for entity '{className}', its placement may be wrong.");
+                }
 
                 if (TryDeduplicateTemplateChild(compiledEntity))
                 {
@@ -1369,7 +1377,7 @@ public sealed class MapExtract
                 {
                     if (ChildEntityLumps.Remove(entityLumpName, out var childEntityLump))
                     {
-                        var childLumpTransform = EntityTransformHelper.CalculateRigidTransformationMatrix(compiledEntity) * (parentTransform ?? Matrix4x4.Identity);
+                        var childLumpTransform = EntityTransformHelper.ToRigidTransformationMatrix(compiledEntity) * (parentTransform ?? Matrix4x4.Identity);
                         GatherEntitiesFromLump(childEntityLump, childLumpTransform);
                     }
                     else

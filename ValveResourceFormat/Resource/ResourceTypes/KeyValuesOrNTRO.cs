@@ -18,7 +18,7 @@ namespace ValveResourceFormat.ResourceTypes
         /// <summary>
         /// Gets the parsed data as a <see cref="KVObject"/>.
         /// </summary>
-        public KVObject Data { get; private set; } = null!;
+        public KVObject Data { get; protected set; } = null!;
 
         /// <summary>
         /// Gets the KV3 format id the data was serialized with, or null for NTRO-backed data.

@@ -11,9 +11,9 @@ using ValveResourceFormat.Renderer.Particles.Initializers;
 using ValveResourceFormat.Renderer.Particles.Operators;
 using ValveResourceFormat.Renderer.Particles.PreEmissionOperators;
 using ValveResourceFormat.Renderer.Particles.Renderers;
+using ValveResourceFormat.Renderer.Particles.Utils;
 using ValveResourceFormat.ResourceTypes;
 using ValveResourceFormat.Serialization.KeyValues;
-using ValveResourceFormat.Renderer.Particles.Utils;
 
 namespace ValveResourceFormat.Renderer.Particles
 {
@@ -502,7 +502,7 @@ namespace ValveResourceFormat.Renderer.Particles
         public void SetTextureOverride(string textureName)
             => SetTextureOverride(rendererContext.MaterialLoader.GetTexture(textureName, srgbRead: true));
 
-        private void SetTextureOverride(RenderTexture texture)
+        public void SetTextureOverride(RenderTexture texture)
         {
             foreach (var renderer in renderers)
             {

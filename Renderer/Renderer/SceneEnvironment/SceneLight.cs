@@ -358,7 +358,7 @@ public class SceneLight(Scene scene) : SceneNode(scene)
         }
 
         light.Position = entity.GetVector3Property("origin");
-        light.Direction = AnglesToDirection(entity.GetVector3Property("angles"));
+        light.Direction = EntityTransformHelper.EulerAnglesToForwardDirection(entity.GetVector3Property("angles"));
         return light;
     }
 
@@ -427,17 +427,6 @@ public class SceneLight(Scene scene) : SceneNode(scene)
             DirectLightType.Static => light.StationaryLightIndex is >= 0 and <= 3,
             _ => true
         };
-    }
-
-    /// <summary>
-    /// Converts Euler pitch/yaw angles to a normalized forward direction vector.
-    /// </summary>
-    public static Vector3 AnglesToDirection(Vector3 angles)
-    {
-        var (sinPitch, cosPitch) = MathF.SinCos(float.DegreesToRadians(angles.X));
-        var (sinYaw, cosYaw) = MathF.SinCos(float.DegreesToRadians(angles.Y));
-
-        return Vector3.Normalize(new Vector3(cosYaw * cosPitch, sinYaw * cosPitch, sinPitch));
     }
 
     /// <summary>
@@ -838,7 +827,7 @@ public class SceneLight(Scene scene) : SceneNode(scene)
     private static (OpenTK.Mathematics.Matrix3x4 IlluminationFromWorld, Matrix4x4 ObbToWorld)
         ComputeObbMatrices(Vector3 center, Vector3 extent, Vector3 angles)
     {
-        var rotMatrix = EntityTransformHelper.CreateRotationMatrixFromEulerAngles(angles);
+        var rotMatrix = EntityTransformHelper.EulerAnglesToRotationMatrix(angles);
 
         var axis0 = new Vector3(rotMatrix.M11, rotMatrix.M12, rotMatrix.M13);
         var axis1 = new Vector3(rotMatrix.M21, rotMatrix.M22, rotMatrix.M23);

@@ -2,9 +2,9 @@ using Microsoft.Extensions.Logging;
 using ValveKeyValue;
 using ValveResourceFormat.Blocks;
 using ValveResourceFormat.Renderer.Particles;
+using ValveResourceFormat.Renderer.Particles.Utils;
 using ValveResourceFormat.ResourceTypes;
 using ValveResourceFormat.Serialization.KeyValues;
-using ValveResourceFormat.Renderer.Particles.Utils;
 
 namespace ValveResourceFormat.Renderer.SceneNodes
 {
@@ -262,6 +262,9 @@ namespace ValveResourceFormat.Renderer.SceneNodes
         /// </summary>
         public void SetTextureOverride(string textureName) => particleRenderer.SetTextureOverride(textureName);
 
+        /// <inheritdoc cref="SetTextureOverride(string)"/>
+        public void SetTextureOverride(RenderTexture texture) => particleRenderer.SetTextureOverride(texture);
+
         /// <summary>Gets the control point at the given index from the particle renderer.</summary>
         /// <param name="index">The index of the control point to retrieve.</param>
         /// <returns>The control point at the specified index.</returns>
@@ -457,9 +460,8 @@ namespace ValveResourceFormat.Renderer.SceneNodes
                 }
                 else
                 {
-                    point.Orientation = EntityTransformHelper.QAngleToForwardDirection(angleOffset);
-                    point.Rotation = Quaternion.CreateFromRotationMatrix(
-                        EntityTransformHelper.CreateRotationMatrixFromEulerAngles(angleOffset));
+                    point.Orientation = EntityTransformHelper.EulerAnglesToForwardDirection(angleOffset);
+                    point.Rotation = EntityTransformHelper.EulerAnglesToQuaternion(angleOffset);
                 }
                 point.AttachType = attachType;
             }
