@@ -68,7 +68,7 @@ namespace ValveResourceFormat.Renderer.Particles.Operators
                 var offset = AngleQuaternion(rotationOffset.Y, rotationOffset.Z, rotationOffset.X);
                 var final = offset * baseRotation;
 
-                var angles = QuaternionAngles(final);
+                var angles = EntityTransformHelper.ToEulerAngles(final);
                 anglesRadians = new Vector3(
                     float.DegreesToRadians(angles.X),
                     float.DegreesToRadians(angles.Y),
@@ -129,29 +129,6 @@ namespace ValveResourceFormat.Renderer.Particles.Operators
                 cr * sp * cy + sr * cp * sy,
                 cr * cp * sy - sr * sp * cy,
                 cr * cp * cy + sr * sp * sy);
-        }
-
-        /// <summary>Pitch/yaw/roll degrees from a quaternion in the Source convention.</summary>
-        private static Vector3 QuaternionAngles(Quaternion rotation)
-        {
-            var forward = Vector3.Transform(Vector3.UnitX, rotation);
-            var left = Vector3.Transform(Vector3.UnitY, rotation);
-            var up = Vector3.Transform(Vector3.UnitZ, rotation);
-
-            var lengthXY = MathF.Sqrt(forward.X * forward.X + forward.Y * forward.Y);
-
-            if (lengthXY > 0.001f)
-            {
-                return new Vector3(
-                    float.RadiansToDegrees(MathF.Atan2(-forward.Z, lengthXY)),
-                    float.RadiansToDegrees(MathF.Atan2(forward.Y, forward.X)),
-                    float.RadiansToDegrees(MathF.Atan2(left.Z, up.Z)));
-            }
-
-            return new Vector3(
-                float.RadiansToDegrees(MathF.Atan2(-forward.Z, lengthXY)),
-                float.RadiansToDegrees(MathF.Atan2(-left.X, left.Y)),
-                0f);
         }
     }
 }
