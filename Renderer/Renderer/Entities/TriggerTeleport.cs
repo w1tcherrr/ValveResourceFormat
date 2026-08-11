@@ -60,10 +60,14 @@ public sealed class TriggerTeleport
             }
             var collider = new EntityCollider(physics)
             {
-                Transform = EntityTransformHelper.CalculateTransformationMatrix(entity),
+                Transform = loadedWorld.GetEntityWorldTransform(entity),
             };
 
-            teleports.Add(new TriggerTeleport(collider, destination.GetVector3Property("origin"), destination.GetVector3Property("angles")));
+            var destinationTransform = loadedWorld.GetEntityWorldTransform(destination);
+            var destinationAngles = EntityTransformHelper.ToEulerAngles(
+                Quaternion.Normalize(Quaternion.CreateFromRotationMatrix(destinationTransform)));
+
+            teleports.Add(new TriggerTeleport(collider, destinationTransform.Translation, destinationAngles));
         }
 
         return teleports;

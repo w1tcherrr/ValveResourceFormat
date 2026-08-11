@@ -1,4 +1,4 @@
-using System.Diagnostics.CodeAnalysis;
+﻿using System.Diagnostics.CodeAnalysis;
 using Microsoft.Extensions.Logging;
 using ValveKeyValue;
 using ValveResourceFormat.Renderer;
@@ -87,9 +87,9 @@ namespace ValveResourceFormat.Renderer.Particles
                 ["C_INIT_RemapInitialDirectionToTransformToVector"] = initializerInfo => new RemapInitialDirectionToTransformToVector(initializerInfo),
                 ["C_INIT_RemapInitialTransformDirectionToRotation"] = initializerInfo => new RemapInitialTransformDirectionToRotation(initializerInfo),
                 ["C_INIT_RemapScalarToVector"] = initializerInfo => new RemapScalarToVector(initializerInfo),
-                ["C_INIT_RemapTransformOrientationToRotations"] = initializerInfo => new RemapTransformOrientationToRotationsInit(initializerInfo),
+                ["C_INIT_RemapTransformOrientationToRotations"] = initializerInfo => new Initializers.RemapTransformOrientationToRotations(initializerInfo),
                 ["C_INIT_RemapTransformToVector"] = initializerInfo => new RemapTransformToVector(initializerInfo),
-                ["C_INIT_RemapParticleCountToScalar"] = initializerInfo => new RemapParticleCountToScalar(initializerInfo),
+                ["C_INIT_RemapParticleCountToScalar"] = initializerInfo => new Initializers.RemapParticleCountToScalar(initializerInfo),
                 ["C_INIT_RingWave"] = initializerInfo => new RingWave(initializerInfo),
                 ["C_INIT_VelocityFromCP"] = initializerInfo => new VelocityFromCP(initializerInfo),
                 ["C_INIT_InheritVelocity"] = initializerInfo => new InheritVelocity(initializerInfo),
@@ -145,6 +145,7 @@ namespace ValveResourceFormat.Renderer.Particles
                 ["C_OP_PercentageBetweenTransforms"] = operatorInfo => new PercentageBetweenTransforms(operatorInfo),
                 ["C_OP_PercentageBetweenTransformsVector"] = operatorInfo => new PercentageBetweenTransformsVector(operatorInfo),
                 ["C_OP_PlaneCull"] = operatorInfo => new PlaneCull(operatorInfo),
+                ["C_OP_PointVectorAtNextParticle"] = operatorInfo => new PointVectorAtNextParticle(operatorInfo),
                 ["C_OP_RestartAfterDuration"] = operatorInfo => new RestartAfterDuration(operatorInfo),
                 ["C_OP_PositionLock"] = operatorInfo => new PositionLock(operatorInfo),
                 ["C_OP_QuantizeFloat"] = operatorInfo => new QuantizeFloat(operatorInfo),
@@ -152,15 +153,17 @@ namespace ValveResourceFormat.Renderer.Particles
                 ["C_OP_RampScalarLinearSimple"] = operatorInfo => new RampScalarLinearSimple(operatorInfo),
                 ["C_OP_RemapCrossProductOfTwoVectorsToVector"] = operatorInfo => new RemapCrossProductOfTwoVectorsToVector(operatorInfo),
                 ["C_OP_RemapControlPointDirectionToVector"] = operatorInfo => new RemapControlPointDirectionToVector(operatorInfo),
+                ["C_OP_RemapCPtoScalar"] = operatorInfo => new RemapCPtoScalar(operatorInfo),
                 ["C_OP_RemapCPtoVector"] = operatorInfo => new RemapCPtoVector(operatorInfo),
                 ["C_OP_SetCPtoVector"] = operatorInfo => new SetCPtoVector(operatorInfo),
-                ["C_OP_RemapParticleCountToScalar"] = operatorInfo => new OpRemapParticleCountToScalar(operatorInfo),
+                ["C_OP_RemapParticleCountToScalar"] = operatorInfo => new Operators.RemapParticleCountToScalar(operatorInfo),
                 ["C_OP_RemapParticleCountOnScalarEndCap"] = operatorInfo => new RemapParticleCountOnScalarEndCap(operatorInfo),
                 ["C_OP_ReinitializeScalarEndCap"] = operatorInfo => new ReinitializeScalarEndCap(operatorInfo),
+                ["C_OP_RemapScalar"] = operatorInfo => new Operators.RemapScalar(operatorInfo),
                 ["C_OP_RemapScalarEndCap"] = operatorInfo => new RemapScalarEndCap(operatorInfo),
                 ["C_OP_RemapSpeed"] = operatorInfo => new RemapSpeed(operatorInfo),
                 ["C_OP_RemapVelocityToVector"] = operatorInfo => new RemapVelocityToVector(operatorInfo),
-                ["C_OP_RemapTransformOrientationToRotations"] = operatorInfo => new RemapTransformOrientationToRotations(operatorInfo),
+                ["C_OP_RemapTransformOrientationToRotations"] = operatorInfo => new Operators.RemapTransformOrientationToRotations(operatorInfo),
                 ["C_OP_RemapTransformOrientationToYaw"] = operatorInfo => new RemapTransformOrientationToYaw(operatorInfo),
                 ["C_OP_RemapTransformToVelocity"] = operatorInfo => new RemapTransformToVelocity(operatorInfo),
                 ["C_OP_RemapTransformVisibilityToScalar"] = operatorInfo => new RemapTransformVisibilityToScalar(operatorInfo),
@@ -204,7 +207,7 @@ namespace ValveResourceFormat.Renderer.Particles
             {
                 ["C_OP_RenderSprites"] = (rendererInfo, rendererContext, scene) => new RenderSprites(rendererInfo, rendererContext),
                 ["C_OP_RenderCables"] = (rendererInfo, rendererContext, scene) => new RenderCables(rendererInfo, rendererContext, scene),
-                ["C_OP_RenderRopes"] = (rendererInfo, rendererContext, scene) => new RenderCables(rendererInfo, rendererContext, scene), // Rope renderer variant, drawn with RenderCables as a tube approximation.
+                ["C_OP_RenderRopes"] = (rendererInfo, rendererContext, scene) => new RenderRopes(rendererInfo, rendererContext),
 
                 ["C_OP_RenderTrails"] = (rendererInfo, rendererContext, scene) => new RenderTrails(rendererInfo, rendererContext),
                 ["C_OP_RenderSound"] = (rendererInfo, rendererContext, scene) => new RenderSound(rendererInfo),

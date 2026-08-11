@@ -31,7 +31,7 @@ namespace ValveResourceFormat.Renderer.Particles
         Vector3 GetOrientation(ref Particle particle, ParticleSystemRenderState renderState)
         {
             var transform = NextTransform(ref particle, renderState);
-            return new Vector3(transform.M31, transform.M32, transform.M33);
+            return new Vector3(transform.M11, transform.M12, transform.M13);
         }
     }
 
@@ -81,14 +81,14 @@ namespace ValveResourceFormat.Renderer.Particles
             }
 
             var forward = Vector3.Normalize(cp.Orientation);
-            var up = Math.Abs(forward.Y) < 0.999f ? Vector3.UnitY : Vector3.UnitZ;
-            var right = Vector3.Normalize(Vector3.Cross(up, forward));
-            up = Vector3.Cross(forward, right);
+            var reference = Math.Abs(forward.Z) < 0.999f ? Vector3.UnitZ : Vector3.UnitY;
+            var left = Vector3.Normalize(Vector3.Cross(reference, forward));
+            var up = Vector3.Cross(forward, left);
 
             var rotation = new Matrix4x4(
-                right.X, right.Y, right.Z, 0,
-                up.X, up.Y, up.Z, 0,
                 forward.X, forward.Y, forward.Z, 0,
+                left.X, left.Y, left.Z, 0,
+                up.X, up.Y, up.Z, 0,
                 0, 0, 0, 1
             );
 

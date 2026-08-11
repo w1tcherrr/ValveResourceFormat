@@ -59,6 +59,9 @@ namespace ValveResourceFormat.Renderer.Particles
         public long ParticleCount { get; set; }
         public float Age { get; set; }
 
+        /// <summary>World-space position of the render camera, updated once per simulation step.</summary>
+        public Vector3 CameraPosition { get; set; }
+
         public bool EndEarly { get; set; }
 
         public bool DestroyInstantlyOnEnd { get; private set; }
@@ -179,6 +182,9 @@ namespace ValveResourceFormat.Renderer.Particles
             return Data?.GetControlPointSnapshot(cp) ?? ParentSystem?.GetControlPointSnapshot(cp);
         }
 
+        /// <summary>Highest control point index this system has touched; some emitters scale their rate by it.</summary>
+        public int HighestControlPoint { get; private set; }
+
         public void SetControlPoint(int cp, ControlPoint point)
         {
             if (ParentSystem != null)
@@ -186,6 +192,7 @@ namespace ValveResourceFormat.Renderer.Particles
                 ParentSystem.SetControlPoint(cp, point);
             }
 
+            HighestControlPoint = Math.Max(HighestControlPoint, cp);
             controlPoints[cp] = point;
         }
 
@@ -285,7 +292,7 @@ namespace ValveResourceFormat.Renderer.Particles
         {
             var point = GetControlPoint(cp);
             point.Rotation = rotation;
-            point.Orientation = Vector3.Transform(Vector3.UnitZ, rotation);
+            point.Orientation = Vector3.Transform(Vector3.UnitX, rotation);
         }
 
     }
@@ -376,14 +383,14 @@ namespace ValveResourceFormat.Renderer.Particles
             }
 
             var forward = Vector3.Normalize(orientation);
-            var up = MathF.Abs(forward.Y) < 0.999f ? Vector3.UnitY : Vector3.UnitZ;
-            var right = Vector3.Normalize(Vector3.Cross(up, forward));
-            up = Vector3.Cross(forward, right);
+            var reference = MathF.Abs(forward.Z) < 0.999f ? Vector3.UnitZ : Vector3.UnitY;
+            var left = Vector3.Normalize(Vector3.Cross(reference, forward));
+            var up = Vector3.Cross(forward, left);
 
             var matrix = new Matrix4x4(
-                right.X, right.Y, right.Z, 0,
-                up.X, up.Y, up.Z, 0,
                 forward.X, forward.Y, forward.Z, 0,
+                left.X, left.Y, left.Z, 0,
+                up.X, up.Y, up.Z, 0,
                 0, 0, 0, 1
             );
 

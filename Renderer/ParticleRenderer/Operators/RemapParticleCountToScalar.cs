@@ -1,11 +1,11 @@
-namespace ValveResourceFormat.Renderer.Particles.Operators
+﻿namespace ValveResourceFormat.Renderer.Particles.Operators
 {
     /// <summary>
     /// Remaps each particle's slot in the collection, within a configurable input range, to a scalar
     /// output range and writes the result to a particle attribute.
     /// </summary>
     /// <seealso href="https://s2v.app/SchemaExplorer/cs2/particles/C_OP_RemapParticleCountToScalar">C_OP_RemapParticleCountToScalar</seealso>
-    class OpRemapParticleCountToScalar : ParticleFunctionOperator
+    class RemapParticleCountToScalar : ParticleFunctionOperator
     {
         private readonly INumberProvider inputMin = new LiteralNumberProvider(0);
         private readonly INumberProvider inputMax = new LiteralNumberProvider(1);
@@ -16,7 +16,7 @@ namespace ValveResourceFormat.Renderer.Particles.Operators
         private readonly ParticleSetMethod setMethod = ParticleSetMethod.PARTICLE_SET_REPLACE_VALUE;
         private readonly bool activeRange;
 
-        public OpRemapParticleCountToScalar(ParticleDefinitionParser parse) : base(parse)
+        public RemapParticleCountToScalar(ParticleDefinitionParser parse) : base(parse)
         {
             outputField = parse.ParticleField("m_nFieldOutput", outputField);
             inputMin = parse.NumberProvider("m_nInputMin", inputMin);
