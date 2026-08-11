@@ -1,13 +1,16 @@
 using System.Diagnostics;
 using System.Drawing;
+using System.IO;
 using System.Windows.Forms;
 using GUI.Controls;
 using GUI.Utils;
+using ValveKeyValue;
 using ValveResourceFormat.Renderer;
 using ValveResourceFormat.Renderer.Particles;
 using ValveResourceFormat.Renderer.SceneNodes;
 using ValveResourceFormat.ResourceTypes;
 using ValveResourceFormat.ResourceTypes.ParticleUpgrade;
+using ValveResourceFormat.Serialization.KeyValues;
 
 namespace GUI.Types.GLViewers
 {
@@ -19,6 +22,21 @@ namespace GUI.Types.GLViewers
     {
         private static readonly Color UnsupportedColor = Color.FromArgb(224, 80, 80);
         private static readonly Color RemovedColor = Color.FromArgb(140, 140, 140);
+
+        // Order matches the CS2 particle editor (PET): pre-emission first, then emit/init/operate,
+        // forces, constraints, and renderers last.
+        private static readonly (string Title, string ListName, Func<string, bool> IsSupported)[] FunctionGroups =
+        [
+            ("Pre-Emission Operators", "m_PreEmissionOperators", ParticleSupportInfo.IsPreEmissionOperatorSupported),
+            ("Emitters", "m_Emitters", ParticleSupportInfo.IsEmitterSupported),
+            ("Initializers", "m_Initializers", ParticleSupportInfo.IsInitializerSupported),
+            ("Operators", "m_Operators", ParticleSupportInfo.IsOperatorSupported),
+            ("Force Generators", "m_ForceGenerators", ParticleSupportInfo.IsForceGeneratorSupported),
+            ("Constraints", "m_Constraints", ParticleSupportInfo.IsConstraintSupported),
+            ("Renderers", "m_Renderers", ParticleSupportInfo.IsRendererSupported),
+        ];
+
+        private const int MaxChildDepth = 8;
 
         private readonly ParticleSystem particleSystem;
         private ParticleSceneNode? particleSceneNode;
@@ -135,15 +153,109 @@ namespace GUI.Types.GLViewers
 
             var functionLists = ParticleUpgradeTrace.TraceFunctions(particleSystem.Data, particleSystem.Format);
 
-            // Order matches the CS2 particle editor (PET): pre-emission first, then emit/init/operate,
-            // forces, constraints, and renderers last.
-            AddFunctionGroup("Pre-Emission Operators", functionLists["m_PreEmissionOperators"], ParticleSupportInfo.IsPreEmissionOperatorSupported);
-            AddFunctionGroup("Emitters", functionLists["m_Emitters"], ParticleSupportInfo.IsEmitterSupported);
-            AddFunctionGroup("Initializers", functionLists["m_Initializers"], ParticleSupportInfo.IsInitializerSupported);
-            AddFunctionGroup("Operators", functionLists["m_Operators"], ParticleSupportInfo.IsOperatorSupported);
-            AddFunctionGroup("Force Generators", functionLists["m_ForceGenerators"], ParticleSupportInfo.IsForceGeneratorSupported);
-            AddFunctionGroup("Constraints", functionLists["m_Constraints"], ParticleSupportInfo.IsConstraintSupported);
-            AddFunctionGroup("Renderers", functionLists["m_Renderers"], ParticleSupportInfo.IsRendererSupported);
+            foreach (var (title, listName, isSupported) in FunctionGroups)
+            {
+                AddFunctionGroup(title, functionLists[listName], isSupported);
+            }
+
+            AddChildSystems(particleSystem.GetUpgradedData(), parentLabel: string.Empty, [], [], depth: 1);
+        }
+
+        private void AddChildSystems(KVObject parentData, string parentLabel, HashSet<string> pathStack, Dictionary<string, int> labelCounts, int depth)
+        {
+            if (depth > MaxChildDepth)
+            {
+                return;
+            }
+
+            var behaviorVersion = parentData.GetInt32Property("m_nBehaviorVersion");
+
+            foreach (var childInfo in parentData.GetArray("m_Children") ?? [])
+            {
+                var childRef = childInfo.GetStringProperty("m_ChildRef");
+
+                if (string.IsNullOrEmpty(childRef))
+                {
+                    continue;
+                }
+
+                var shortName = Path.GetFileNameWithoutExtension(childRef);
+                var label = parentLabel.Length == 0 ? shortName : $"{parentLabel} / {shortName}";
+                var occurrence = labelCounts.GetValueOrDefault(label);
+                labelCounts[label] = occurrence + 1;
+
+                if (occurrence > 0)
+                {
+                    label = $"{label} ({occurrence + 1})";
+                }
+
+                if (behaviorVersion >= 5 && childInfo.GetBooleanProperty("m_bDisableChild"))
+                {
+                    AddChildSystemGroup($"{label} (disabled)", null);
+                    continue;
+                }
+
+                if (!pathStack.Add(childRef))
+                {
+                    continue;
+                }
+
+                ParticleSystem? childSystem = null;
+
+                try
+                {
+                    childSystem = Scene.RendererContext.FileLoader.LoadFileCompiled(childRef)?.DataBlock as ParticleSystem;
+                }
+                catch (Exception e)
+                {
+                    Log.Error(nameof(GLParticleViewer), $"Failed to load child particle system '{childRef}': {e.Message}");
+                }
+
+                if (childSystem == null)
+                {
+                    AddChildSystemGroup($"{label} (failed to load)", null);
+                }
+                else
+                {
+                    AddChildSystemGroup(label, ParticleUpgradeTrace.TraceFunctions(childSystem.Data, childSystem.Format));
+                    AddChildSystems(childSystem.GetUpgradedData(), label, pathStack, labelCounts, depth + 1);
+                }
+
+                pathStack.Remove(childRef);
+            }
+        }
+
+        private void AddChildSystemGroup(string title, IReadOnlyDictionary<string, IReadOnlyList<ParticleUpgradeTrace.TracedFunction>>? functionLists)
+        {
+            Debug.Assert(UiControl != null);
+
+            using var group = UiControl.BeginGroup(title);
+
+            if (functionLists == null)
+            {
+                return;
+            }
+
+            foreach (var (listTitle, listName, isSupported) in FunctionGroups)
+            {
+                var functions = functionLists[listName];
+
+                if (functions.Count == 0)
+                {
+                    continue;
+                }
+
+                var header = new Label
+                {
+                    Text = listTitle,
+                    AutoSize = true,
+                    Font = new Font(UiControl.Font, FontStyle.Bold),
+                    Padding = new Padding(0, 4, 0, 1),
+                };
+
+                UiControl.AddControl(header);
+                UiControl.AddControl(BuildFunctionList(functions, isSupported));
+            }
         }
 
         private void AddFunctionGroup(string groupName, IReadOnlyList<ParticleUpgradeTrace.TracedFunction> functions, Func<string, bool> isSupported)
@@ -155,6 +267,14 @@ namespace GUI.Types.GLViewers
                 return;
             }
 
+            using (UiControl.BeginGroup(groupName))
+            {
+                UiControl.AddControl(BuildFunctionList(functions, isSupported));
+            }
+        }
+
+        private static ListBox BuildFunctionList(IReadOnlyList<ParticleUpgradeTrace.TracedFunction> functions, Func<string, bool> isSupported)
+        {
             var listBox = new ListBox
             {
                 Dock = DockStyle.Fill,
@@ -208,10 +328,7 @@ namespace GUI.Types.GLViewers
 
             listBox.Height = listBox.ItemHeight * functions.Count + 2;
 
-            using (UiControl.BeginGroup(groupName))
-            {
-                UiControl.AddControl(listBox);
-            }
+            return listBox;
         }
 
         private static string StripClassPrefix(string className)
