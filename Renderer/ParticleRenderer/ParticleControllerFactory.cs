@@ -86,6 +86,7 @@ namespace ValveResourceFormat.Renderer.Particles
                 ["C_INIT_NormalOffset"] = initializerInfo => new NormalOffset(initializerInfo),
                 ["C_INIT_RemapScalarToVector"] = initializerInfo => new RemapScalarToVector(initializerInfo),
                 ["C_INIT_RemapTransformOrientationToRotations"] = initializerInfo => new RemapTransformOrientationToRotationsInit(initializerInfo),
+                ["C_INIT_RemapTransformToVector"] = initializerInfo => new RemapTransformToVector(initializerInfo),
                 ["C_INIT_RemapParticleCountToScalar"] = initializerInfo => new RemapParticleCountToScalar(initializerInfo),
                 ["C_INIT_RingWave"] = initializerInfo => new RingWave(initializerInfo),
                 ["C_INIT_VelocityFromCP"] = initializerInfo => new VelocityFromCP(initializerInfo),
