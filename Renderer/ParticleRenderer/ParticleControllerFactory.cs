@@ -161,6 +161,7 @@ namespace ValveResourceFormat.Renderer.Particles
                 ["C_OP_RemapTransformOrientationToYaw"] = operatorInfo => new RemapTransformOrientationToYaw(operatorInfo),
                 ["C_OP_RemapTransformToVelocity"] = operatorInfo => new RemapTransformToVelocity(operatorInfo),
                 ["C_OP_RemapTransformVisibilityToScalar"] = operatorInfo => new RemapTransformVisibilityToScalar(operatorInfo),
+                ["C_OP_RemapTransformVisibilityToVector"] = operatorInfo => new RemapTransformVisibilityToVector(operatorInfo),
                 ["C_OP_RotateVector"] = operatorInfo => new RotateVector(operatorInfo),
                 ["C_OP_SetAttributeToScalarExpression"] = operatorInfo => new SetAttributeToScalarExpression(operatorInfo),
                 ["C_OP_SetFloat"] = operatorInfo => new SetFloat(operatorInfo),
