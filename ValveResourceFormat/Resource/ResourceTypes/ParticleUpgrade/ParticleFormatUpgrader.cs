@@ -125,7 +125,7 @@ public static class ParticleFormatUpgrader
         return upgraded;
     }
 
-    private static int ResolveStartIndex(KV3ID? storedFormat)
+    internal static int ResolveStartIndex(KV3ID? storedFormat)
     {
         if (storedFormat is not { } format)
         {

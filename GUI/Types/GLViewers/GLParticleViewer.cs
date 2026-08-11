@@ -1,15 +1,13 @@
 using System.Diagnostics;
 using System.Drawing;
-using System.Linq;
 using System.Windows.Forms;
 using GUI.Controls;
 using GUI.Utils;
-using ValveKeyValue;
 using ValveResourceFormat.Renderer;
 using ValveResourceFormat.Renderer.Particles;
 using ValveResourceFormat.Renderer.SceneNodes;
 using ValveResourceFormat.ResourceTypes;
-using ValveResourceFormat.Serialization.KeyValues;
+using ValveResourceFormat.ResourceTypes.ParticleUpgrade;
 
 namespace GUI.Types.GLViewers
 {
@@ -19,6 +17,9 @@ namespace GUI.Types.GLViewers
     /// </summary>
     class GLParticleViewer : GLSceneViewer
     {
+        private static readonly Color UnsupportedColor = Color.FromArgb(224, 80, 80);
+        private static readonly Color RemovedColor = Color.FromArgb(140, 140, 140);
+
         private readonly ParticleSystem particleSystem;
         private ParticleSceneNode? particleSceneNode;
         private GLViewerSliderControl? slowmodeTrackBar;
@@ -132,25 +133,24 @@ namespace GUI.Types.GLViewers
         {
             Debug.Assert(UiControl != null);
 
-            var unsupportedColor = Color.FromArgb(224, 80, 80);
+            var functionLists = ParticleUpgradeTrace.TraceFunctions(particleSystem.Data, particleSystem.Format);
 
             // Order matches the CS2 particle editor (PET): pre-emission first, then emit/init/operate,
             // forces, constraints, and renderers last.
-            AddFunctionGroup("Pre-Emission Operators", particleSystem.GetPreEmissionOperators(), ParticleSupportInfo.IsPreEmissionOperatorSupported, unsupportedColor);
-            AddFunctionGroup("Emitters", particleSystem.GetEmitters(), ParticleSupportInfo.IsEmitterSupported, unsupportedColor);
-            AddFunctionGroup("Initializers", particleSystem.GetInitializers(), ParticleSupportInfo.IsInitializerSupported, unsupportedColor);
-            AddFunctionGroup("Operators", particleSystem.GetOperators(), ParticleSupportInfo.IsOperatorSupported, unsupportedColor);
-            AddFunctionGroup("Force Generators", particleSystem.GetForceGenerators(), ParticleSupportInfo.IsForceGeneratorSupported, unsupportedColor);
-            AddFunctionGroup("Constraints", particleSystem.GetConstraints(), ParticleSupportInfo.IsConstraintSupported, unsupportedColor);
-            AddFunctionGroup("Renderers", particleSystem.GetRenderers(), ParticleSupportInfo.IsRendererSupported, unsupportedColor);
+            AddFunctionGroup("Pre-Emission Operators", functionLists["m_PreEmissionOperators"], ParticleSupportInfo.IsPreEmissionOperatorSupported);
+            AddFunctionGroup("Emitters", functionLists["m_Emitters"], ParticleSupportInfo.IsEmitterSupported);
+            AddFunctionGroup("Initializers", functionLists["m_Initializers"], ParticleSupportInfo.IsInitializerSupported);
+            AddFunctionGroup("Operators", functionLists["m_Operators"], ParticleSupportInfo.IsOperatorSupported);
+            AddFunctionGroup("Force Generators", functionLists["m_ForceGenerators"], ParticleSupportInfo.IsForceGeneratorSupported);
+            AddFunctionGroup("Constraints", functionLists["m_Constraints"], ParticleSupportInfo.IsConstraintSupported);
+            AddFunctionGroup("Renderers", functionLists["m_Renderers"], ParticleSupportInfo.IsRendererSupported);
         }
 
-        private void AddFunctionGroup(string groupName, IEnumerable<KVObject> functions, Func<string, bool> isSupported, Color unsupportedColor)
+        private void AddFunctionGroup(string groupName, IReadOnlyList<ParticleUpgradeTrace.TracedFunction> functions, Func<string, bool> isSupported)
         {
             Debug.Assert(UiControl != null);
 
-            var functionList = functions.ToList();
-            if (functionList.Count == 0)
+            if (functions.Count == 0)
             {
                 return;
             }
@@ -164,11 +164,23 @@ namespace GUI.Types.GLViewers
                 IntegralHeight = false,
             };
 
-            foreach (var function in functionList)
+            foreach (var function in functions)
             {
-                var className = function.GetStringProperty("_class");
-                var displayName = StripClassPrefix(className);
-                listBox.Items.Add(new ParticleFunctionItem(displayName, isSupported(className)));
+                var displayName = StripClassPrefix(function.Class);
+
+                if (function.RemovedByUpgrade)
+                {
+                    listBox.Items.Add(new ParticleFunctionItem($"{displayName} (removed by upgrade)", FunctionSupport.Removed));
+                    continue;
+                }
+
+                if (function.OriginalClass != null)
+                {
+                    displayName = $"{displayName} (was {StripClassPrefix(function.OriginalClass)})";
+                }
+
+                var support = isSupported(function.Class) ? FunctionSupport.Supported : FunctionSupport.Unsupported;
+                listBox.Items.Add(new ParticleFunctionItem(displayName, support));
             }
 
             listBox.DrawItem += (_, e) =>
@@ -182,14 +194,19 @@ namespace GUI.Types.GLViewers
                 e.Graphics.FillRectangle(brush, e.Bounds);
 
                 var item = (ParticleFunctionItem)listBox.Items[e.Index];
-                var color = item.IsSupported ? listBox.ForeColor : unsupportedColor;
+                var color = item.Support switch
+                {
+                    FunctionSupport.Unsupported => UnsupportedColor,
+                    FunctionSupport.Removed => RemovedColor,
+                    _ => listBox.ForeColor,
+                };
 
-                System.Windows.Forms.TextRenderer.DrawText(e.Graphics, item.ClassName, e.Font, e.Bounds, color, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+                System.Windows.Forms.TextRenderer.DrawText(e.Graphics, item.Text, e.Font, e.Bounds, color, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
             };
 
             Themer.ThemeControl(listBox);
 
-            listBox.Height = listBox.ItemHeight * functionList.Count + 2;
+            listBox.Height = listBox.ItemHeight * functions.Count + 2;
 
             using (UiControl.BeginGroup(groupName))
             {
@@ -212,7 +229,14 @@ namespace GUI.Types.GLViewers
             return className;
         }
 
-        private sealed record ParticleFunctionItem(string ClassName, bool IsSupported);
+        private enum FunctionSupport
+        {
+            Supported,
+            Unsupported,
+            Removed,
+        }
+
+        private sealed record ParticleFunctionItem(string Text, FunctionSupport Support);
 
         protected override void OnPicked(object? sender, PickingTexture.PickingResponse pixelInfo)
         {
