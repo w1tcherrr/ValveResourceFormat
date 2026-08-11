@@ -84,6 +84,7 @@ namespace ValveResourceFormat.Renderer.Particles
                 ["C_INIT_RandomYawFlip"] = initializerInfo => new RandomYawFlip(initializerInfo),
                 ["C_INIT_NormalAlignToCP"] = initializerInfo => new NormalAlignToCP(initializerInfo),
                 ["C_INIT_NormalOffset"] = initializerInfo => new NormalOffset(initializerInfo),
+                ["C_INIT_RemapInitialDirectionToTransformToVector"] = initializerInfo => new RemapInitialDirectionToTransformToVector(initializerInfo),
                 ["C_INIT_RemapScalarToVector"] = initializerInfo => new RemapScalarToVector(initializerInfo),
                 ["C_INIT_RemapTransformOrientationToRotations"] = initializerInfo => new RemapTransformOrientationToRotationsInit(initializerInfo),
                 ["C_INIT_RemapTransformToVector"] = initializerInfo => new RemapTransformToVector(initializerInfo),
