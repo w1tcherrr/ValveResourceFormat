@@ -217,12 +217,12 @@ namespace GUI.Types.Viewers
                     if (resource.DataBlock is BinaryKV3 soundStackKV3)
                     {
                         GLViewer = new SoundStackGraphViewer(vrfGuiContext, rendererContext, soundStackKV3.Data);
-                        GLViewerTabName = "SOUND STACK";
+                        GLViewerTabName = "SOUND STACK GRAPH";
                     }
                     else if (resource.DataBlock is SoundStackScript soundStackScript)
                     {
                         GLViewer = new SoundStackGraphViewer(vrfGuiContext, rendererContext, soundStackScript);
-                        GLViewerTabName = "SOUND STACK";
+                        GLViewerTabName = "SOUND STACK GRAPH";
                     }
                     break;
 

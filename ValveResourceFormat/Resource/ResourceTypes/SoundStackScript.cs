@@ -1,5 +1,6 @@
 using System.IO;
 using System.Text;
+using ValveKeyValue;
 
 namespace ValveResourceFormat.ResourceTypes
 {
@@ -12,9 +13,16 @@ namespace ValveResourceFormat.ResourceTypes
         public override BlockType Type => BlockType.DATA;
 
         /// <summary>
-        /// Gets the sound stack script values.
+        /// Gets the sound stack script values, as the KeyValues1 text they are stored as. This is
+        /// what <see cref="WriteText"/> emits, so it keeps the authored formatting.
         /// </summary>
-        public Dictionary<string, string> SoundStackScriptValue { get; private set; } = []; // TODO: be Dictionary<string, SomeKVObject>
+        public Dictionary<string, string> SoundStackScriptValue { get; private set; } = [];
+
+        /// <summary>
+        /// Gets each stack parsed from its <see cref="SoundStackScriptValue"/> text. A stack whose
+        /// text does not parse is left out, so this may hold fewer entries than that dictionary.
+        /// </summary>
+        public Dictionary<string, KVObject> SoundStacks { get; private set; } = [];
 
         /// <inheritdoc/>
         public override void Read(BinaryReader reader)
@@ -48,8 +56,31 @@ namespace ValveResourceFormat.ResourceTypes
 
                 // Valve have duplicates, assume last is correct?
                 SoundStackScriptValue.Remove(name);
+                SoundStacks.Remove(name);
 
                 SoundStackScriptValue.Add(name, value);
+
+                if (Parse(value) is { } stack)
+                {
+                    SoundStacks.Add(name, stack);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Reads one stack's KeyValues1 text, or null when it does not parse. These are authored
+        /// files, so a malformed one is skipped rather than allowed to fail the whole resource.
+        /// </summary>
+        private static KVObject? Parse(string text)
+        {
+            try
+            {
+                using var stream = new MemoryStream(Encoding.UTF8.GetBytes(text));
+                return KVSerializer.Create(KVSerializationFormat.KeyValues1Text).Deserialize(stream);
+            }
+            catch (Exception)
+            {
+                return null;
             }
         }
 

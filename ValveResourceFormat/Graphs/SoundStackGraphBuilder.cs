@@ -1,6 +1,4 @@
-using System.IO;
 using System.Linq;
-using System.Text;
 using ValveKeyValue;
 using ValveResourceFormat.ResourceTypes;
 using ValveResourceFormat.Serialization.KeyValues;
@@ -39,32 +37,23 @@ public sealed class SoundStackGraphBuilder
     }
 
     /// <summary>
-    /// Creates a builder over a sound stack file of the older schema, whose stacks are stored as
-    /// unparsed KeyValues1 text rather than as structured data.
+    /// Creates a builder over a sound stack file of the older schema, which the block stores one
+    /// parsed stack at a time rather than as a single object.
     /// </summary>
-    /// <param name="script">The legacy block, one text blob per stack.</param>
-    /// <param name="progressReporter">Receives diagnostics about stacks that failed to parse.</param>
+    /// <param name="script">The block holding the parsed stacks.</param>
+    /// <param name="progressReporter">Receives diagnostics about operators that could not be read.</param>
     public static SoundStackGraphBuilder FromLegacy(SoundStackScript script, IProgress<string>? progressReporter = null)
     {
         ArgumentNullException.ThrowIfNull(script);
 
-        var parsed = new KVObject();
-        var serializer = KVSerializer.Create(KVSerializationFormat.KeyValues1Text);
+        var root = new KVObject();
 
-        foreach (var (name, text) in script.SoundStackScriptValue)
+        foreach (var (name, stack) in script.SoundStacks)
         {
-            try
-            {
-                using var stream = new MemoryStream(Encoding.UTF8.GetBytes(text));
-                parsed.Add(name, serializer.Deserialize(stream));
-            }
-            catch (Exception e)
-            {
-                progressReporter?.Report($"Stack \"{name}\" could not be parsed: {e.Message}");
-            }
+            root.Add(name, stack);
         }
 
-        return new SoundStackGraphBuilder(parsed) { ProgressReporter = progressReporter };
+        return new SoundStackGraphBuilder(root) { ProgressReporter = progressReporter };
     }
 
     /// <summary>Fills <paramref name="document"/> with every stack in the file and lays it out.</summary>
