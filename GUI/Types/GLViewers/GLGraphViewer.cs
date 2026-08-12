@@ -64,6 +64,14 @@ namespace GUI.Types.GLViewers
         {
         }
 
+        /// <summary>Frontends whose source carries metering alongside the signal expose a checkbox to draw it.</summary>
+        protected virtual bool HasInstrumentationToggle => false;
+
+        /// <summary>Rebuilds the graph with the metering and debug taps drawn (true) or left out (false).</summary>
+        protected virtual void SetDrawInstrumentation(bool draw)
+        {
+        }
+
         private Label? statsLabel;
         private ThemedTextBox? searchBox;
         private GraphNode? lastSearchResult;
@@ -71,6 +79,7 @@ namespace GUI.Types.GLViewers
         private ComboBox? wireCombo;
         private CheckBox? stateMachinesCheckBox;
         private CheckBox? parameterWiresCheckBox;
+        private CheckBox? instrumentationCheckBox;
         private bool suppressWireChange;
         private bool openingStraightWires;
 
@@ -231,6 +240,13 @@ namespace GUI.Types.GLViewers
                 section.AddRow(checkbox);
             }
 
+            if (HasInstrumentationToggle)
+            {
+                var checkbox = RendererControl.CreateCheckBox("Draw metering taps", false, SetDrawInstrumentation);
+                instrumentationCheckBox = checkbox.CheckBox;
+                section.AddRow(checkbox);
+            }
+
             // Auto-sized so it wraps at the real sidebar width and its row grows to fit,
             // instead of a fixed height the text can overflow into the button below.
             var reduceCaption = new Label
@@ -324,6 +340,11 @@ namespace GUI.Types.GLViewers
             if (parameterWiresCheckBox != null)
             {
                 parameterWiresCheckBox.Checked = false;
+            }
+
+            if (instrumentationCheckBox != null)
+            {
+                instrumentationCheckBox.Checked = false;
             }
 
             if (subtitleFilter != null)

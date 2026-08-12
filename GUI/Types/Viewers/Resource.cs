@@ -205,6 +205,27 @@ namespace GUI.Types.Viewers
                     }
                     break;
 
+                case ResourceType.VMix:
+                    if (resource.DataBlock is BinaryKV3 mixGraphKV3)
+                    {
+                        GLViewer = new VMixGraphViewer(vrfGuiContext, rendererContext, mixGraphKV3.Data);
+                        GLViewerTabName = "MIX GRAPH";
+                    }
+                    break;
+
+                case ResourceType.SoundStackScript:
+                    if (resource.DataBlock is BinaryKV3 soundStackKV3)
+                    {
+                        GLViewer = new SoundStackGraphViewer(vrfGuiContext, rendererContext, soundStackKV3.Data);
+                        GLViewerTabName = "SOUND STACK";
+                    }
+                    else if (resource.DataBlock is SoundStackScript soundStackScript)
+                    {
+                        GLViewer = new SoundStackGraphViewer(vrfGuiContext, rendererContext, soundStackScript);
+                        GLViewerTabName = "SOUND STACK";
+                    }
+                    break;
+
                 case ResourceType.EntityLump:
                     if (resource.DataBlock is EntityLump entityLumpData)
                     {
