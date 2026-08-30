@@ -141,6 +141,7 @@ namespace ValveResourceFormat.Renderer.SceneNodes
             // GetAttachmentOrSelfTransform already falls back to this node's own world Transform for an empty/
             // unmatched name - AnimationController.Transform is not it (see its doc comment), so route through here.
             AnimationController.ResolvePosition = attachmentName => GetAttachmentOrSelfTransform(attachmentName).Translation;
+            AnimationController.AnimationLookup = animationName => Animations.GetValueOrDefault(animationName);
         }
 
         readonly struct CharacterEyeParameters
@@ -412,6 +413,11 @@ namespace ValveResourceFormat.Renderer.SceneNodes
             animations.RemoveAll(animation => !AnimationController.IsPlayable(animation));
 
             AddAnimations(animations);
+
+            foreach (var (name, boneWeights) in model.GetBoneMasks())
+            {
+                AnimationController.RegisterBoneMask(name, boneWeights);
+            }
 
             if (Animations.Count != 0)
             {

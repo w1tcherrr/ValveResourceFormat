@@ -16,6 +16,13 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation
         public int LocalReference { get; set; }
 
         /// <summary>
+        /// Gets the name <see cref="LocalReference"/> resolves to against the sequence group's shared
+        /// name array, an animation for most layers or another sequence for one that blends generated
+        /// animations. Empty when the layer was read outside sequence data, or the index is out of range.
+        /// </summary>
+        public string ReferencedAnimationName { get; internal set; } = string.Empty;
+
+        /// <summary>
         /// Gets or sets the local pose index for the animation layer.
         /// </summary>
         public int LocalPose { get; set; }

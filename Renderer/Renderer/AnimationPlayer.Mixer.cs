@@ -32,6 +32,19 @@ namespace ValveResourceFormat.Renderer
             /// <summary>Gets or sets the bone mask name to apply per-bone weighting. Empty string means no mask.</summary>
             public string BoneMask { get; set; } = string.Empty;
 
+            /// <summary>
+            /// Gets or sets the auto layer this clip plays. When set, <see cref="LayerOwner"/> must also be
+            /// set, and <see cref="Weight"/> and <see cref="Time"/> are recomputed every tick from its cycle
+            /// instead of advancing on their own.
+            /// </summary>
+            public AnimationAutoLayer? Layer { get; set; }
+
+            /// <summary>
+            /// Gets or sets the clip whose cycle position drives this auto layer's weight and time. Null for
+            /// a clip that is not an auto layer.
+            /// </summary>
+            public PlaybackClip? LayerOwner { get; set; }
+
             /// <summary>Gets whether this clip uses time-based transition blending.</summary>
             public bool IsTimeBasedTransition => BlendTime > 0f;
 
@@ -74,6 +87,12 @@ namespace ValveResourceFormat.Renderer
         /// Bone masks are used by clips to weigh transforms on a per-bone basis.
         /// </summary>
         public Dictionary<string, Half[]> BoneMaskDefinitions { get; } = [];
+
+        /// <summary>
+        /// Optional resolver from an animation or sequence name to the loaded <see cref="Animation"/>
+        /// instance, used to resolve an auto layer's target to the clip it plays.
+        /// </summary>
+        public Func<string, Animation?>? AnimationLookup { get; set; }
 
         /// <summary>
         /// Clears all clips and blend state so a later transition starts from a clean state.
@@ -119,6 +138,12 @@ namespace ValveResourceFormat.Renderer
 
             foreach (var clip in clips.Values)
             {
+                if (clip.LayerOwner != null)
+                {
+                    // Driven from its owner's cycle below rather than advanced on its own.
+                    continue;
+                }
+
                 if (!clip.IsPaused && clip.Animation.FrameCount > 1)
                 {
                     var previousTime = clip.Time;
@@ -149,7 +174,7 @@ namespace ValveResourceFormat.Renderer
             var allPaused = true;
             foreach (var clip in clips.Values)
             {
-                if (!clip.IsPaused)
+                if (clip.LayerOwner == null && !clip.IsPaused)
                 {
                     allPaused = false;
                     break;
@@ -198,6 +223,110 @@ namespace ValveResourceFormat.Renderer
                 }
                 Debug.Assert(sum > 0f, "Total blend weight should be greater than zero.");
                 Debug.Assert(Math.Abs(sum - 1f) < 0.01f, $"Total blend weight should be approximately 1. Found: {sum}");
+            }
+
+            // Runs last: earlier steps above zero out every clip but the active/previous pair, and an
+            // auto layer's weight must win over that.
+            UpdateAutoLayerClips();
+        }
+
+        /// <summary>
+        /// Recomputes every auto layer clip's playback time and blend weight from its owner clip's
+        /// current cycle position, so <see cref="GetBlendedFrame"/> can blend it in like any other clip.
+        /// </summary>
+        private void UpdateAutoLayerClips()
+        {
+            foreach (var clip in clips.Values)
+            {
+                if (clip.Layer is not { } layer || clip.LayerOwner is not { } owner)
+                {
+                    continue;
+                }
+
+                var ownerCycleFrames = owner.Animation.CycleFrames;
+                var cycle = 0f;
+
+                if (ownerCycleFrames > 0)
+                {
+                    var (_, frame, remainder) = owner.Animation.GetCyclePosition(owner.Time);
+                    cycle = (frame + remainder) / ownerCycleFrames;
+                }
+
+                clip.Weight = EvaluateAutoLayerWeight(layer, cycle) * owner.Weight;
+                clip.Time = cycle * clip.Animation.CycleDuration;
+            }
+        }
+
+        /// <summary>
+        /// Evaluates an auto layer's blend curve at a point in its owner's normalized cycle (0 at the
+        /// first frame, 1 at the last): a trapezoid rising from <see cref="AnimationAutoLayer.Start"/> to
+        /// <see cref="AnimationAutoLayer.Peak"/> and falling from <see cref="AnimationAutoLayer.Tail"/> to
+        /// <see cref="AnimationAutoLayer.End"/>, full weight throughout when start and end coincide (an
+        /// always-on "add" layer, as opposed to a ramped "blend" layer).
+        /// </summary>
+        private static float EvaluateAutoLayerWeight(AnimationAutoLayer layer, float cycle)
+        {
+            if (layer.Start == layer.End)
+            {
+                return 1f;
+            }
+
+            if (layer.NoBlend)
+            {
+                return cycle >= layer.Start && cycle <= layer.End ? 1f : 0f;
+            }
+
+            var rising = layer.Start != layer.Peak ? (cycle - layer.Start) / (layer.Peak - layer.Start) : 1f;
+            var falling = layer.Tail != layer.End ? (layer.End - cycle) / (layer.End - layer.Tail) : 1f;
+
+            var weight = Math.Clamp(Math.Min(rising, falling), 0f, 1f);
+
+            if (layer.Spline)
+            {
+                weight = weight * weight * (3f - 2f * weight);
+            }
+
+            return weight;
+        }
+
+        /// <summary>
+        /// Adds a clip for each of <paramref name="sequence"/>'s auto layers whose target resolves
+        /// through <see cref="AnimationLookup"/>, keyed off <paramref name="ownerKey"/> so a warped
+        /// re-entry of the same sequence gets its own set of layer clips. Pose-parameter-driven layers
+        /// are skipped: nothing here supplies a live pose parameter value to drive them.
+        /// </summary>
+        private void CreateAutoLayerClips(string ownerKey, PlaybackClip owner, SequenceAnimation sequence)
+        {
+            for (var i = 0; i < sequence.AutoLayers.Length; i++)
+            {
+                var layer = sequence.AutoLayers[i];
+
+                if (layer.Pose || string.IsNullOrEmpty(layer.ReferencedAnimationName))
+                {
+                    continue;
+                }
+
+                var referenced = AnimationLookup?.Invoke(layer.ReferencedAnimationName);
+
+                if (referenced == null)
+                {
+                    continue;
+                }
+
+                var key = $"{ownerKey}$autolayer{i}";
+
+                if (!clips.TryGetValue(key, out var layerClip))
+                {
+                    layerClip = new PlaybackClip(referenced) { Looping = true };
+                    clips[key] = layerClip;
+                }
+
+                // A layer is additive either because studiomdl marked it so, or because the sequence it
+                // targets is itself authored as a delta (its frames already are per-bone deltas).
+                layerClip.IsAdditive = layer.Subtract || referenced.IsAdditive;
+                layerClip.BoneMask = referenced is SequenceAnimation referencedSequence ? referencedSequence.BoneMaskName : string.Empty;
+                layerClip.Layer = layer;
+                layerClip.LayerOwner = owner;
             }
         }
 
@@ -327,7 +456,13 @@ namespace ValveResourceFormat.Renderer
             // Check if clip already exists
             if (!clips.TryGetValue(animName, out var newClip))
             {
-                newClip = new PlaybackClip(animation) { Looping = looping, BlendTime = blendTime, IsAdditive = animation.IsAdditive };
+                newClip = new PlaybackClip(animation)
+                {
+                    Looping = looping,
+                    BlendTime = blendTime,
+                    IsAdditive = animation.IsAdditive,
+                    BoneMask = animation is SequenceAnimation { BoneMaskName.Length: > 0 } newSequence ? newSequence.BoneMaskName : string.Empty,
+                };
                 clips[animName] = newClip;
 
                 PrewarmAnimationSounds(animation);
@@ -339,6 +474,11 @@ namespace ValveResourceFormat.Renderer
 
                 newClip.IsPaused = false;
                 newClip.Frame = 0;
+            }
+
+            if (animation is SequenceAnimation { AutoLayers.Length: > 0 } sequence)
+            {
+                CreateAutoLayerClips(animName, newClip, sequence);
             }
 
             if (activeClip == newClip)

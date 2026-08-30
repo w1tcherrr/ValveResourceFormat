@@ -94,6 +94,12 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation
         public AnimationFetch? Fetch { get; }
 
         /// <summary>
+        /// Gets the name of the bone mask (<c>m_nLocalWeightlist</c>) this sequence plays with. Empty
+        /// for the default mask every animation gets unless it names one of its own.
+        /// </summary>
+        public string BoneMaskName { get; } = string.Empty;
+
+        /// <summary>
         /// Gets whether this sequence blends between several animations along a pose parameter
         /// instead of playing a single one.
         /// </summary>
@@ -157,7 +163,8 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation
         /// <summary>
         /// Constructor for creating animation from sequence descriptor (ASEQ) and animation data (ANIM).
         /// </summary>
-        private SequenceAnimation(KVObject seqDesc, KVObject? animDesc, AnimationSegmentDecoder?[] segmentArray)
+        private SequenceAnimation(KVObject seqDesc, KVObject? animDesc, AnimationSegmentDecoder?[] segmentArray,
+            string[] sequenceNameArray, string[] boneMaskNames)
         {
             // Name and metadata from sequence descriptor
             Name = seqDesc.GetStringProperty("m_sName");
@@ -221,11 +228,23 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation
             AutoLayers = new AnimationAutoLayer[autoLayerArray.Count];
             for (var i = 0; i < autoLayerArray.Count; i++)
             {
-                AutoLayers[i] = new AnimationAutoLayer(autoLayerArray[i]);
+                var layer = new AnimationAutoLayer(autoLayerArray[i]);
+
+                if (layer.LocalReference >= 0 && layer.LocalReference < sequenceNameArray.Length)
+                {
+                    layer.ReferencedAnimationName = sequenceNameArray[layer.LocalReference];
+                }
+
+                AutoLayers[i] = layer;
             }
 
             var fetch = seqDesc.GetSubCollection("m_fetch");
             Fetch = new AnimationFetch(fetch);
+
+            var weightListIndex = seqDesc.GetInt32Property("m_nLocalWeightlist");
+            BoneMaskName = weightListIndex > 0 && weightListIndex < boneMaskNames.Length
+                ? boneMaskNames[weightListIndex]
+                : string.Empty;
 
             FromSequence = true;
         }
@@ -374,6 +393,13 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation
             var segmentArray = BuildSegmentArray(animationData, decodeKey, skeleton, flexControllers);
             var sequenceNameArray = sequenceData.GetArray<string>("m_localSequenceNameArray");
 
+            var boneMaskArray = sequenceData.GetArray("m_localBoneMaskArray");
+            var boneMaskNames = new string[boneMaskArray?.Count ?? 0];
+            for (var i = 0; i < boneMaskNames.Length; i++)
+            {
+                boneMaskNames[i] = boneMaskArray![i].GetStringProperty("m_sName");
+            }
+
             // The sequence group's name table spells the same animation both ways in places, and the
             // compiler resolves it regardless of case.
             var animLookup = new Dictionary<string, KVObject>(StringComparer.OrdinalIgnoreCase);
@@ -448,7 +474,7 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation
                 var seqName = seqDesc.GetStringProperty("m_sName");
                 processedAnimNames.Add(seqName);
 
-                animations.Add(new SequenceAnimation(seqDesc, animDesc, segmentArray) { TargetSkeletonName = skeleton.Name });
+                animations.Add(new SequenceAnimation(seqDesc, animDesc, segmentArray, sequenceNameArray, boneMaskNames) { TargetSkeletonName = skeleton.Name });
             }
 
             // Add remaining animations not already output as sequences

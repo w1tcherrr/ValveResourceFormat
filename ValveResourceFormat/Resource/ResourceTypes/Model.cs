@@ -466,6 +466,59 @@ namespace ValveResourceFormat.ResourceTypes
         }
 
         /// <summary>
+        /// Gets the named bone masks (<c>m_localBoneMaskArray</c>) from the model's embedded sequence
+        /// group, mapping each mask name to its per-bone weights. A sequence names the mask it plays
+        /// with through <see cref="SequenceAnimation.BoneMaskName"/>. Empty for a model without legacy
+        /// (AG1) sequence data.
+        /// </summary>
+        public Dictionary<string, Dictionary<string, float>> GetBoneMasks()
+        {
+            var ctrl = Resource.GetBlockByType(BlockType.CTRL) as BinaryKV3;
+            var embeddedAnimation = ctrl?.Data.Root.GetSubCollection("embedded_animation");
+            var seqGroupDataBlockIndex = embeddedAnimation != null
+                ? (int)embeddedAnimation.GetIntegerProperty("seqgroup_data_block")
+                : 0;
+
+            if (seqGroupDataBlockIndex <= 0)
+            {
+                return [];
+            }
+
+            var sequenceDataBlock = Resource.GetBlockByIndex(seqGroupDataBlockIndex) as KeyValuesOrNTRO;
+            var boneMaskArray = sequenceDataBlock?.Data.GetArray("m_localBoneMaskArray");
+            var boneNameArray = sequenceDataBlock?.Data.GetArray<string>("m_localBoneNameArray");
+
+            if (boneMaskArray == null || boneNameArray == null)
+            {
+                return [];
+            }
+
+            var masks = new Dictionary<string, Dictionary<string, float>>(boneMaskArray.Count);
+
+            foreach (var boneMask in boneMaskArray)
+            {
+                var boneIndices = boneMask.GetIntegerArray("m_nLocalBoneArray");
+
+                if (boneIndices.Length == 0)
+                {
+                    continue;
+                }
+
+                var boneWeights = boneMask.GetFloatArray("m_flBoneWeightArray");
+                var weights = new Dictionary<string, float>(boneIndices.Length);
+
+                for (var i = 0; i < boneIndices.Length; i++)
+                {
+                    weights[boneNameArray[(int)boneIndices[i]]] = boneWeights[i];
+                }
+
+                masks[boneMask.GetStringProperty("m_sName")] = weights;
+            }
+
+            return masks;
+        }
+
+        /// <summary>
         /// Get the embedded animations with a different skeleton as animation target.
         /// </summary>
         public static IEnumerable<Animation> GetEmbeddedAnimationsWithSkeleton(IFileLoader fileLoader, Skeleton skeleton, Model model)

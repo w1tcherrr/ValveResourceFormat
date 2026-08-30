@@ -72,6 +72,25 @@ namespace ValveResourceFormat.Renderer
         /// <summary>Gets or sets whether animations should loop when reaching the end.</summary>
         public bool Looping { get; set; } = true;
 
+        /// <summary>
+        /// Optional resolver from an animation or sequence name to the loaded <see cref="Animation"/>
+        /// instance, used to resolve an auto layer's <see cref="AnimationAutoLayer.ReferencedAnimationName"/>
+        /// to the clip it plays.
+        /// </summary>
+        public Func<string, Animation?>? AnimationLookup
+        {
+            get => modelPlayer.AnimationLookup;
+            set
+            {
+                modelPlayer.AnimationLookup = value;
+
+                foreach (var external in externalSkeletons.Values)
+                {
+                    external.Player.AnimationLookup = value;
+                }
+            }
+        }
+
         /// <summary>Gets the currently active animation, or <see langword="null"/> if none is set.</summary>
         public Animation? ActiveAnimation => player.ActiveAnimation;
 
@@ -337,6 +356,7 @@ namespace ValveResourceFormat.Renderer
             var externalPlayer = new AnimationPlayer(skeleton, [], bindPose, bindPose.AsSpan().ToArray())
             {
                 ResolvePosition = ResolvePosition,
+                AnimationLookup = AnimationLookup,
             };
 
             externalSkeletons[skeletonName] = new(externalPlayer, retargeter);
