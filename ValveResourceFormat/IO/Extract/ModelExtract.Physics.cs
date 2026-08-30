@@ -1,5 +1,8 @@
+using System.IO;
+using System.Linq;
 using ValveKeyValue;
 using ValveResourceFormat.ResourceTypes;
+using ValveResourceFormat.ResourceTypes.ModelData;
 using ValveResourceFormat.ResourceTypes.RubikonPhysics;
 using ValveResourceFormat.Serialization.KeyValues;
 using static ValveResourceFormat.IO.KVHelpers;
@@ -80,6 +83,236 @@ partial class ModelExtract
         if (!string.IsNullOrEmpty(shape.HitGroupName) && shape.HitGroupName != "HITGROUP_INVALID")
         {
             node.Add("hitgroupname", shape.HitGroupName);
+        }
+    }
+
+    private void AddPhysicsShapeFileNodes(ModelDocLists lists)
+    {
+        if (PhysHullsToExtract.Count > 0 || PhysMeshesToExtract.Count > 0)
+        {
+            if (Type == ModelExtractType.Map_PhysicsToRenderMesh)
+            {
+                if (PhysicsToRenderMaterialNameProvider is null)
+                {
+                    RemapMaterials(lists, globalReplace: true);
+                }
+                else
+                {
+                    var remapTable = SurfaceTagCombos.ToDictionary(
+                        combo => combo.StringMaterial,
+                        combo => PhysicsToRenderMaterialNameProvider(combo)
+                    );
+                    RemapMaterials(lists, remapTable, globalReplace: false);
+                }
+            }
+
+            foreach (var (physHull, fileName, parentBone, _) in PhysHullsToExtract)
+            {
+                AddPhysMeshNode(lists, physHull, fileName, parentBone);
+            }
+
+            foreach (var (physMesh, fileName, parentBone, _) in PhysMeshesToExtract)
+            {
+                AddPhysMeshNode(lists, physMesh, fileName, parentBone);
+            }
+        }
+    }
+
+    private void AddPhysicsBodyNodes(ModelDocLists lists)
+    {
+        if (physAggregateData is not null)
+        {
+            // Bones that already carry body markup as game data round-trip their mass through it, and the
+            // compiler rejects a second markup for the same body. The lookup is case-insensitive because
+            // resourcecompiler matches target_body to the existing markup's bone name that way.
+            var existingMarkupBones = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var physicsBodyMarkupData = model?.KeyValues.GetSubCollection("CPhysicsBodyGameMarkupData");
+            var physicsBodyMarkupByBoneName = physicsBodyMarkupData?.GetSubCollection("m_PhysicsBodyMarkupByBoneName");
+
+            if (physicsBodyMarkupByBoneName != null)
+            {
+                foreach (var (boneName, _) in physicsBodyMarkupByBoneName)
+                {
+                    existingMarkupBones.Add(boneName);
+                }
+            }
+
+            for (var i = 0; i < physAggregateData.Parts.Length; i++)
+            {
+                var physicsPart = physAggregateData.Parts[i];
+                var parentBone = physAggregateData.GetParentBoneName(i);
+
+                var hasOverrides = physicsPart.Mass != 0f
+                    || physicsPart.InertiaScale != 1f
+                    || physicsPart.LinearDamping != 0f
+                    || physicsPart.AngularDamping != 0f
+                    || physicsPart.OverrideMassCenter;
+
+                if (hasOverrides && !existingMarkupBones.Contains(parentBone))
+                {
+                    var bodyMarkup = MakeNode("PhysicsBodyMarkup", ("target_body", parentBone));
+
+                    if (physicsPart.Mass != 0f)
+                    {
+                        bodyMarkup.Add("mass_override", physicsPart.Mass);
+                    }
+
+                    if (physicsPart.InertiaScale != 1f)
+                    {
+                        bodyMarkup.Add("inertia_scale", physicsPart.InertiaScale);
+                    }
+
+                    if (physicsPart.LinearDamping != 0f)
+                    {
+                        bodyMarkup.Add("linear_damping", physicsPart.LinearDamping);
+                    }
+
+                    if (physicsPart.AngularDamping != 0f)
+                    {
+                        bodyMarkup.Add("angular_damping", physicsPart.AngularDamping);
+                    }
+
+                    if (physicsPart.OverrideMassCenter)
+                    {
+                        bodyMarkup.Add("use_mass_center_override", true);
+                        bodyMarkup.Add("mass_center_override", ToKVArray(physicsPart.MassCenterOverride));
+                    }
+
+                    lists.PhysicsBodyMarkup.Add(bodyMarkup);
+                }
+
+                foreach (var sphere in physicsPart.Shape.Spheres)
+                {
+                    var physicsShapeSphere = MakeNode(
+                        "PhysicsShapeSphere",
+                        ("parent_bone", parentBone),
+                        ("surface_prop", PhysicsSurfaceNames[sphere.SurfacePropertyIndex]),
+                        ("collision_tags", string.Join(" ", PhysicsCollisionTags[sphere.CollisionAttributeIndex])),
+                        ("radius", sphere.Shape.Radius),
+                        ("center", ToKVArray(sphere.Shape.Center)),
+                        ("name", sphere.UserFriendlyName ?? string.Empty)
+                    );
+
+                    AddHitGroup(physicsShapeSphere, sphere);
+
+                    lists.PhysicsShapes.Add(physicsShapeSphere);
+                }
+
+                foreach (var capsule in physicsPart.Shape.Capsules)
+                {
+                    var physicsShapeCapsule = MakeNode(
+                        "PhysicsShapeCapsule",
+                        ("parent_bone", parentBone),
+                        ("surface_prop", PhysicsSurfaceNames[capsule.SurfacePropertyIndex]),
+                        ("collision_tags", string.Join(" ", PhysicsCollisionTags[capsule.CollisionAttributeIndex])),
+                        ("radius", capsule.Shape.Radius),
+                        ("point0", ToKVArray(capsule.Shape.Center[0])),
+                        ("point1", ToKVArray(capsule.Shape.Center[1])),
+                        ("name", capsule.UserFriendlyName ?? string.Empty)
+                    );
+
+                    AddHitGroup(physicsShapeCapsule, capsule);
+
+                    lists.PhysicsShapes.Add(physicsShapeCapsule);
+                }
+            }
+
+            foreach (var joint in physAggregateData.Joints)
+            {
+                var jointNode = BuildPhysicsJoint(physAggregateData, joint);
+
+                if (jointNode is not null)
+                {
+                    lists.PhysicsJoints.Add(jointNode);
+                }
+            }
+        }
+    }
+
+    private void AddPhysMeshNode<TShape>(ModelDocLists lists, ShapeDescriptor<TShape> shapeDesc, string fileName, string parentBone)
+        where TShape : struct
+    {
+        var surfacePropName = PhysicsSurfaceNames[shapeDesc.SurfacePropertyIndex];
+        var collisionTags = PhysicsCollisionTags[shapeDesc.CollisionAttributeIndex];
+
+        if (Type == ModelExtractType.Map_PhysicsToRenderMesh)
+        {
+            lists.RenderMeshes.Add(MakeNode("RenderMeshFile", ("filename", fileName)));
+            return;
+        }
+
+        var className = shapeDesc switch
+        {
+            HullDescriptor => "PhysicsHullFile",
+            MeshDescriptor => "PhysicsMeshFile",
+            _ => throw new NotImplementedException()
+        };
+
+        var shapeName = shapeDesc.UserFriendlyName ?? Path.GetFileNameWithoutExtension(fileName);
+
+        // TODO: per faceSet surface_prop
+        var physicsShapeFile = MakeNode(
+            className,
+            ("filename", fileName),
+            ("parent_bone", parentBone),
+            ("surface_prop", surfacePropName),
+            ("collision_tags", string.Join(" ", collisionTags)),
+            ("name", shapeName)
+        );
+
+        AddHitGroup(physicsShapeFile, shapeDesc);
+
+        lists.PhysicsShapes.Add(physicsShapeFile);
+    }
+
+    private static KVObject GetHitboxNode(Hitbox hitbox)
+    {
+        var node = hitbox.ShapeType switch
+        {
+            Hitbox.HitboxShape.Box => MakeNode("Hitbox",
+                ("hitbox_mins", ToKVArray(hitbox.MinBounds)),
+                ("hitbox_maxs", ToKVArray(hitbox.MaxBounds))
+            ),
+            Hitbox.HitboxShape.Capsule => MakeNode("HitboxCapsule",
+                ("radius", hitbox.ShapeRadius),
+                ("point0", ToKVArray(hitbox.MinBounds)),
+                ("point1", ToKVArray(hitbox.MaxBounds))
+            ),
+            Hitbox.HitboxShape.Sphere => MakeNode("HitboxSphere",
+                ("center", ToKVArray(hitbox.MinBounds)),
+                ("radius", hitbox.ShapeRadius)
+            ),
+            _ => throw new NotImplementedException($"Unknown hitbox shape type: {hitbox.ShapeType}")
+        };
+
+        node.Add("name", hitbox.Name);
+        node.Add("parent_bone", hitbox.BoneName);
+        node.Add("surface_property", hitbox.SurfaceProperty);
+        node.Add("translation_only", hitbox.TranslationOnly);
+        node.Add("group_id", hitbox.GroupId);
+
+        return node;
+    }
+
+    private static void AddHitboxSetNodes(Model model, ModelDocLists lists)
+    {
+        if (model.HitboxSets == null)
+        {
+            return;
+        }
+
+        foreach (var pair in model.HitboxSets)
+        {
+            var children = KVObject.Array();
+            var hitboxSet = MakeNode("HitboxSet", ("name", pair.Key), ("children", children));
+
+            foreach (var hitbox in pair.Value)
+            {
+                var hitboxNode = GetHitboxNode(hitbox);
+                children.Add(hitboxNode);
+            }
+
+            lists.HitboxSets.Add(hitboxSet);
         }
     }
 }

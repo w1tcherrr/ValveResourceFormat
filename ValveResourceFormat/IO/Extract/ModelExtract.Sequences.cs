@@ -367,4 +367,486 @@ partial class ModelExtract
             ]);
         }
     }
+
+    /// <summary>
+    /// The sequence tables a model doc's animation nodes are rebuilt from, read once from the model's
+    /// ASEQ block. Every member is empty for a model that carries no sequences.
+    /// </summary>
+    private readonly record struct SequenceTables(
+        KeyValuesOrNTRO? Block,
+        Dictionary<string, KVObject> BySequenceName,
+        string[]? LocalSequenceNames,
+        string[]? PoseParamNames,
+        string[]? BoneMaskNames);
+
+    /// <summary>
+    /// Reads the sequence tables and emits the doc nodes that stand on their own: weight lists, scale
+    /// sets and pose parameters. The sequences that reference them are written by
+    /// <see cref="AddAnimationNodes"/>.
+    /// </summary>
+    private SequenceTables ReadSequenceTables(ModelDocLists lists)
+    {
+        var block = model?.Resource?.GetBlockByType(BlockType.ASEQ) as KeyValuesOrNTRO;
+        var bySequenceName = new Dictionary<string, KVObject>();
+
+        if (block?.Data is not KVObject sequenceData)
+        {
+            return new SequenceTables(block, bySequenceName, null, null, null);
+        }
+
+        AddWeightListNodes(lists, block);
+        AddScaleSetNodes(lists, block);
+
+        foreach (var data in sequenceData.GetArray("m_localS1SeqDescArray"))
+        {
+            bySequenceName.Add(data.GetStringProperty("m_sName"), data);
+        }
+
+        var poseParams = sequenceData.GetArray("m_localPoseParamArray");
+        AddPoseParamNodes(lists, poseParams);
+
+        return new SequenceTables(
+            block,
+            bySequenceName,
+            sequenceData.GetArray<string>("m_localSequenceNameArray"),
+            [.. poseParams.Select(x => x.GetStringProperty("m_sName"))],
+            [.. sequenceData.GetArray("m_localBoneMaskArray").Select(x => x.GetStringProperty("m_sName"))]);
+    }
+
+    private void AddAnimationNodes(ModelDocLists lists, SequenceTables tables)
+    {
+        if (AnimationsToExtract.Count > 0 || tables.BySequenceName.Count > 0)
+        {
+            var animationToFolder = new Dictionary<string, KVObject>(AnimationsToExtract.Count);
+            if (tables.Block?.Data.GetSubCollection("m_keyValues") is KVObject sequenceKeyValues)
+            {
+                if (sequenceKeyValues.GetSubCollection("faceposer_folders") is KVObject faceposerFolders)
+                {
+                    foreach (var (folderName, _) in faceposerFolders)
+                    {
+                        var animationNames = faceposerFolders.GetArray<string>(folderName);
+
+                        var (folderNode, children) = MakeListNode("Folder");
+                        folderNode.Add("name", folderName);
+                        lists.Animations.Add(folderNode);
+
+                        foreach (var animationName in animationNames!)
+                        {
+                            animationToFolder.Add(animationName, children);
+                        }
+                    }
+                }
+            }
+
+            void AddToFolderOrRoot(string name, KVObject node)
+            {
+                var folderOrRoot = animationToFolder.GetValueOrDefault(name, lists.Animations);
+                folderOrRoot.Add(node);
+            }
+
+            var nodeNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var animation in AnimationsToExtract)
+            {
+                nodeNames.Add(animation.Anim.Name);
+            }
+
+            foreach (var name in tables.BySequenceName.Keys)
+            {
+                nodeNames.Add(name);
+            }
+
+            foreach (var (name, aseq) in tables.BySequenceName)
+            {
+                // A sequence that plays no animation directly is either the true bind pose (compiled
+                // with a "bind_pose" flag) or an EmptyAnim: a synthetic base of a declared length that
+                // exists only to carry auto layers, compiled with an explicit frame count and rate
+                // instead. Both compile from a node with no source_filename, so a decompile can only
+                // tell them apart by which one of those two the compiler already wrote back.
+                var playsNothing = aseq.GetSubCollection("m_fetch").GetIntegerArray("m_localReferenceArray").Length == 0;
+                var sequenceKeys = aseq.GetSubCollection("m_SequenceKeys");
+
+                if (playsNothing || sequenceKeys?.GetBooleanProperty("bind_pose") == true)
+                {
+                    var emptyAnimKeys = sequenceKeys?.GetSubCollection("keyvalues");
+                    var isEmptyAnim = emptyAnimKeys != null && emptyAnimKeys.TryGetValue("numframes", out _);
+
+                    var transition = aseq.GetSubCollection("m_transition");
+                    var bindPoseFlags = aseq.GetSubCollection("m_flags");
+                    var bindPose = MakeNode(isEmptyAnim ? "EmptyAnim" : "AnimBindPose",
+                        ("name", name),
+                        ("fade_in_time", transition.GetFloatProperty("m_flFadeInTime")),
+                        ("fade_out_time", transition.GetFloatProperty("m_flFadeOutTime")),
+                        ("looping", bindPoseFlags.GetBooleanProperty("m_bLooping")),
+                        ("delta", bindPoseFlags.GetBooleanProperty("m_bLegacyDelta")),
+                        ("worldSpace", bindPoseFlags.GetBooleanProperty("m_bLegacyWorldspace")),
+                        ("hidden", bindPoseFlags.GetBooleanProperty("m_bHidden"))
+                    );
+
+                    var frameCount = 0;
+
+                    if (isEmptyAnim)
+                    {
+                        frameCount = emptyAnimKeys!.GetInt32Property("numframes");
+                        bindPose.Add("frame_count", frameCount);
+                        bindPose.Add("frame_rate", emptyAnimKeys!.GetFloatProperty("fps"));
+                    }
+
+                    var bindPoseWeightList = GetWeightListName(name, tables.BySequenceName, tables.BoneMaskNames);
+
+                    if (bindPoseWeightList != null)
+                    {
+                        bindPose.Add("weight_list_name", bindPoseWeightList);
+                    }
+
+                    var bindPoseChildren = KVObject.Array();
+
+                    AddActivities(bindPose, bindPoseChildren, [.. aseq.GetArray("m_activityArray")
+                        .Select(activity => (activity.GetStringProperty("m_name"), activity.GetInt32Property("m_nWeight")))]);
+
+                    if (isEmptyAnim && tables.LocalSequenceNames != null)
+                    {
+                        foreach (var autoLayerKV in aseq.GetArray("m_autoLayerArray"))
+                        {
+                            var autoLayer = new AnimationAutoLayer(autoLayerKV);
+                            bindPoseChildren.Add(ProcessAnimationAutoLayer(frameCount, autoLayer, tables.LocalSequenceNames, tables.PoseParamNames ?? [], nodeNames));
+                        }
+                    }
+
+                    if (ProcessFaceposerKeys(sequenceKeys) is KVObject bindPoseFaceposerKeys)
+                    {
+                        bindPoseChildren.Add(bindPoseFaceposerKeys);
+                    }
+
+                    if (bindPoseChildren.Count > 0)
+                    {
+                        bindPose.Add("children", bindPoseChildren);
+                    }
+
+                    AddToFolderOrRoot(name, bindPose);
+                }
+            }
+
+            var sequences = AnimationsToExtract.Where(x => x.Anim.FromSequence);
+            foreach (var animation in sequences)
+            {
+                if (animation.Anim.IsBlend && tables.LocalSequenceNames != null && tables.PoseParamNames != null)
+                {
+                    var blendAnimEvents = tables.BySequenceName.TryGetValue(animation.Anim.Name, out var blendSequenceData)
+                        && blendSequenceData.GetSubCollection("m_SequenceKeys")?.GetBooleanProperty("blend_anim_events") == true;
+
+                    var blendNode = ProcessBlendSequence(animation.Anim, tables.LocalSequenceNames, tables.PoseParamNames, nodeNames, blendAnimEvents);
+                    var blendWeightList = GetWeightListName(animation.Anim.Name, tables.BySequenceName, tables.BoneMaskNames);
+
+                    if (blendWeightList != null)
+                    {
+                        blendNode.Add("weight_list_name", blendWeightList);
+                    }
+
+                    AddToFolderOrRoot(animation.Anim.Name, blendNode);
+                    continue;
+                }
+
+                var animationFile = MakeNode(
+                    "AnimFile",
+                    ("name", animation.Anim.Name),
+                    ("source_filename", animation.FileName),
+                    ("fade_in_time", animation.Anim.SequenceParams.FadeInTime),
+                    ("fade_out_time", animation.Anim.SequenceParams.FadeOutTime),
+                    ("looping", animation.Anim.IsLooping),
+                    ("delta", animation.Anim.Delta),
+                    ("worldSpace", animation.Anim.Worldspace),
+                    ("hidden", animation.Anim.Hidden)
+                );
+
+                var childrenKV = KVObject.Array();
+
+                AddActivities(animationFile, childrenKV, animation.Anim);
+
+                var weightList = GetWeightListName(animation.Anim.Name, tables.BySequenceName, tables.BoneMaskNames);
+
+                if (weightList != null)
+                {
+                    animationFile.Add("weight_list_name", weightList);
+                }
+
+                foreach (var localHierarchy in animation.Anim.LocalHierarchy)
+                {
+                    childrenKV.Add(MakeNode("LocalHierarchy",
+                        ("bone_name", localHierarchy.Bone),
+                        ("new_parent_bone_name", localHierarchy.NewParent),
+                        ("start_frame", localHierarchy.StartFrame),
+                        ("peak_frame", localHierarchy.PeakFrame),
+                        ("tail_frame", localHierarchy.TailFrame),
+                        ("end_frame", localHierarchy.EndFrame)
+                    ));
+                }
+
+                if (model != null)
+                {
+                    foreach (var boneScale in ProcessBoneScales(model.Skeleton, model.FlexControllers, animation.Anim))
+                    {
+                        childrenKV.Add(boneScale);
+                    }
+                }
+
+                if (animation.Anim.HasMovementData())
+                {
+                    var flags = animation.Anim.Movements[0].MotionFlags;
+                    var extractMotion = MakeNode("ExtractMotion",
+                        ("extract_tx", flags.HasFlag(ModelAnimationMotionFlags.TX)),
+                        ("extract_ty", flags.HasFlag(ModelAnimationMotionFlags.TY)),
+                        // never extract vertical. on recompile it makes the compiler counter-bake the root
+                        // and float the whole model up. the engine doesn't apply vertical root motion.
+                        ("extract_tz", false),
+                        ("extract_rz", flags.HasFlag(ModelAnimationMotionFlags.RZ)),
+                        ("linear", flags.HasFlag(ModelAnimationMotionFlags.Linear)),
+                        ("quadratic", false),
+                        ("motion_type", "uniform")
+                    );
+
+                    childrenKV.Add(extractMotion);
+                }
+                foreach (var animEvent in animation.Anim.Events)
+                {
+                    var animEventNode = MakeNode("AnimEvent",
+                        ("event_class", animEvent.Name),
+                        ("event_frame", animEvent.Frame)
+                    );
+
+                    if (animEvent.EndFrame != -1)
+                    {
+                        animEventNode.Add("event_end_frame", animEvent.EndFrame);
+                    }
+
+                    if (animEvent.Duration != 0f)
+                    {
+                        animEventNode.Add("event_duration", animEvent.Duration);
+                    }
+
+                    if (animEvent.EventData != null)
+                    {
+                        animEventNode.Add("event_keys", animEvent.EventData);
+                    }
+                    childrenKV.Add(animEventNode);
+                }
+
+                if (tables.LocalSequenceNames != null && tables.PoseParamNames != null)
+                {
+                    foreach (var autoLayer in animation.Anim.AutoLayers)
+                    {
+                        var layerNode = ProcessAnimationAutoLayer(animation.Anim.CycleFrames, autoLayer, tables.LocalSequenceNames, tables.PoseParamNames, nodeNames);
+                        childrenKV.Add(layerNode);
+                    }
+                }
+
+                if (animation.Anim.Autoplay)
+                {
+                    var autoLayer = MakeNode("AnimAutoLayer");
+                    childrenKV.Add(autoLayer);
+                }
+
+                if (tables.PoseParamNames != null && animation.Anim.Fetch != null && animation.Anim.Fetch.Value.LocalCyclePoseParameter != -1)
+                {
+                    var poseParamIndex = animation.Anim.Fetch.Value.LocalCyclePoseParameter;
+                    var poseParam = tables.PoseParamNames[poseParamIndex];
+
+                    var autoLayer = MakeNode("AnimCycleOverride", [
+                        ("cycle_type", "Pose To Cycle"),
+                        ("pose_param_name", poseParam),
+                    ]);
+                    childrenKV.Add(autoLayer);
+                }
+
+                if (animation.Anim.Realtime)
+                {
+                    var autoLayer = MakeNode("AnimCycleOverride", [
+                        ("cycle_type", "Auto Cycle"),
+                        ("pose_param_name", ""),
+                    ]);
+                    childrenKV.Add(autoLayer);
+                }
+
+                if (tables.BySequenceName.TryGetValue(animation.Anim.Name, out var animSequenceData))
+                {
+                    var sequenceKeys = animSequenceData.GetSubCollection("m_SequenceKeys");
+                    if (sequenceKeys != null)
+                    {
+                        // other keys seen:
+                        // bind_pose = true
+
+                        if (sequenceKeys.GetSubCollection("AnimGameplayTiming") is KVObject animGameplayTiming)
+                        {
+                            childrenKV.Add(MakeNode("AnimGameplayTiming", animGameplayTiming));
+                        }
+
+                        if (ProcessFaceposerKeys(sequenceKeys) is KVObject faceposerKeys)
+                        {
+                            childrenKV.Add(faceposerKeys);
+                        }
+                    }
+                }
+
+                if (childrenKV.Count > 0)
+                {
+                    animationFile.Add("children", childrenKV);
+                }
+
+                AddToFolderOrRoot(animation.Anim.Name, animationFile);
+            }
+        }
+    }
+
+    private static void AddWeightListNodes(ModelDocLists lists, KeyValuesOrNTRO sequenceData)
+    {
+        var boneMasks = sequenceData.Data.GetArray("m_localBoneMaskArray");
+        var boneNames = sequenceData.Data.GetArray<string>("m_localBoneNameArray");
+
+        foreach (var boneMask in boneMasks!)
+        {
+            var name = boneMask.GetStringProperty("m_sName");
+            var boneArray = boneMask.GetIntegerArray("m_nLocalBoneArray");
+            var boneWeights = boneMask.GetFloatArray("m_flBoneWeightArray");
+            var masterMorphWeight = boneMask.GetFloatProperty("m_flDefaultMorphCtrlWeight", 1f);
+            var morphCtrlWeightArray = boneMask.GetArray("m_morphCtrlWeightArray");
+
+            // skip a default mask that carries nothing but its schema defaults
+            if (name == "default" && boneArray.Length == 0 && masterMorphWeight == 1f
+                && (morphCtrlWeightArray == null || morphCtrlWeightArray.Count == 0))
+            {
+                continue;
+            }
+
+            var weights = KVObject.Array();
+            var morphWeights = KVObject.Array();
+            var weightListNode = MakeNode("WeightList",
+                ("name", name),
+                ("weights", weights),
+                ("master_morph_weight", masterMorphWeight),
+                ("morph_weights", morphWeights)
+            );
+
+            foreach (var (boneIndex, boneWeight) in boneArray.Zip(boneWeights))
+            {
+                var weightDefinition = KVObject.Collection();
+                var boneName = boneNames![boneIndex];
+
+                weightDefinition.Add("bone", boneName);
+                weightDefinition.Add("weight", boneWeight);
+                weights.Add(weightDefinition);
+            }
+
+            foreach (var morphWeightPair in morphCtrlWeightArray ?? [])
+            {
+                var morphWeightDefinition = KVObject.Collection();
+
+                morphWeightDefinition.Add("morph", (string)morphWeightPair[0]);
+                morphWeightDefinition.Add("weight", (float)morphWeightPair[1]);
+                morphWeights.Add(morphWeightDefinition);
+            }
+
+            lists.WeightLists.Add(weightListNode);
+        }
+    }
+
+    private void AddScaleSetNodes(ModelDocLists lists, KeyValuesOrNTRO sequenceData)
+    {
+        var scaleSets = sequenceData.Data.GetArray("m_localScaleSetArray");
+
+        if (scaleSets == null || scaleSets.Count == 0)
+        {
+            return;
+        }
+
+        var boneNames = sequenceData.Data.GetArray<string>("m_localBoneNameArray");
+        var bonesByName = model?.Skeleton.Bones.ToDictionary(static bone => bone.Name);
+
+        foreach (var scaleSet in scaleSets)
+        {
+            var boneArray = scaleSet.GetIntegerArray("m_nLocalBoneArray");
+            var boneScaleArray = scaleSet.GetFloatArray("m_flBoneScaleArray");
+            var rootOffsetArray = scaleSet.GetFloatArray("m_vRootOffset");
+            var rootOffset = new Vector3(rootOffsetArray[0], rootOffsetArray[1], rootOffsetArray[2]);
+
+            // The compiler divides each bone's authored scale by its nearest ancestor's authored
+            // scale (within this same scale set, defaulting to 1 with no such ancestor), so the
+            // compiled value is a scale relative to the set's own nearest scaled ancestor rather
+            // than an independent per-bone multiplier. Recover the authored value by inverting that
+            // walk up the skeleton, memoized since a deep chain revisits the same ancestors.
+            var compiledScaleByBone = new Dictionary<string, float>(boneArray.Length);
+
+            for (var i = 0; i < boneArray.Length; i++)
+            {
+                compiledScaleByBone[boneNames![boneArray[i]]] = boneScaleArray[i];
+            }
+
+            var authoredScaleByBone = new Dictionary<string, float>(boneArray.Length);
+
+            float GetAuthoredScale(string boneName)
+            {
+                if (authoredScaleByBone.TryGetValue(boneName, out var cached))
+                {
+                    return cached;
+                }
+
+                var parentScale = 1f;
+                var ancestor = bonesByName?.GetValueOrDefault(boneName)?.Parent;
+
+                while (ancestor != null)
+                {
+                    if (compiledScaleByBone.ContainsKey(ancestor.Name))
+                    {
+                        parentScale = GetAuthoredScale(ancestor.Name);
+                        break;
+                    }
+
+                    ancestor = ancestor.Parent;
+                }
+
+                var authored = compiledScaleByBone[boneName] * parentScale;
+                authoredScaleByBone[boneName] = authored;
+
+                return authored;
+            }
+
+            var scales = KVObject.Array();
+
+            foreach (var boneIndex in boneArray)
+            {
+                var boneName = boneNames![boneIndex];
+                var scaleDefinition = KVObject.Collection();
+                scaleDefinition.Add("bone", boneName);
+                scaleDefinition.Add("scale", GetAuthoredScale(boneName));
+                scales.Add(scaleDefinition);
+            }
+
+            lists.ScaleSets.Add(MakeNode("ScaleSet",
+                ("name", scaleSet.GetStringProperty("m_sName")),
+                ("root_offset", ToKVArray(rootOffset)),
+                ("scales", scales)
+            ));
+        }
+    }
+
+    private static void AddPoseParamNodes(ModelDocLists lists, IReadOnlyList<KVObject> poseParamsData)
+    {
+        foreach (var poseParam in poseParamsData)
+        {
+            var name = poseParam.GetStringProperty("m_sName");
+            var start = poseParam.GetFloatProperty("m_flStart");
+            var end = poseParam.GetFloatProperty("m_flEnd");
+            var loop = poseParam.GetFloatProperty("m_flLoop");
+            var looping = poseParam.GetBooleanProperty("m_bLooping");
+
+            var poseParamNode = MakeNode("PoseParam",
+                ("name", name),
+                ("poseparam_min", start),
+                ("poseparam_max", end),
+                ("poseparam_looping", looping),
+                ("poseparam_loop", loop)
+            );
+
+            lists.PoseParams.Add(poseParamNode);
+        }
+    }
 }
