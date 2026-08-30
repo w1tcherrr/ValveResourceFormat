@@ -101,10 +101,6 @@ namespace ValveResourceFormat.ResourceTypes.RubikonPhysics.Shapes
         public class Region
         {
             /// <summary>
-            /// Gets the region nodes.
-            /// </summary>
-            public object[]? Nodes { get; }
-            /// <summary>
             /// Gets the region data.
             /// </summary>
             public KVObject Data { get; }
@@ -115,7 +111,6 @@ namespace ValveResourceFormat.ResourceTypes.RubikonPhysics.Shapes
             public Region(KVObject data)
             {
                 Data = data;
-                Nodes = null; // TODO
             }
 
             /// <summary>
@@ -130,6 +125,20 @@ namespace ValveResourceFormat.ResourceTypes.RubikonPhysics.Shapes
                 }
 
                 return MemoryMarshal.Cast<byte, Plane>(Data.GetArray<byte>("m_Planes"));
+            }
+
+            /// <summary>
+            /// Raw node words of the region's compact SVM tree. The packing is not schema-enumerated
+            /// and has not been decoded, so these are exposed opaquely rather than as typed nodes.
+            /// </summary>
+            public ReadOnlySpan<uint> GetNodes()
+            {
+                if (Data.IsNotBlobType("m_Nodes"))
+                {
+                    return Data.GetArray<object>("m_Nodes").Select(Convert.ToUInt32).ToArray();
+                }
+
+                return MemoryMarshal.Cast<byte, uint>(Data.GetArray<byte>("m_Nodes"));
             }
         }
 
@@ -158,6 +167,23 @@ namespace ValveResourceFormat.ResourceTypes.RubikonPhysics.Shapes
         /// </summary>
         public float Volume { get; }
 
+        /// <summary>
+        /// Gets the surface area of the hull. Absent on hulls compiled before this was tracked.
+        /// </summary>
+        public float SurfaceArea { get; }
+
+        /// <summary>
+        /// Gets the mass properties: a 3x3 inertia tensor in the upper-left block, with the mass-centre
+        /// offset in the 4th column.
+        /// </summary>
+        public Matrix4x4 MassProperties { get; }
+
+        /// <summary>
+        /// Gets the hull flags. Not schema-enumerated; VRF has observed the raw values 0x4050, 1 and 3
+        /// in shipped content, with no confirmed meaning.
+        /// </summary>
+        public uint Flags { get; }
+
         //public AABB Bounds { get; set; }
         /// <summary>
         /// Gets the minimum bounds.
@@ -181,6 +207,10 @@ namespace ValveResourceFormat.ResourceTypes.RubikonPhysics.Shapes
             MaxAngularRadius = data.GetFloatProperty("m_flMaxAngularRadius");
             OrthographicAreas = data.GetSubCollection("m_vOrthographicAreas").ToVector3();
             Volume = data.GetFloatProperty("m_flVolume");
+            SurfaceArea = data.GetFloatProperty("m_flSurfaceArea");
+            var massProperties = data.GetSubCollection("m_MassProperties");
+            MassProperties = massProperties == null ? default : massProperties.ToMatrix4x4();
+            Flags = data.GetUInt32Property("m_nFlags");
 
             var bounds = data.GetSubCollection("m_Bounds");
             Min = bounds.GetSubCollection("m_vMinBounds").ToVector3();
