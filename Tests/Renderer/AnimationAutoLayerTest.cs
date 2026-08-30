@@ -50,6 +50,16 @@ namespace Tests.Renderer
             {
                 AnimationLookup = name => animations.GetValueOrDefault(name),
             };
+
+            // archer_turns blends across the "turn" pose parameter; pin it to -1 so the layer plays its
+            // first reference, matching turnFrame below (decoded from archer_turns' own frame data, which
+            // is that same first reference).
+            foreach (var poseParameter in model.GetPoseParameters())
+            {
+                withLayer.RegisterPoseParameter(poseParameter);
+            }
+            withLayer.SetPoseParameter("turn", -1f);
+
             withLayer.SetAnimation(run);
             withLayer.Update(0.05f);
 
@@ -57,7 +67,10 @@ namespace Tests.Renderer
             withoutLayer.SetAnimation(run);
             withoutLayer.Update(0.05f);
 
-            var layerEntry = withLayer.Clips.Single(kv => kv.Key.StartsWith("archer_run$autolayer", System.StringComparison.Ordinal));
+            // archer_turns is itself a 1D blend, so its layer clip now also owns blend reference clips
+            // keyed with a further "$blend" suffix - exclude those to find the layer clip itself.
+            var layerEntry = withLayer.Clips.Single(kv =>
+                kv.Key.StartsWith("archer_run$autolayer", System.StringComparison.Ordinal) && !kv.Key.Contains("$blend", System.StringComparison.Ordinal));
 
             using (Assert.Multiple())
             {
@@ -132,7 +145,8 @@ namespace Tests.Renderer
             controller.Update(0.1f);
 
             var runClip = controller.Clips["archer_run"];
-            var layerClip = controller.Clips.Single(kv => kv.Key.StartsWith("archer_run$autolayer", System.StringComparison.Ordinal)).Value;
+            var layerClip = controller.Clips.Single(kv =>
+                kv.Key.StartsWith("archer_run$autolayer", System.StringComparison.Ordinal) && !kv.Key.Contains("$blend", System.StringComparison.Ordinal)).Value;
 
             using (Assert.Multiple())
             {

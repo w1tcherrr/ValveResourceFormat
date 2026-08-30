@@ -519,6 +519,46 @@ namespace ValveResourceFormat.ResourceTypes
         }
 
         /// <summary>
+        /// Gets the named pose parameters (<c>m_localPoseParamArray</c>) from the model's embedded
+        /// sequence group. A 1D or 2D blend sequence's <see cref="SequenceAnimation.PoseParameterNames"/>
+        /// names one of these per blend dimension. Empty for a model without legacy (AG1) sequence data.
+        /// </summary>
+        public List<PoseParameter> GetPoseParameters()
+        {
+            var ctrl = Resource.GetBlockByType(BlockType.CTRL) as BinaryKV3;
+            var embeddedAnimation = ctrl?.Data.Root.GetSubCollection("embedded_animation");
+            var seqGroupDataBlockIndex = embeddedAnimation != null
+                ? (int)embeddedAnimation.GetIntegerProperty("seqgroup_data_block")
+                : 0;
+
+            if (seqGroupDataBlockIndex <= 0)
+            {
+                return [];
+            }
+
+            var sequenceDataBlock = Resource.GetBlockByIndex(seqGroupDataBlockIndex) as KeyValuesOrNTRO;
+            var poseParamArray = sequenceDataBlock?.Data.GetArray("m_localPoseParamArray");
+
+            if (poseParamArray == null || poseParamArray.Count == 0)
+            {
+                return [];
+            }
+
+            var poseParameters = new List<PoseParameter>(poseParamArray.Count);
+
+            foreach (var poseParam in poseParamArray)
+            {
+                poseParameters.Add(new PoseParameter(
+                    poseParam.GetStringProperty("m_sName"),
+                    poseParam.GetFloatProperty("m_flStart"),
+                    poseParam.GetFloatProperty("m_flEnd"),
+                    poseParam.GetBooleanProperty("m_bLooping")));
+            }
+
+            return poseParameters;
+        }
+
+        /// <summary>
         /// Get the embedded animations with a different skeleton as animation target.
         /// </summary>
         public static IEnumerable<Animation> GetEmbeddedAnimationsWithSkeleton(IFileLoader fileLoader, Skeleton skeleton, Model model)

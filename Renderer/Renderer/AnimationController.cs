@@ -378,6 +378,23 @@ namespace ValveResourceFormat.Renderer
         }
 
         /// <summary>
+        /// Registers a pose parameter a 1D or 2D blend sequence can position its animations along by
+        /// name. Blend sequences only ever play on the model's own skeleton, so this always targets the
+        /// model player rather than any registered external skeleton.
+        /// </summary>
+        public void RegisterPoseParameter(PoseParameter parameter) => modelPlayer.RegisterPoseParameter(parameter);
+
+        /// <summary>
+        /// Sets the live value of a registered pose parameter, clamped to its range.
+        /// </summary>
+        public void SetPoseParameter(string name, float value) => modelPlayer.SetPoseParameter(name, value);
+
+        /// <summary>
+        /// Gets the live value of a pose parameter, or zero for one that was never registered or set.
+        /// </summary>
+        public float GetPoseParameter(string name) => modelPlayer.GetPoseParameter(name);
+
+        /// <summary>
         /// Sets the blend weight for a clip with the specified animation name.
         /// </summary>
         /// <param name="name">The name of the animation.</param>

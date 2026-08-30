@@ -106,6 +106,23 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation
         public bool IsBlend => Fetch is { LocalReferenceArray.Length: > 1 } fetch && (fetch.Is1D || fetch.Is2D);
 
         /// <summary>
+        /// Gets the name each entry of <see cref="AnimationFetch.LocalReferenceArray"/> resolves to
+        /// against the sequence group's shared name array, in the same order <see cref="IsBlend"/>
+        /// blends them in. Empty for a sequence that is not a blend, or was constructed without
+        /// sequence data.
+        /// </summary>
+        public string[] BlendReferenceNames { get; } = [];
+
+        /// <summary>
+        /// Gets the name each dimension of <see cref="AnimationFetch.LocalPose"/> resolves to against
+        /// the sequence group's pose parameter array, in the same order (row, then column for a 2D
+        /// blend). Empty where the dimension is unused, is not a blend, or has no pose parameter
+        /// (<see cref="AnimationFetch.FixedBlendWeight"/> instead), or the sequence was constructed
+        /// without sequence data.
+        /// </summary>
+        public string[] PoseParameterNames { get; } = [];
+
+        /// <summary>
         /// Gets whether this animation was constructed from sequence data.
         /// </summary>
         public bool FromSequence { get; }
@@ -164,7 +181,7 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation
         /// Constructor for creating animation from sequence descriptor (ASEQ) and animation data (ANIM).
         /// </summary>
         private SequenceAnimation(KVObject seqDesc, KVObject? animDesc, AnimationSegmentDecoder?[] segmentArray,
-            string[] sequenceNameArray, string[] boneMaskNames)
+            string[] sequenceNameArray, string[] boneMaskNames, string[] poseParamNames)
         {
             // Name and metadata from sequence descriptor
             Name = seqDesc.GetStringProperty("m_sName");
@@ -240,6 +257,31 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation
 
             var fetch = seqDesc.GetSubCollection("m_fetch");
             Fetch = new AnimationFetch(fetch);
+
+            if (IsBlend)
+            {
+                var localReferenceArray = Fetch.Value.LocalReferenceArray;
+                var blendReferenceNames = new string[localReferenceArray.Length];
+                for (var i = 0; i < blendReferenceNames.Length; i++)
+                {
+                    var refIndex = (int)localReferenceArray[i];
+                    blendReferenceNames[i] = refIndex >= 0 && refIndex < sequenceNameArray.Length
+                        ? sequenceNameArray[refIndex]
+                        : string.Empty;
+                }
+                BlendReferenceNames = blendReferenceNames;
+
+                var localPose = Fetch.Value.LocalPose;
+                var poseParameterNames = new string[localPose.Length];
+                for (var i = 0; i < poseParameterNames.Length; i++)
+                {
+                    var poseIndex = (int)localPose[i];
+                    poseParameterNames[i] = poseIndex >= 0 && poseIndex < poseParamNames.Length
+                        ? poseParamNames[poseIndex]
+                        : string.Empty;
+                }
+                PoseParameterNames = poseParameterNames;
+            }
 
             var weightListIndex = seqDesc.GetInt32Property("m_nLocalWeightlist");
             BoneMaskName = weightListIndex > 0 && weightListIndex < boneMaskNames.Length
@@ -400,6 +442,13 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation
                 boneMaskNames[i] = boneMaskArray![i].GetStringProperty("m_sName");
             }
 
+            var poseParamArray = sequenceData.GetArray("m_localPoseParamArray");
+            var poseParamNames = new string[poseParamArray?.Count ?? 0];
+            for (var i = 0; i < poseParamNames.Length; i++)
+            {
+                poseParamNames[i] = poseParamArray![i].GetStringProperty("m_sName");
+            }
+
             // The sequence group's name table spells the same animation both ways in places, and the
             // compiler resolves it regardless of case.
             var animLookup = new Dictionary<string, KVObject>(StringComparer.OrdinalIgnoreCase);
@@ -474,7 +523,7 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation
                 var seqName = seqDesc.GetStringProperty("m_sName");
                 processedAnimNames.Add(seqName);
 
-                animations.Add(new SequenceAnimation(seqDesc, animDesc, segmentArray, sequenceNameArray, boneMaskNames) { TargetSkeletonName = skeleton.Name });
+                animations.Add(new SequenceAnimation(seqDesc, animDesc, segmentArray, sequenceNameArray, boneMaskNames, poseParamNames) { TargetSkeletonName = skeleton.Name });
             }
 
             // Add remaining animations not already output as sequences

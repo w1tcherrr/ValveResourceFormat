@@ -419,6 +419,11 @@ namespace ValveResourceFormat.Renderer.SceneNodes
                 AnimationController.RegisterBoneMask(name, boneWeights);
             }
 
+            foreach (var poseParameter in model.GetPoseParameters())
+            {
+                AnimationController.RegisterPoseParameter(poseParameter);
+            }
+
             if (Animations.Count != 0)
             {
                 SetupBoneMatrixBuffers();
