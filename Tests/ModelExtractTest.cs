@@ -2,9 +2,11 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using TUnit.Assertions.Enums;
 using ValveResourceFormat;
 using ValveResourceFormat.IO;
 using ValveResourceFormat.ResourceTypes;
+using ValveResourceFormat.Serialization.KeyValues;
 
 namespace Tests
 {
@@ -38,6 +40,55 @@ namespace Tests
                     .IsEquivalentTo(["chen_weapon.dmx"]);
                 await Assert.That(content.SubFiles.Single().Extract!.Invoke()).IsNotEmpty();
             }
+        }
+
+        /// <summary>
+        /// A model doc list node is created the first time a section writes into it, so the order the
+        /// sections run in is the order the reader sees, and a list nothing wrote is absent rather than
+        /// empty. Pinned per model because which sections run at all depends on what the model carries.
+        /// </summary>
+        [Test]
+        public async Task WritesOnlyTheDocSectionsTheModelFills()
+        {
+            using (Assert.Multiple())
+            {
+                await Assert.That(RootSections("necro_archer.vmdl_c")).IsEquivalentTo(
+                    ["BoneMarkupList", "RenderMeshList", "BodyGroupList", "AttachmentList", "PoseParamList", "AnimationList", "HitboxSetList", "Skeleton"],
+                    CollectionOrdering.Matching);
+
+                await Assert.That(RootSections("box_creature_ik_model.vmdl_c")).IsEquivalentTo(
+                    ["BoneMarkupList", "RenderMeshList", "AttachmentList", "WeightListList", "AnimationList", "IKData", "GameDataList", "Skeleton"],
+                    CollectionOrdering.Matching);
+
+                await Assert.That(RootSections("alyx_hand_left.vmdl_c")).IsEquivalentTo(
+                    ["BoneMarkupList", "RenderMeshList", "AttachmentList", "WeightListList", "PoseParamList", "AnimationList", "IKData", "HitboxSetList", "Skeleton", "PhysicsBodyMarkupList", "PhysicsShapeList"],
+                    CollectionOrdering.Matching);
+
+                // Only the LOD fixture reaches LODGroupList, and it has no skeleton to write.
+                await Assert.That(RootSections("lod_test.vmdl_c")).IsEquivalentTo(
+                    ["BoneMarkupList", "RenderMeshList", "LODGroupList"],
+                    CollectionOrdering.Matching);
+
+                // Every mesh of this one is an external reference the null loader cannot resolve, so
+                // nothing downstream of the meshes has anything to write.
+                await Assert.That(RootSections("alchemist.vmdl_c")).IsEquivalentTo(
+                    ["BoneMarkupList", "Skeleton"],
+                    CollectionOrdering.Matching);
+            }
+        }
+
+        private static string[] RootSections(string fileName)
+        {
+            using var resource = new Resource();
+            resource.Read(Path.Combine(TestContext.TestDirectory!, "Files", fileName));
+
+            var vmdl = new ModelExtract(resource, new NullFileLoader()).ToValveModel();
+            using var ms = new MemoryStream(Encoding.UTF8.GetBytes(vmdl));
+
+            return [.. KVDocumentExtensions.ParseKV3(ms).Root
+                .GetSubCollection("rootNode")
+                .GetArray("children")
+                .Select(child => child.GetStringProperty("_class"))];
         }
     }
 }
