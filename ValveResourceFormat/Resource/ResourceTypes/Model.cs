@@ -217,7 +217,6 @@ namespace ValveResourceFormat.ResourceTypes
         /// <returns>Enumerable of mesh index, mesh name, and LoD mask tuples.</returns>
         public IEnumerable<(int MeshIndex, string MeshName, long LoDMask)> GetReferenceMeshNamesAndLoD()
         {
-            var refLODGroupMasks = Data.GetIntegerArray("m_refLODGroupMasks");
             var refMeshes = Data.GetArray<string>("m_refMeshes");
             if (refMeshes == null)
             {
@@ -231,7 +230,7 @@ namespace ValveResourceFormat.ResourceTypes
 
                 if (!string.IsNullOrEmpty(refMesh))
                 {
-                    var lodMask = meshIndex < refLODGroupMasks.Length ? refLODGroupMasks[meshIndex] : 0L;
+                    var lodMask = LodInfo.GetMeshMask(meshIndex);
                     result.Add((meshIndex, refMesh, lodMask));
                 }
             }
