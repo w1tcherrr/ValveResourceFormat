@@ -241,9 +241,13 @@ namespace ValveResourceFormat.ResourceTypes
         /// <summary>
         /// Gets embedded meshes with their LoD masks.
         /// </summary>
+        /// <remarks>
+        /// A mesh's own index addresses the mask table, which covers embedded and referenced meshes
+        /// alike; an embedded mesh is not necessarily the nth entry of it.
+        /// </remarks>
         /// <returns>Enumerable of mesh, mesh index, name, and LoD mask tuples.</returns>
         public IEnumerable<(Mesh Mesh, int MeshIndex, string Name, long LoDMask)> GetEmbeddedMeshesAndLoD()
-            => GetEmbeddedMeshes().Zip(Data.GetIntegerArray("m_refLODGroupMasks"), (l, r) => (l.Mesh, l.MeshIndex, l.Name, r));
+            => GetEmbeddedMeshes().Select(m => (m.Mesh, m.MeshIndex, m.Name, LodInfo.GetMeshMask(m.MeshIndex)));
 
         /// <summary>
         /// Gets this model's level-of-detail structure (which meshes belong to which LOD level and the
