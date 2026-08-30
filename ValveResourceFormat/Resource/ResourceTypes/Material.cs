@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using ValveKeyValue;
+using ValveResourceFormat.IO;
 using ValveResourceFormat.Serialization.KeyValues;
 using ValveResourceFormat.Serialization.VfxEval;
 
@@ -87,6 +88,22 @@ namespace ValveResourceFormat.ResourceTypes
 
                 return inputSignature.Value;
             }
+        }
+
+        /// <summary>
+        /// Loads a material's vertex shader input signature, which maps its DirectX semantics to engine
+        /// ones. Returns <see cref="VsInputSignature.Empty"/> for a material that cannot be loaded, so
+        /// the result always has a readable element array.
+        /// </summary>
+        /// <param name="fileLoader">Loader for the material resource.</param>
+        /// <param name="materialPath">Resource path of the material, e.g. <c>materials/foo.vmat</c>.</param>
+        public static VsInputSignature LoadInputSignature(IFileLoader fileLoader, string materialPath)
+        {
+            ArgumentNullException.ThrowIfNull(fileLoader);
+
+            using var resource = fileLoader.LoadFileCompiled(materialPath);
+
+            return resource?.DataBlock is Material material ? material.InputSignature : VsInputSignature.Empty;
         }
 
         /// <inheritdoc/>
