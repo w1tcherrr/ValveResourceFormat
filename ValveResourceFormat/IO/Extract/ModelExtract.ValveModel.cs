@@ -3,9 +3,11 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using ValveKeyValue;
+using ValveResourceFormat.Blocks;
 using ValveResourceFormat.ResourceTypes;
 using ValveResourceFormat.ResourceTypes.ModelAnimation;
 using ValveResourceFormat.ResourceTypes.ModelData;
+using ValveResourceFormat.ResourceTypes.ModelFlex;
 using ValveResourceFormat.ResourceTypes.RubikonPhysics;
 using ValveResourceFormat.Serialization.KeyValues;
 using static ValveResourceFormat.IO.KVHelpers;
@@ -511,9 +513,392 @@ partial class ModelExtract
         }
     }
 
-    static KVObject ProcessAnimationAutoLayer(Animation animation, AnimationAutoLayer autoLayer, string[] localSequenceNameArray, string[] poseParamNames)
+    /// <summary>
+    /// Builds a PhysicsJointList child node for one joint, or <see langword="null"/> for a joint type
+    /// with no known ModelDoc node class. The limit attributes are recovered per joint type: only
+    /// <see cref="JointType.Conical"/>, <see cref="JointType.Revolute"/> and
+    /// <see cref="JointType.Prismatic"/> have confirmed motion-limit authoring keys.
+    /// </summary>
+    static KVObject? BuildPhysicsJoint(PhysAggregateData physAggregateData, Joint joint)
     {
-        var animName = localSequenceNameArray[autoLayer.LocalReference];
+        var className = joint.Type switch
+        {
+            JointType.Null => "PhysicsJointNull",
+            JointType.Spherical => "PhysicsJointSpherical",
+            JointType.Prismatic => "PhysicsJointPrismatic",
+            JointType.Revolute => "PhysicsJointRevolute",
+            JointType.Conical => "PhysicsJointConical",
+            JointType.Weld => "PhysicsJointWeld",
+            JointType.Wheel => "PhysicsJointWheel",
+            _ => null,
+        };
+
+        if (className is null)
+        {
+            return null;
+        }
+
+        var jointNode = MakeNode(
+            className,
+            ("parent_body", physAggregateData.GetParentBoneName(joint.Body1)),
+            ("child_body", physAggregateData.GetParentBoneName(joint.Body2)),
+            ("anchor_origin", ToKVArray(joint.Frame1.Position)),
+            ("anchor_angles", ToKVArray(EntityTransformHelper.ToEulerAngles(joint.Frame1.Rotation))),
+            ("collision_enabled", joint.EnableCollision),
+            ("friction", joint.Friction)
+        );
+
+        switch (joint.Type)
+        {
+            case JointType.Conical:
+                jointNode.Add("enable_swing_limit", joint.EnableSwingLimit);
+                jointNode.Add("swing_limit", float.RadiansToDegrees(joint.SwingLimit.Max));
+                jointNode.Add("enable_twist_limit", joint.EnableTwistLimit);
+                jointNode.Add("min_twist_angle", float.RadiansToDegrees(joint.TwistLimit.Min));
+                jointNode.Add("max_twist_angle", float.RadiansToDegrees(joint.TwistLimit.Max));
+                break;
+            case JointType.Revolute:
+                jointNode.Add("enable_limit", joint.EnableTwistLimit);
+                jointNode.Add("min_angle", float.RadiansToDegrees(joint.TwistLimit.Min));
+                jointNode.Add("max_angle", float.RadiansToDegrees(joint.TwistLimit.Max));
+                break;
+            case JointType.Prismatic:
+                jointNode.Add("enable_limit", joint.EnableLinearLimit);
+                jointNode.Add("min_offset", joint.LinearLimit.Min);
+                jointNode.Add("max_offset", joint.LinearLimit.Max);
+                break;
+        }
+
+        return jointNode;
+    }
+
+    /// <summary>
+    /// Writes the hit group a physics shape belongs to. Shipped content leaves this at the invalid
+    /// placeholder, which the compiler does not write back, so only a real group is emitted.
+    /// </summary>
+    static void AddHitGroup<TShape>(KVObject node, ShapeDescriptor<TShape> shape) where TShape : struct
+    {
+        if (!string.IsNullOrEmpty(shape.HitGroupName) && shape.HitGroupName != "HITGROUP_INVALID")
+        {
+            node.Add("hitgroupname", shape.HitGroupName);
+        }
+    }
+
+    /// <summary>
+    /// Returns the weight list a sequence applies, or <see langword="null"/> when it uses the default
+    /// one every animation gets.
+    /// </summary>
+    static string? GetWeightListName(string sequenceName, Dictionary<string, KVObject> sequenceData, string[]? boneMaskNames)
+    {
+        if (boneMaskNames == null || !sequenceData.TryGetValue(sequenceName, out var seqDesc))
+        {
+            return null;
+        }
+
+        var index = seqDesc.GetInt32Property("m_nLocalWeightlist");
+
+        if (index <= 0 || index >= boneMaskNames.Length)
+        {
+            return null;
+        }
+
+        return boneMaskNames[index];
+    }
+
+    /// <summary>
+    /// Rebuilds the bone scale markup an animation was authored with. A DMX animation carries only
+    /// position and orientation, so a resized bone has to come back as a node the compiler applies on
+    /// top of it.
+    /// </summary>
+    static IEnumerable<KVObject> ProcessBoneScales(Skeleton skeleton, FlexController[] flexControllers, SequenceAnimation animation)
+    {
+        // Quantization leaves a bone the animation does not resize a hair off one.
+        const float RestScaleTolerance = 1e-3f;
+
+        var scaledBones = animation.GetScaledBones();
+
+        if (scaledBones.Length == 0)
+        {
+            yield break;
+        }
+
+        for (var frameIndex = 0; frameIndex < animation.FrameCount; frameIndex++)
+        {
+            var frame = new Frame(skeleton, flexControllers)
+            {
+                FrameIndex = frameIndex
+            };
+
+            animation.DecodeFrame(frame);
+
+            foreach (var boneIndex in scaledBones)
+            {
+                var scale = frame.Bones[boneIndex].Scale;
+
+                if (MathF.Abs(scale - 1f) <= RestScaleTolerance)
+                {
+                    continue;
+                }
+
+                yield return MakeNode("AnimForceBoneScale",
+                    ("bone", GetExportBoneName(skeleton.Bones[boneIndex])),
+                    ("scale", scale),
+                    ("frame", frameIndex)
+                );
+            }
+        }
+    }
+
+    /// <summary>
+    /// Rebuilds a blend that spreads its animations over a grid of two pose parameters. The compiler
+    /// takes each dimension's size from the length of its weight list, and walks the grid row first.
+    /// </summary>
+    static KVObject Process2DBlendSequence(SequenceAnimation animation, string[] localSequenceNameArray, string[] poseParamNames,
+        HashSet<string> nodeNames, bool blendAnimEvents)
+    {
+        var fetch = animation.Fetch!.Value;
+        var rows = fetch.GroupSize.Length > 0 ? (int)fetch.GroupSize[0] : 0;
+        var columns = fetch.GroupSize.Length > 1 ? (int)fetch.GroupSize[1] : 0;
+
+        string PoseParam(int dimension)
+        {
+            var index = fetch.LocalPose.Length > dimension ? (int)fetch.LocalPose[dimension] : -1;
+            return index >= 0 && index < poseParamNames.Length ? poseParamNames[index] : string.Empty;
+        }
+
+        var rowWeights = KVObject.Array();
+        var columnWeights = KVObject.Array();
+        var animations = KVObject.Array();
+
+        for (var row = 0; row < rows; row++)
+        {
+            rowWeights.Add(row < fetch.PoseKeyArray.Length ? fetch.PoseKeyArray[row] : 0f);
+
+            var rowAnimations = KVObject.Array();
+
+            for (var column = 0; column < columns; column++)
+            {
+                var reference = row + (rows * column);
+                rowAnimations.Add(reference < fetch.LocalReferenceArray.Length
+                    ? ResolveNodeName(localSequenceNameArray[fetch.LocalReferenceArray[reference]], nodeNames)
+                    : string.Empty);
+            }
+
+            animations.Add(rowAnimations);
+        }
+
+        for (var column = 0; column < columns; column++)
+        {
+            var key = rows * column;
+            columnWeights.Add(key < fetch.PoseKeyArray1.Length ? fetch.PoseKeyArray1[key] : 0f);
+        }
+
+        var blendNode = MakeNode("2DBlend",
+            ("name", animation.Name),
+            ("fade_in_time", animation.SequenceParams.FadeInTime),
+            ("fade_out_time", animation.SequenceParams.FadeOutTime),
+            ("looping", animation.IsLooping),
+            ("delta", animation.Delta),
+            ("worldSpace", animation.Worldspace),
+            ("hidden", animation.Hidden),
+            ("row_pose_param_name", PoseParam(0)),
+            ("col_pose_param_name", PoseParam(1)),
+            ("row_weight_list", rowWeights),
+            ("col_weight_list", columnWeights),
+            ("blend_anim_list", animations)
+        );
+
+        if (blendAnimEvents)
+        {
+            blendNode.Add("blend_anim_events", true);
+        }
+
+        var children = KVObject.Array();
+        AddActivities(blendNode, children, animation);
+
+        foreach (var autoLayer in animation.AutoLayers)
+        {
+            children.Add(ProcessAnimationAutoLayer(animation.CycleFrames, autoLayer, localSequenceNameArray, poseParamNames, nodeNames));
+        }
+
+        if (animation.Autoplay)
+        {
+            children.Add(MakeNode("AnimAutoLayer"));
+        }
+
+        if (children.Count > 0)
+        {
+            blendNode.Add("children", children);
+        }
+
+        return blendNode;
+    }
+
+    /// <summary>
+    /// Rebuilds the blend node behind a sequence that plays several animations at once. The compiler
+    /// resolves such a node into one sequence that fetches every listed animation, positioned along a
+    /// pose parameter.
+    /// </summary>
+    static KVObject ProcessBlendSequence(SequenceAnimation animation, string[] localSequenceNameArray, string[] poseParamNames,
+        HashSet<string> nodeNames, bool blendAnimEvents)
+    {
+        var fetch = animation.Fetch!.Value;
+
+        if (fetch.Is2D)
+        {
+            return Process2DBlendSequence(animation, localSequenceNameArray, poseParamNames, nodeNames, blendAnimEvents);
+        }
+
+        var poseParamIndex = fetch.LocalPose.Length > 0 ? (int)fetch.LocalPose[0] : -1;
+        var poseParam = poseParamIndex >= 0 && poseParamIndex < poseParamNames.Length
+            ? poseParamNames[poseParamIndex]
+            : string.Empty;
+
+        var blendList = KVObject.Array();
+
+        for (var i = 0; i < fetch.LocalReferenceArray.Length; i++)
+        {
+            var reference = (int)fetch.LocalReferenceArray[i];
+
+            if (reference < 0 || reference >= localSequenceNameArray.Length)
+            {
+                continue;
+            }
+
+            blendList.Add(MakeNode("AnimProxy",
+                ("name", ResolveNodeName(localSequenceNameArray[reference], nodeNames)),
+                ("weight", i < fetch.PoseKeyArray.Length ? fetch.PoseKeyArray[i] : 0f)
+            ));
+        }
+
+        var blendNode = MakeNode("1DBlend",
+            ("name", animation.Name),
+            ("fixed_blend", fetch.FixedBlendWeight),
+            ("fixed_blend_val", fetch.FixedBlendWeightValue),
+            ("fade_in_time", animation.SequenceParams.FadeInTime),
+            ("fade_out_time", animation.SequenceParams.FadeOutTime),
+            ("looping", animation.IsLooping),
+            ("delta", animation.Delta),
+            ("worldSpace", animation.Worldspace),
+            ("hidden", animation.Hidden),
+            ("poseParam", poseParam),
+            ("blendList", blendList)
+        );
+
+        if (blendAnimEvents)
+        {
+            blendNode.Add("blend_anim_events", true);
+        }
+
+        var children = KVObject.Array();
+        AddActivities(blendNode, children, animation);
+
+        foreach (var autoLayer in animation.AutoLayers)
+        {
+            children.Add(ProcessAnimationAutoLayer(animation.CycleFrames, autoLayer, localSequenceNameArray, poseParamNames, nodeNames));
+        }
+
+        if (animation.Autoplay)
+        {
+            children.Add(MakeNode("AnimAutoLayer"));
+        }
+
+        if (children.Count > 0)
+        {
+            blendNode.Add("children", children);
+        }
+
+        return blendNode;
+    }
+
+    /// <summary>
+    /// Rebuilds the <c>FaceposerKeys</c> child node behind a sequence's <c>faceposer</c> gesture/posture
+    /// markup. The compiler folds the node's <c>key_type</c>/<c>entry</c>/<c>start_loop</c>/<c>end_loop</c>
+    /// attributes into a fixed <c>type</c>/<c>entrytag</c>/<c>startloop</c>/<c>endloop</c>/<c>tags</c>
+    /// shape; only the gesture shape (the only one seen in shipped Dota content) is reconstructed here.
+    /// </summary>
+    static KVObject? ProcessFaceposerKeys(KVObject? sequenceKeys)
+    {
+        var faceposer = sequenceKeys?.GetSubCollection("faceposer");
+
+        if (faceposer == null || faceposer.GetStringProperty("type") != "gesture")
+        {
+            return null;
+        }
+
+        var entryTag = faceposer.GetStringProperty("entrytag");
+        var startLoopTag = faceposer.GetStringProperty("startloop");
+        var endLoopTag = faceposer.GetStringProperty("endloop");
+        var tags = faceposer.GetSubCollection("tags");
+
+        if (tags == null || entryTag.Length == 0 || startLoopTag.Length == 0 || endLoopTag.Length == 0)
+        {
+            return null;
+        }
+
+        return MakeNode("FaceposerKeys",
+            ("key_type", "Gesture"),
+            ("entry", tags.GetInt32Property(entryTag, -1)),
+            ("start_loop", tags.GetInt32Property(startLoopTag, -1)),
+            ("end_loop", tags.GetInt32Property(endLoopTag, -1))
+        );
+    }
+
+    /// <summary>
+    /// Writes an animation's primary activity onto its node, and every further one as the modifier
+    /// node the compiler folds back into the sequence's activity list.
+    /// </summary>
+    static void AddActivities(KVObject node, KVObject children, SequenceAnimation animation)
+        => AddActivities(node, children, [.. animation.Activities.Select(activity => (activity.Name, activity.Weight))]);
+
+    static void AddActivities(KVObject node, KVObject children, (string Name, int Weight)[] activities)
+    {
+        if (activities.Length == 0)
+        {
+            return;
+        }
+
+        node.Add("activity_name", activities[0].Name);
+        node.Add("activity_weight", activities[0].Weight);
+
+        for (var i = 1; i < activities.Length; i++)
+        {
+            children.Add(MakeNode("ActivityModifier",
+                ("activity_name", activities[i].Name),
+                ("activity_weight", activities[i].Weight)
+            ));
+        }
+    }
+
+    /// <summary>
+    /// Matches a name a sequence refers to against the nodes the document actually declares. The
+    /// compiled name tables spell the generated animations inconsistently, differing from the node
+    /// they belong to in case or in the leading marker.
+    /// </summary>
+    static string ResolveNodeName(string name, HashSet<string> nodeNames)
+    {
+        if (nodeNames.Contains(name))
+        {
+            return name;
+        }
+
+        var bare = name.TrimStart('@');
+
+        foreach (var candidate in nodeNames)
+        {
+            if (candidate.TrimStart('@').Equals(bare, StringComparison.OrdinalIgnoreCase))
+            {
+                return candidate;
+            }
+        }
+
+        return name;
+    }
+
+    static KVObject ProcessAnimationAutoLayer(int cycleFrames, AnimationAutoLayer autoLayer, string[] localSequenceNameArray,
+        string[] poseParamNames, HashSet<string> nodeNames)
+    {
+        var animName = ResolveNodeName(localSequenceNameArray[autoLayer.LocalReference], nodeNames);
 
         if (autoLayer.Pose == true)
         {
@@ -545,10 +930,10 @@ partial class ModelExtract
                 ("xfade", autoLayer.XFade),
                 ("no_blend", autoLayer.NoBlend),
                 ("local_space", autoLayer.Local),
-                ("start_frame", (int)(autoLayer.Start * animation.FrameCount)),
-                ("peak_frame", (int)(autoLayer.Peak * animation.FrameCount)),
-                ("tail_frame", (int)(autoLayer.Tail * animation.FrameCount)),
-                ("end_frame", (int)(autoLayer.End * animation.FrameCount)),
+                ("start_frame", (int)(autoLayer.Start * cycleFrames)),
+                ("peak_frame", (int)(autoLayer.Peak * cycleFrames)),
+                ("tail_frame", (int)(autoLayer.Tail * cycleFrames)),
+                ("end_frame", (int)(autoLayer.End * cycleFrames)),
             ]);
         }
     }
@@ -582,15 +967,19 @@ partial class ModelExtract
         var lodGroupList = MakeLazyList("LODGroupList");
         var animationList = MakeLazyList("AnimationList");
         var physicsShapeList = MakeLazyList("PhysicsShapeList");
+        var physicsBodyMarkupList = MakeLazyList("PhysicsBodyMarkupList");
+        var physicsJointList = MakeLazyList("PhysicsJointList");
         var attachmentList = MakeLazyList("AttachmentList");
         var skeleton = MakeLazyList("Skeleton");
         var modelModifierList = MakeLazyList("ModelModifierList");
         var weightLists = MakeLazyList("WeightListList");
+        var scaleSetList = MakeLazyList("ScaleSetList");
         var hitboxSetList = MakeLazyList("HitboxSetList");
         var poseParamList = MakeLazyList("PoseParamList");
 
         var nmskelList = MakeLazyList("NmSkeletonList");
         var animGraph2List = MakeLazyList("AnimGraph2List");
+        var vsnapList = MakeLazyList("VSNAPList");
 
         var boneMarkupList = MakeListNode("BoneMarkupList");
         root.Children.Add(boneMarkupList.Node);
@@ -717,9 +1106,12 @@ partial class ModelExtract
 
             {
                 // LOD groups. m_refLODGroupMasks says which level each mesh belongs to (bit N => level N) and
-                // m_lodGroupSwitchDistances gives each level's switch value. Emit one LODGroup per populated
-                // level so a recompile rebuilds the original LoD structure, and collect meshes that live in
-                // every level into a single LODGroupAll rather than repeating them in each group.
+                // m_lodGroupSwitchDistances gives each level's switch value. Emit one LODGroup per declared
+                // level so a recompile rebuilds the original switch distances, and collect meshes that live in
+                // every level into a single LODGroupAll rather than repeating them in each group. A level can
+                // legitimately end up with no unique mesh references (every mesh at that level also lives in
+                // every other level, so it moved to LODGroupAll) - the group itself still has to be written or
+                // the compiler drops the switch distance entirely.
                 var lodInfo = model.LodInfo;
 
                 for (var lodLevel = 0; lodLevel < lodInfo.SwitchDistances.Count; lodLevel++)
@@ -736,12 +1128,6 @@ partial class ModelExtract
                         var meshReference = KVObject.Collection();
                         meshReference.Add("mesh_name", renderMesh.Name);
                         meshReferences.Add(meshReference);
-                    }
-
-                    // Skip levels with no meshes (e.g. a misconfigured empty LoD0).
-                    if (meshReferences.Count == 0)
-                    {
-                        continue;
                     }
 
                     lodGroupList.Value.Add(MakeNode("LODGroup",
@@ -862,10 +1248,12 @@ partial class ModelExtract
         var additionalSequenceData = new Dictionary<string, KVObject>();
         string[]? sequenceLocalReferenceArray = null;
         string[]? poseParamNames = null;
+        string[]? boneMaskNames = null;
 
         if (modelSequenceData?.Data is KVObject sequenceData)
         {
             ExtractSequenceData(modelSequenceData);
+            ExtractScaleSets(modelSequenceData);
 
             foreach (var data in sequenceData.GetArray("m_localS1SeqDescArray"))
             {
@@ -877,9 +1265,10 @@ partial class ModelExtract
 
             poseParamNames = [.. poseParams.Select(x => x.GetStringProperty("m_sName"))];
             sequenceLocalReferenceArray = sequenceData.GetArray<string>("m_localSequenceNameArray");
+            boneMaskNames = [.. sequenceData.GetArray("m_localBoneMaskArray").Select(x => x.GetStringProperty("m_sName"))];
         }
 
-        if (AnimationsToExtract.Count > 0)
+        if (AnimationsToExtract.Count > 0 || additionalSequenceData.Count > 0)
         {
             var animationToFolder = new Dictionary<string, KVObject>(AnimationsToExtract.Count);
             if (modelSequenceData?.Data.GetSubCollection("m_keyValues") is KVObject sequenceKeyValues)
@@ -908,29 +1297,109 @@ partial class ModelExtract
                 folderOrRoot.Add(node);
             }
 
+            var nodeNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var animation in AnimationsToExtract)
+            {
+                nodeNames.Add(animation.Anim.Name);
+            }
+
+            foreach (var name in additionalSequenceData.Keys)
+            {
+                nodeNames.Add(name);
+            }
+
             foreach (var (name, aseq) in additionalSequenceData)
             {
+                // A sequence that plays no animation directly is either the true bind pose (compiled
+                // with a "bind_pose" flag) or an EmptyAnim: a synthetic base of a declared length that
+                // exists only to carry auto layers, compiled with an explicit frame count and rate
+                // instead. Both compile from a node with no source_filename, so a decompile can only
+                // tell them apart by which one of those two the compiler already wrote back.
+                var playsNothing = aseq.GetSubCollection("m_fetch").GetIntegerArray("m_localReferenceArray").Length == 0;
                 var sequenceKeys = aseq.GetSubCollection("m_SequenceKeys");
-                if (sequenceKeys == null)
-                {
-                    continue;
-                }
 
-                // Animations that have this property do not appear in Animations list.
-                if (sequenceKeys.GetBooleanProperty("bind_pose"))
+                if (playsNothing || sequenceKeys?.GetBooleanProperty("bind_pose") == true)
                 {
-                    var animBindPose = MakeNode(
-                        "AnimBindPose",
-                        ("name", name)
+                    var emptyAnimKeys = sequenceKeys?.GetSubCollection("keyvalues");
+                    var isEmptyAnim = emptyAnimKeys != null && emptyAnimKeys.TryGetValue("numframes", out _);
+
+                    var transition = aseq.GetSubCollection("m_transition");
+                    var bindPoseFlags = aseq.GetSubCollection("m_flags");
+                    var bindPose = MakeNode(isEmptyAnim ? "EmptyAnim" : "AnimBindPose",
+                        ("name", name),
+                        ("fade_in_time", transition.GetFloatProperty("m_flFadeInTime")),
+                        ("fade_out_time", transition.GetFloatProperty("m_flFadeOutTime")),
+                        ("looping", bindPoseFlags.GetBooleanProperty("m_bLooping")),
+                        ("delta", bindPoseFlags.GetBooleanProperty("m_bLegacyDelta")),
+                        ("worldSpace", bindPoseFlags.GetBooleanProperty("m_bLegacyWorldspace")),
+                        ("hidden", bindPoseFlags.GetBooleanProperty("m_bHidden"))
                     );
 
-                    AddToFolderOrRoot(name, animBindPose);
+                    var frameCount = 0;
+
+                    if (isEmptyAnim)
+                    {
+                        frameCount = emptyAnimKeys!.GetInt32Property("numframes");
+                        bindPose.Add("frame_count", frameCount);
+                        bindPose.Add("frame_rate", emptyAnimKeys!.GetFloatProperty("fps"));
+                    }
+
+                    var bindPoseWeightList = GetWeightListName(name, additionalSequenceData, boneMaskNames);
+
+                    if (bindPoseWeightList != null)
+                    {
+                        bindPose.Add("weight_list_name", bindPoseWeightList);
+                    }
+
+                    var bindPoseChildren = KVObject.Array();
+
+                    AddActivities(bindPose, bindPoseChildren, [.. aseq.GetArray("m_activityArray")
+                        .Select(activity => (activity.GetStringProperty("m_name"), activity.GetInt32Property("m_nWeight")))]);
+
+                    if (isEmptyAnim && sequenceLocalReferenceArray != null)
+                    {
+                        foreach (var autoLayerKV in aseq.GetArray("m_autoLayerArray"))
+                        {
+                            var autoLayer = new AnimationAutoLayer(autoLayerKV);
+                            bindPoseChildren.Add(ProcessAnimationAutoLayer(frameCount, autoLayer, sequenceLocalReferenceArray, poseParamNames ?? [], nodeNames));
+                        }
+                    }
+
+                    if (ProcessFaceposerKeys(sequenceKeys) is KVObject bindPoseFaceposerKeys)
+                    {
+                        bindPoseChildren.Add(bindPoseFaceposerKeys);
+                    }
+
+                    if (bindPoseChildren.Count > 0)
+                    {
+                        bindPose.Add("children", bindPoseChildren);
+                    }
+
+                    AddToFolderOrRoot(name, bindPose);
                 }
             }
 
             var sequences = AnimationsToExtract.Where(x => x.Anim.FromSequence);
             foreach (var animation in sequences)
             {
+                if (animation.Anim.IsBlend && sequenceLocalReferenceArray != null && poseParamNames != null)
+                {
+                    var blendAnimEvents = additionalSequenceData.TryGetValue(animation.Anim.Name, out var blendSequenceData)
+                        && blendSequenceData.GetSubCollection("m_SequenceKeys")?.GetBooleanProperty("blend_anim_events") == true;
+
+                    var blendNode = ProcessBlendSequence(animation.Anim, sequenceLocalReferenceArray, poseParamNames, nodeNames, blendAnimEvents);
+                    var blendWeightList = GetWeightListName(animation.Anim.Name, additionalSequenceData, boneMaskNames);
+
+                    if (blendWeightList != null)
+                    {
+                        blendNode.Add("weight_list_name", blendWeightList);
+                    }
+
+                    AddToFolderOrRoot(animation.Anim.Name, blendNode);
+                    continue;
+                }
+
                 var animationFile = MakeNode(
                     "AnimFile",
                     ("name", animation.Anim.Name),
@@ -943,14 +1412,16 @@ partial class ModelExtract
                     ("hidden", animation.Anim.Hidden)
                 );
 
-                if (animation.Anim.Activities.Length > 0)
-                {
-                    var activity = animation.Anim.Activities[0];
-                    animationFile.Add("activity_name", activity.Name);
-                    animationFile.Add("activity_weight", activity.Weight);
-                }
-
                 var childrenKV = KVObject.Array();
+
+                AddActivities(animationFile, childrenKV, animation.Anim);
+
+                var weightList = GetWeightListName(animation.Anim.Name, additionalSequenceData, boneMaskNames);
+
+                if (weightList != null)
+                {
+                    animationFile.Add("weight_list_name", weightList);
+                }
 
                 foreach (var localHierarchy in animation.Anim.LocalHierarchy)
                 {
@@ -962,6 +1433,14 @@ partial class ModelExtract
                         ("tail_frame", localHierarchy.TailFrame),
                         ("end_frame", localHierarchy.EndFrame)
                     ));
+                }
+
+                if (model != null)
+                {
+                    foreach (var boneScale in ProcessBoneScales(model.Skeleton, model.FlexControllers, animation.Anim))
+                    {
+                        childrenKV.Add(boneScale);
+                    }
                 }
 
                 if (animation.Anim.HasMovementData())
@@ -988,6 +1467,16 @@ partial class ModelExtract
                         ("event_frame", animEvent.Frame)
                     );
 
+                    if (animEvent.EndFrame != -1)
+                    {
+                        animEventNode.Add("event_end_frame", animEvent.EndFrame);
+                    }
+
+                    if (animEvent.Duration != 0f)
+                    {
+                        animEventNode.Add("event_duration", animEvent.Duration);
+                    }
+
                     if (animEvent.EventData != null)
                     {
                         animEventNode.Add("event_keys", animEvent.EventData);
@@ -999,7 +1488,7 @@ partial class ModelExtract
                 {
                     foreach (var autoLayer in animation.Anim.AutoLayers)
                     {
-                        var layerNode = ProcessAnimationAutoLayer(animation.Anim, autoLayer, sequenceLocalReferenceArray, poseParamNames);
+                        var layerNode = ProcessAnimationAutoLayer(animation.Anim.CycleFrames, autoLayer, sequenceLocalReferenceArray, poseParamNames, nodeNames);
                         childrenKV.Add(layerNode);
                     }
                 }
@@ -1043,6 +1532,11 @@ partial class ModelExtract
                         {
                             childrenKV.Add(MakeNode("AnimGameplayTiming", animGameplayTiming));
                         }
+
+                        if (ProcessFaceposerKeys(sequenceKeys) is KVObject faceposerKeys)
+                        {
+                            childrenKV.Add(faceposerKeys);
+                        }
                     }
                 }
 
@@ -1073,12 +1567,12 @@ partial class ModelExtract
                 }
             }
 
-            foreach (var (physHull, fileName, parentBone) in PhysHullsToExtract)
+            foreach (var (physHull, fileName, parentBone, _) in PhysHullsToExtract)
             {
                 HandlePhysMeshNode(physHull, fileName, parentBone);
             }
 
-            foreach (var (physMesh, fileName, parentBone) in PhysMeshesToExtract)
+            foreach (var (physMesh, fileName, parentBone, _) in PhysMeshesToExtract)
             {
                 HandlePhysMeshNode(physMesh, fileName, parentBone);
             }
@@ -1097,10 +1591,64 @@ partial class ModelExtract
 
         if (physAggregateData is not null)
         {
+            // Bones that already carry body markup as game data round-trip their mass through it, and the
+            // compiler rejects a second markup for the same body. The lookup is case-insensitive because
+            // resourcecompiler matches target_body to the existing markup's bone name that way.
+            var existingMarkupBones = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var physicsBodyMarkupData = model?.KeyValues.GetSubCollection("CPhysicsBodyGameMarkupData");
+            var physicsBodyMarkupByBoneName = physicsBodyMarkupData?.GetSubCollection("m_PhysicsBodyMarkupByBoneName");
+
+            if (physicsBodyMarkupByBoneName != null)
+            {
+                foreach (var (boneName, _) in physicsBodyMarkupByBoneName)
+                {
+                    existingMarkupBones.Add(boneName);
+                }
+            }
+
             for (var i = 0; i < physAggregateData.Parts.Length; i++)
             {
                 var physicsPart = physAggregateData.Parts[i];
                 var parentBone = physAggregateData.GetParentBoneName(i);
+
+                var hasOverrides = physicsPart.Mass != 0f
+                    || physicsPart.InertiaScale != 1f
+                    || physicsPart.LinearDamping != 0f
+                    || physicsPart.AngularDamping != 0f
+                    || physicsPart.OverrideMassCenter;
+
+                if (hasOverrides && !existingMarkupBones.Contains(parentBone))
+                {
+                    var bodyMarkup = MakeNode("PhysicsBodyMarkup", ("target_body", parentBone));
+
+                    if (physicsPart.Mass != 0f)
+                    {
+                        bodyMarkup.Add("mass_override", physicsPart.Mass);
+                    }
+
+                    if (physicsPart.InertiaScale != 1f)
+                    {
+                        bodyMarkup.Add("inertia_scale", physicsPart.InertiaScale);
+                    }
+
+                    if (physicsPart.LinearDamping != 0f)
+                    {
+                        bodyMarkup.Add("linear_damping", physicsPart.LinearDamping);
+                    }
+
+                    if (physicsPart.AngularDamping != 0f)
+                    {
+                        bodyMarkup.Add("angular_damping", physicsPart.AngularDamping);
+                    }
+
+                    if (physicsPart.OverrideMassCenter)
+                    {
+                        bodyMarkup.Add("use_mass_center_override", true);
+                        bodyMarkup.Add("mass_center_override", ToKVArray(physicsPart.MassCenterOverride));
+                    }
+
+                    physicsBodyMarkupList.Value.Add(bodyMarkup);
+                }
 
                 foreach (var sphere in physicsPart.Shape.Spheres)
                 {
@@ -1113,6 +1661,8 @@ partial class ModelExtract
                         ("center", ToKVArray(sphere.Shape.Center)),
                         ("name", sphere.UserFriendlyName ?? string.Empty)
                     );
+
+                    AddHitGroup(physicsShapeSphere, sphere);
 
                     physicsShapeList.Value.Add(physicsShapeSphere);
                 }
@@ -1130,7 +1680,19 @@ partial class ModelExtract
                         ("name", capsule.UserFriendlyName ?? string.Empty)
                     );
 
+                    AddHitGroup(physicsShapeCapsule, capsule);
+
                     physicsShapeList.Value.Add(physicsShapeCapsule);
+                }
+            }
+
+            foreach (var joint in physAggregateData.Joints)
+            {
+                var jointNode = BuildPhysicsJoint(physAggregateData, joint);
+
+                if (jointNode is not null)
+                {
+                    physicsJointList.Value.Add(jointNode);
                 }
             }
         }
@@ -1140,7 +1702,86 @@ partial class ModelExtract
             modelModifierList.Value.Add(MakeNode("ModelModifier_Translate", ("translation", ToKVArray(Translation))));
         }
 
+        ExtractVsnapReferences();
+
         return kv.ToKV3String(format: KV3IDLookup.Get("modeldoc28"));
+
+        void ExtractVsnapReferences()
+        {
+            if (modelResource is null || fileLoader is null)
+            {
+                return;
+            }
+
+            var externalReferences = modelResource.ExternalReferences?.ResourceRefInfoList;
+
+            if (externalReferences is null)
+            {
+                return;
+            }
+
+            foreach (var reference in externalReferences)
+            {
+                if (!reference.Name.EndsWith(".vsnap", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                using var vsnapResource = fileLoader.LoadFileCompiled(reference.Name);
+
+                if (vsnapResource?.GetBlockByType(BlockType.SNAP) is not ParticleSnapshot snapshot)
+                {
+                    continue;
+                }
+
+                snapshot.AttributeData.TryGetValue(("position", "float3"), out var positionData);
+                snapshot.AttributeData.TryGetValue(("skinning", "skinning"), out var skinningData);
+
+                var positions = positionData as Vector3[];
+                var skinning = skinningData as ParticleSnapshot.SkinningData[];
+                var particles = KVObject.Array();
+
+                for (var i = 0; i < snapshot.NumParticles; i++)
+                {
+                    var particle = MakeNode("VSNAPParticle", ("origin", ToKVArray(positions?[i] ?? Vector3.Zero)));
+
+                    if (skinning is not null)
+                    {
+                        var boneSlot = 0;
+                        var bones = skinning[i];
+
+                        for (var j = 0; j < bones.Weights.Length && boneSlot < 4; j++)
+                        {
+                            if (bones.Weights[j] <= 0f || string.IsNullOrEmpty(bones.JointNames[j]))
+                            {
+                                continue;
+                            }
+
+                            particle.Add($"bone_{boneSlot}", bones.JointNames[j]);
+                            particle.Add($"bone_weight_{boneSlot}", bones.Weights[j]);
+                            boneSlot++;
+                        }
+                    }
+
+                    particles.Add(particle);
+                }
+
+                if (particles.Count == 0)
+                {
+                    // An empty VSNAPEmpty makes the compiler fail with "No Vertex Particles to Write"
+                    // rather than emitting an empty snapshot.
+                    continue;
+                }
+
+                var vsnapNode = MakeNode("VSNAPEmpty",
+                    ("name", Path.GetFileNameWithoutExtension(reference.Name)),
+                    ("children", particles)
+                );
+                vsnapNode.Add("output_vsnap", new KVObject(reference.Name) { Flag = KVFlag.Resource });
+
+                vsnapList.Value.Add(vsnapNode);
+            }
+        }
 
         #region Local Functions
         void HandlePhysMeshNode<TShape>(ShapeDescriptor<TShape> shapeDesc, string fileName, string parentBone)
@@ -1173,6 +1814,8 @@ partial class ModelExtract
                 ("collision_tags", string.Join(" ", collisionTags)),
                 ("name", shapeName)
             );
+
+            AddHitGroup(physicsShapeFile, shapeDesc);
 
             physicsShapeList.Value.Add(physicsShapeFile);
         }
@@ -1267,18 +1910,23 @@ partial class ModelExtract
                 var name = boneMask.GetStringProperty("m_sName");
                 var boneArray = boneMask.GetIntegerArray("m_nLocalBoneArray");
                 var boneWeights = boneMask.GetFloatArray("m_flBoneWeightArray");
-                // master_morph_weight = m_flDefaultMorphCtrlWeight
+                var masterMorphWeight = boneMask.GetFloatProperty("m_flDefaultMorphCtrlWeight", 1f);
+                var morphCtrlWeightArray = boneMask.GetArray("m_morphCtrlWeightArray");
 
-                // skip default mask
-                if (name == "default" && boneArray.Length == 0)
+                // skip a default mask that carries nothing but its schema defaults
+                if (name == "default" && boneArray.Length == 0 && masterMorphWeight == 1f
+                    && (morphCtrlWeightArray == null || morphCtrlWeightArray.Count == 0))
                 {
                     continue;
                 }
 
                 var weights = KVObject.Array();
+                var morphWeights = KVObject.Array();
                 var weightListNode = MakeNode("WeightList",
                     ("name", name),
-                    ("weights", weights)
+                    ("weights", weights),
+                    ("master_morph_weight", masterMorphWeight),
+                    ("morph_weights", morphWeights)
                 );
 
                 foreach (var (boneIndex, boneWeight) in boneArray.Zip(boneWeights))
@@ -1291,7 +1939,95 @@ partial class ModelExtract
                     weights.Add(weightDefinition);
                 }
 
+                foreach (var morphWeightPair in morphCtrlWeightArray ?? [])
+                {
+                    var morphWeightDefinition = KVObject.Collection();
+
+                    morphWeightDefinition.Add("morph", (string)morphWeightPair[0]);
+                    morphWeightDefinition.Add("weight", (float)morphWeightPair[1]);
+                    morphWeights.Add(morphWeightDefinition);
+                }
+
                 weightLists.Value.Add(weightListNode);
+            }
+        }
+
+        void ExtractScaleSets(KeyValuesOrNTRO sequenceData)
+        {
+            var scaleSets = sequenceData.Data.GetArray("m_localScaleSetArray");
+
+            if (scaleSets == null || scaleSets.Count == 0)
+            {
+                return;
+            }
+
+            var boneNames = sequenceData.Data.GetArray<string>("m_localBoneNameArray");
+            var bonesByName = model?.Skeleton.Bones.ToDictionary(static bone => bone.Name);
+
+            foreach (var scaleSet in scaleSets)
+            {
+                var boneArray = scaleSet.GetIntegerArray("m_nLocalBoneArray");
+                var boneScaleArray = scaleSet.GetFloatArray("m_flBoneScaleArray");
+                var rootOffsetArray = scaleSet.GetFloatArray("m_vRootOffset");
+                var rootOffset = new Vector3(rootOffsetArray[0], rootOffsetArray[1], rootOffsetArray[2]);
+
+                // The compiler divides each bone's authored scale by its nearest ancestor's authored
+                // scale (within this same scale set, defaulting to 1 with no such ancestor), so the
+                // compiled value is a scale relative to the set's own nearest scaled ancestor rather
+                // than an independent per-bone multiplier. Recover the authored value by inverting that
+                // walk up the skeleton, memoized since a deep chain revisits the same ancestors.
+                var compiledScaleByBone = new Dictionary<string, float>(boneArray.Length);
+
+                for (var i = 0; i < boneArray.Length; i++)
+                {
+                    compiledScaleByBone[boneNames![boneArray[i]]] = boneScaleArray[i];
+                }
+
+                var authoredScaleByBone = new Dictionary<string, float>(boneArray.Length);
+
+                float GetAuthoredScale(string boneName)
+                {
+                    if (authoredScaleByBone.TryGetValue(boneName, out var cached))
+                    {
+                        return cached;
+                    }
+
+                    var parentScale = 1f;
+                    var ancestor = bonesByName?.GetValueOrDefault(boneName)?.Parent;
+
+                    while (ancestor != null)
+                    {
+                        if (compiledScaleByBone.ContainsKey(ancestor.Name))
+                        {
+                            parentScale = GetAuthoredScale(ancestor.Name);
+                            break;
+                        }
+
+                        ancestor = ancestor.Parent;
+                    }
+
+                    var authored = compiledScaleByBone[boneName] * parentScale;
+                    authoredScaleByBone[boneName] = authored;
+
+                    return authored;
+                }
+
+                var scales = KVObject.Array();
+
+                foreach (var boneIndex in boneArray)
+                {
+                    var boneName = boneNames![boneIndex];
+                    var scaleDefinition = KVObject.Collection();
+                    scaleDefinition.Add("bone", boneName);
+                    scaleDefinition.Add("scale", GetAuthoredScale(boneName));
+                    scales.Add(scaleDefinition);
+                }
+
+                scaleSetList.Value.Add(MakeNode("ScaleSet",
+                    ("name", scaleSet.GetStringProperty("m_sName")),
+                    ("root_offset", ToKVArray(rootOffset)),
+                    ("scales", scales)
+                ));
             }
         }
 
@@ -1324,6 +2060,24 @@ partial class ModelExtract
                 foreach (var animIncludeModel in model.Data.GetArray<string>("m_refAnimIncludeModels")!)
                 {
                     animationList.Value.Add(MakeNode("AnimIncludeModel", ("model", animIncludeModel)));
+                }
+            }
+
+            foreach (var (attributeName, numChannels) in model.GetAnimatedMaterialAttributes())
+            {
+                if (numChannels == 1)
+                {
+                    animationList.Value.Add(MakeNode("AnimatedMaterialAttributeValue",
+                        ("material_attribute_name", attributeName),
+                        ("target_value", 0f)
+                    ));
+                }
+                else
+                {
+                    animationList.Value.Add(MakeNode("AnimatedMaterialAttributeColor",
+                        ("material_attribute_name", attributeName),
+                        ("target_color", MakeArray(255f, 255f, 255f, 255f))
+                    ));
                 }
             }
 

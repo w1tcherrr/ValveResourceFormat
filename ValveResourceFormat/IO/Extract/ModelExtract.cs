@@ -140,7 +140,7 @@ public partial class ModelExtract
         {
             vmdl.AddSubFile(
                 Path.GetFileName(physHull.FileName),
-                () => ToDmxMesh(physHull.Hull)
+                () => ToDmxMesh(physHull.Hull, physHull.BindPose)
             );
         }
 
@@ -148,12 +148,18 @@ public partial class ModelExtract
         {
             vmdl.AddSubFile(
                 Path.GetFileName(physMesh.FileName),
-                () => ToDmxMesh(physMesh.Mesh)
+                () => ToDmxMesh(physMesh.Mesh, physMesh.BindPose)
             );
         }
 
         foreach (var anim in AnimationsToExtract)
         {
+            // A blend has no animation of its own, it is rebuilt as a node listing the ones it blends.
+            if (anim.Anim.IsBlend)
+            {
+                continue;
+            }
+
             vmdl.AddSubFile(
                 Path.GetFileName(anim.FileName),
                 () =>

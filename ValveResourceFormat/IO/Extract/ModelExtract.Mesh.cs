@@ -20,12 +20,20 @@ partial class ModelExtract
     /// <summary>
     /// Gets the list of physics hulls to be extracted with their output file names.
     /// </summary>
-    public List<(HullDescriptor Hull, string FileName, string ParentBone)> PhysHullsToExtract { get; } = [];
+    /// <remarks>
+    /// <see cref="Matrix4x4"/> transforms the hull's vertices from body-local space into bind-pose
+    /// component space, matching the space a <c>PhysicsHullFile</c> node's DMX geometry is authored in.
+    /// </remarks>
+    public List<(HullDescriptor Hull, string FileName, string ParentBone, Matrix4x4 BindPose)> PhysHullsToExtract { get; } = [];
 
     /// <summary>
     /// Gets the list of physics meshes to be extracted with their output file names.
     /// </summary>
-    public List<(MeshDescriptor Mesh, string FileName, string ParentBone)> PhysMeshesToExtract { get; } = [];
+    /// <remarks>
+    /// <see cref="Matrix4x4"/> transforms the mesh's vertices from body-local space into bind-pose
+    /// component space, matching the space a <c>PhysicsMeshFile</c> node's DMX geometry is authored in.
+    /// </remarks>
+    public List<(MeshDescriptor Mesh, string FileName, string ParentBone, Matrix4x4 BindPose)> PhysMeshesToExtract { get; } = [];
 
     /// <summary>
     /// Gets the list of render meshes to be extracted.
@@ -242,21 +250,24 @@ partial class ModelExtract
             PhysicsCollisionTags = [[]];
         }
 
+        var bindPoses = physAggregateData.BindPose;
+
         var i = 0;
         for (var partIndex = 0; partIndex < physAggregateData.Parts.Length; partIndex++)
         {
             var physicsPart = physAggregateData.Parts[partIndex];
             var parentBone = physAggregateData.GetParentBoneName(partIndex);
+            var bindPose = partIndex < bindPoses.Length ? bindPoses[partIndex] : Matrix4x4.Identity;
 
             foreach (var hull in physicsPart.Shape.Hulls)
             {
-                PhysHullsToExtract.Add((hull, GetDmxFileName_ForEmbeddedMesh("hull", i++), parentBone));
+                PhysHullsToExtract.Add((hull, GetDmxFileName_ForEmbeddedMesh("hull", i++), parentBone, bindPose));
                 StoreSurfaceTagCombo(hull);
             }
 
             foreach (var mesh in physicsPart.Shape.Meshes)
             {
-                PhysMeshesToExtract.Add((mesh, GetDmxFileName_ForEmbeddedMesh("phys", i++), parentBone));
+                PhysMeshesToExtract.Add((mesh, GetDmxFileName_ForEmbeddedMesh("phys", i++), parentBone, bindPose));
 
                 StoreSurfaceTagCombo(mesh);
 
@@ -437,6 +448,16 @@ partial class ModelExtract
             {
                 vertexData.JointCount = boneWeightCount;
 
+                // A vertex format can carry BLENDINDICES on a mesh with no bones (m_nBoneWeightCount
+                // 0) - the format is shared with skinned meshes, but nothing here is ever skinned to
+                // anything, so boneRemapTable is empty and the raw indices are not real bone
+                // references. GltfModelExporter already skips this data in that case; match it here
+                // instead of remapping and immediately discarding indices no one will read.
+                if (boneWeightCount == 0)
+                {
+                    continue;
+                }
+
                 var boneIndices = VBIB.GetBlendIndicesArray(vertexBuffer, attribute, boneRemapTable);
                 var compactedLength = boneIndices.Length / boneArrayComponents * boneWeightCount;
 
@@ -454,6 +475,11 @@ partial class ModelExtract
             }
             else if (attribute.SemanticName is "BLENDWEIGHT" or "BLENDWEIGHTS")
             {
+                if (boneWeightCount == 0)
+                {
+                    continue;
+                }
+
                 var vectorWeights = VBIB.GetBlendWeightsArray(vertexBuffer, attribute);
                 var flatWeights = MemoryMarshal.Cast<Vector4, float>(vectorWeights).ToArray();
 
@@ -512,6 +538,25 @@ partial class ModelExtract
             }
 
             vertexData.AddStream("blendweights$0", Enumerable.Repeat(1f, collection.Count).ToArray());
+        }
+    }
+
+    /// <summary>
+    /// Gives a mesh the normal and texture coordinate streams the model compiler requires. Shipped
+    /// content includes meshes authored with position alone, and the compiler faults on those.
+    /// </summary>
+    private static void AddCompilerRequiredStreams(DmeVertexData vertexData, int elementCount)
+    {
+        var indices = Enumerable.Range(0, elementCount).ToArray();
+
+        if (!vertexData.VertexFormat.Contains("normal$0"))
+        {
+            vertexData.AddIndexedStream("normal$0", Enumerable.Repeat(Vector3.UnitZ, elementCount).ToArray(), indices);
+        }
+
+        if (!vertexData.VertexFormat.Contains("texcoord$0"))
+        {
+            vertexData.AddIndexedStream("texcoord$0", Enumerable.Repeat(Vector2.Zero, elementCount).ToArray(), indices);
         }
     }
 
@@ -641,6 +686,7 @@ partial class ModelExtract
             if (merged != null)
             {
                 FillDatamodelVertexData(merged.Value.Buffer, dmeObjects.VertexData, materialInputSignature, boneWeightCount, options.BoneRemapTable);
+                AddCompilerRequiredStreams(dmeObjects.VertexData, (int)merged.Value.Buffer.ElementCount);
                 continue;
             }
 
@@ -650,6 +696,8 @@ partial class ModelExtract
             {
                 FillDatamodelVertexData(mbuf.VertexBuffers[vertexBufferIndices.Item2], dmeObjects.VertexData, materialInputSignature, boneWeightCount, options.BoneRemapTable);
             }
+
+            AddCompilerRequiredStreams(dmeObjects.VertexData, (int)mbuf.VertexBuffers[vertexBufferIndices.Item1].ElementCount);
         }
 
         TieElementRoot(datamodel, dmeModel);
@@ -815,33 +863,51 @@ partial class ModelExtract
     /// <summary>
     /// Converts a physics hull descriptor to DMX format.
     /// </summary>
-    public byte[] ToDmxMesh(HullDescriptor hull)
+    /// <param name="hull">The hull descriptor to convert.</param>
+    /// <param name="bindPose">
+    /// Transforms the hull's vertices from body-local space into bind-pose component space, the space a
+    /// <c>PhysicsHullFile</c> node's DMX geometry is authored in. Defaults to identity.
+    /// </param>
+    public byte[] ToDmxMesh(HullDescriptor hull, Matrix4x4? bindPose = null)
     {
         var uniformSurface = PhysicsSurfaceNames[hull.SurfacePropertyIndex];
         var uniformCollisionTags = PhysicsCollisionTags[hull.CollisionAttributeIndex];
         // https://github.com/ValveResourceFormat/ValveResourceFormat/issues/660#issuecomment-1795499191
         var fixRenderMeshCompileCrash = Type == ModelExtractType.Map_PhysicsToRenderMesh;
-        return ToDmxMesh(hull.Shape, hull.UserFriendlyName ?? "hull", uniformSurface, uniformCollisionTags, fixRenderMeshCompileCrash);
+        return ToDmxMesh(hull.Shape, hull.UserFriendlyName ?? "hull", uniformSurface, uniformCollisionTags, fixRenderMeshCompileCrash, bindPose ?? Matrix4x4.Identity);
     }
 
     /// <summary>
     /// Converts a physics mesh descriptor to DMX format.
     /// </summary>
-    public byte[] ToDmxMesh(MeshDescriptor mesh)
+    /// <param name="mesh">The mesh descriptor to convert.</param>
+    /// <param name="bindPose">
+    /// Transforms the mesh's vertices from body-local space into bind-pose component space, the space a
+    /// <c>PhysicsMeshFile</c> node's DMX geometry is authored in. Defaults to identity.
+    /// </param>
+    public byte[] ToDmxMesh(MeshDescriptor mesh, Matrix4x4? bindPose = null)
     {
         var uniformSurface = PhysicsSurfaceNames[mesh.SurfacePropertyIndex];
         var uniformCollisionTags = PhysicsCollisionTags[mesh.CollisionAttributeIndex];
         var fixRenderMeshCompileCrash = Type == ModelExtractType.Map_PhysicsToRenderMesh;
-        return ToDmxMesh(mesh.Shape, mesh.UserFriendlyName ?? "mesh", uniformSurface, uniformCollisionTags, PhysicsSurfaceNames, fixRenderMeshCompileCrash);
+        return ToDmxMesh(mesh.Shape, mesh.UserFriendlyName ?? "mesh", uniformSurface, uniformCollisionTags, PhysicsSurfaceNames, fixRenderMeshCompileCrash, bindPose ?? Matrix4x4.Identity);
     }
 
     /// <summary>
     /// Converts a Rubikon hull shape to DMX mesh format.
     /// </summary>
+    /// <remarks>
+    /// <paramref name="bindPose"/> transforms the hull's vertices from body-local space into bind-pose
+    /// component space. A <c>PhysicsHullFile</c> node's geometry is placed by the compiler as if
+    /// authored in that space, the same convention as a skinned render mesh, so the raw body-local
+    /// vertices read from a compiled <see cref="RnShapes.Hull"/> must be transformed by the part's
+    /// physics bind pose (<see cref="PhysAggregateData.BindPose"/>) before being written out.
+    /// </remarks>
     public static byte[] ToDmxMesh(RnShapes.Hull hull, string name,
         string uniformSurface,
         HashSet<string> uniformCollisionTags,
-        bool appendVertexNormalStream = false)
+        bool appendVertexNormalStream = false,
+        Matrix4x4? bindPose = null)
     {
         using var dmx = new Datamodel.Datamodel("model", 22);
         DmxModelBaseLayout(name, out var dmeModel, out var dag, out var vertexData);
@@ -857,6 +923,14 @@ partial class ModelExtract
         var edges = hull.GetEdges();
         var faces = hull.GetFaces();
         var vertexPositions = hull.GetVertexPositions().ToArray();
+
+        if (bindPose is Matrix4x4 pose)
+        {
+            for (var i = 0; i < vertexPositions.Length; i++)
+            {
+                vertexPositions[i] = Vector3.Transform(vertexPositions[i], pose);
+            }
+        }
 
         Debug.Assert(faces.Length + vertexPositions.Length == (edges.Length / 2) + 2);
 
@@ -893,11 +967,18 @@ partial class ModelExtract
     /// <summary>
     /// Converts a Rubikon mesh shape to DMX mesh format.
     /// </summary>
+    /// <remarks>
+    /// <paramref name="bindPose"/> transforms the mesh's vertices from body-local space into bind-pose
+    /// component space, matching how
+    /// <see cref="ToDmxMesh(RnShapes.Hull, string, string, HashSet{string}, bool, Matrix4x4?)"/> treats
+    /// a hull's vertices.
+    /// </remarks>
     public static byte[] ToDmxMesh(RnShapes.Mesh mesh, string name,
         string uniformSurface,
         HashSet<string> uniformCollisionTags,
         string[] surfaceList,
-        bool appendVertexNormalStream = false)
+        bool appendVertexNormalStream = false,
+        Matrix4x4? bindPose = null)
     {
         using var dmx = new Datamodel.Datamodel("model", 22);
         DmxModelBaseLayout(name, out var dmeModel, out var dag, out var vertexData);
@@ -948,6 +1029,14 @@ partial class ModelExtract
         }
 
         var vertices = mesh.GetVertices().ToArray();
+
+        if (bindPose is Matrix4x4 pose)
+        {
+            for (var i = 0; i < vertices.Length; i++)
+            {
+                vertices[i] = Vector3.Transform(vertices[i], pose);
+            }
+        }
 
         vertexData.AddIndexedStream("position$0", vertices, indices);
 
