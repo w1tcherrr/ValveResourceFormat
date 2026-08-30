@@ -419,6 +419,11 @@ namespace ValveResourceFormat.Renderer.SceneNodes
                 AnimationController.RegisterBoneMask(name, boneWeights);
             }
 
+            foreach (var (name, morphWeights) in model.GetMorphMasks())
+            {
+                AnimationController.RegisterMorphMask(name, morphWeights);
+            }
+
             foreach (var poseParameter in model.GetPoseParameters())
             {
                 AnimationController.RegisterPoseParameter(poseParameter);

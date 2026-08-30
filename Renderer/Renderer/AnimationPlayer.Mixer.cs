@@ -29,7 +29,10 @@ namespace ValveResourceFormat.Renderer
             /// <summary>Gets or sets the blend transition time in seconds. A value of -1 indicates manual blending.</summary>
             public float BlendTime { get; set; }
 
-            /// <summary>Gets or sets the bone mask name to apply per-bone weighting. Empty string means no mask.</summary>
+            /// <summary>
+            /// Gets or sets the mask name to apply per-bone and per-flex-controller weighting. Empty
+            /// string means no mask.
+            /// </summary>
             public string BoneMask { get; set; } = string.Empty;
 
             /// <summary>
@@ -109,6 +112,13 @@ namespace ValveResourceFormat.Renderer
         public Dictionary<string, Half[]> BoneMaskDefinitions { get; } = [];
 
         /// <summary>
+        /// Morph masks are used by clips to weigh flex controller contributions on a per-controller
+        /// basis. Shares its keys with <see cref="BoneMaskDefinitions"/> - the same named mask scopes
+        /// both bones and flex controllers.
+        /// </summary>
+        public Dictionary<string, float[]> MorphMaskDefinitions { get; } = [];
+
+        /// <summary>
         /// Optional resolver from an animation or sequence name to the loaded <see cref="Animation"/>
         /// instance, used to resolve an auto layer's target to the clip it plays.
         /// </summary>
@@ -177,6 +187,30 @@ namespace ValveResourceFormat.Renderer
             }
 
             BoneMaskDefinitions[name] = maskArray;
+        }
+
+        /// <summary>
+        /// Registers a morph mask for per-flex-controller weighting. A controller missing from
+        /// <paramref name="controllerWeights"/> defaults to 1 (unrestricted).
+        /// </summary>
+        /// <param name="name">The name of the morph mask.</param>
+        /// <param name="controllerWeights">Dictionary mapping flex controller names to weight values.</param>
+        public void RegisterMorphMask(string name, Dictionary<string, float> controllerWeights)
+        {
+            var flexControllers = FrameCache.FlexControllers;
+            var maskArray = new float[flexControllers.Length];
+            Array.Fill(maskArray, 1f);
+
+            foreach (var (controllerName, weight) in controllerWeights)
+            {
+                var index = Array.FindIndex(flexControllers, c => c.Name.Equals(controllerName, StringComparison.OrdinalIgnoreCase));
+                if (index != -1)
+                {
+                    maskArray[index] = weight;
+                }
+            }
+
+            MorphMaskDefinitions[name] = maskArray;
         }
 
         /// <summary>
@@ -647,11 +681,20 @@ namespace ValveResourceFormat.Renderer
                         : BlendedFrame.Bones[i].Blend(frame.Bones[i], weightedBlendFactor);
                 }
 
+                float[]? morphMask = null;
+                if (!string.IsNullOrEmpty(clip.BoneMask))
+                {
+                    MorphMaskDefinitions.TryGetValue(clip.BoneMask, out morphMask);
+                }
+
                 for (var i = 0; i < frame.Datas.Length; i++)
                 {
+                    var morphMaskWeight = morphMask != null ? morphMask[i] : 1f;
+                    var weightedDataBlendFactor = blendFactor * morphMaskWeight;
+
                     BlendedFrame.Datas[i] = clip.IsAdditive
-                        ? BlendedFrame.Datas[i] + frame.Datas[i] * blendFactor
-                        : float.Lerp(BlendedFrame.Datas[i], frame.Datas[i], blendFactor);
+                        ? BlendedFrame.Datas[i] + frame.Datas[i] * weightedDataBlendFactor
+                        : float.Lerp(BlendedFrame.Datas[i], frame.Datas[i], weightedDataBlendFactor);
                 }
 
                 totalWeight += clip.Weight;

@@ -519,6 +519,67 @@ namespace ValveResourceFormat.ResourceTypes
         }
 
         /// <summary>
+        /// Gets the named morph controller masks (<c>m_morphCtrlWeightArray</c>) from the model's embedded
+        /// sequence group, mapping each mask name to a weight for every flex controller. A controller not
+        /// individually listed in a mask's array carries that mask's own
+        /// <c>m_flDefaultMorphCtrlWeight</c>, which itself defaults to 1 (unrestricted) when the compiled
+        /// data omits it - the runtime schema default, not ModelDoc's authoring default of 0. The same
+        /// mask name scopes both bones (<see cref="GetBoneMasks"/>) and flex controllers. Empty for a
+        /// model without legacy (AG1) sequence data or without flex controllers.
+        /// </summary>
+        public Dictionary<string, Dictionary<string, float>> GetMorphMasks()
+        {
+            var ctrl = Resource.GetBlockByType(BlockType.CTRL) as BinaryKV3;
+            var embeddedAnimation = ctrl?.Data.Root.GetSubCollection("embedded_animation");
+            var seqGroupDataBlockIndex = embeddedAnimation != null
+                ? (int)embeddedAnimation.GetIntegerProperty("seqgroup_data_block")
+                : 0;
+
+            if (seqGroupDataBlockIndex <= 0)
+            {
+                return [];
+            }
+
+            var sequenceDataBlock = Resource.GetBlockByIndex(seqGroupDataBlockIndex) as KeyValuesOrNTRO;
+            var boneMaskArray = sequenceDataBlock?.Data.GetArray("m_localBoneMaskArray");
+            var flexControllers = FlexControllers;
+
+            if (boneMaskArray == null || flexControllers.Length == 0)
+            {
+                return [];
+            }
+
+            var masks = new Dictionary<string, Dictionary<string, float>>();
+
+            foreach (var boneMask in boneMaskArray)
+            {
+                var defaultWeight = boneMask.GetFloatProperty("m_flDefaultMorphCtrlWeight", 1f);
+                var morphWeightArray = boneMask.GetArray("m_morphCtrlWeightArray");
+
+                if (defaultWeight == 1f && (morphWeightArray == null || morphWeightArray.Count == 0))
+                {
+                    continue;
+                }
+
+                var weights = new Dictionary<string, float>(flexControllers.Length);
+
+                foreach (var controller in flexControllers)
+                {
+                    weights[controller.Name] = defaultWeight;
+                }
+
+                foreach (var morphWeightPair in morphWeightArray ?? [])
+                {
+                    weights[(string)morphWeightPair[0]] = (float)morphWeightPair[1];
+                }
+
+                masks[boneMask.GetStringProperty("m_sName")] = weights;
+            }
+
+            return masks;
+        }
+
+        /// <summary>
         /// Gets the named pose parameters (<c>m_localPoseParamArray</c>) from the model's embedded
         /// sequence group. A 1D or 2D blend sequence's <see cref="SequenceAnimation.PoseParameterNames"/>
         /// names one of these per blend dimension. Empty for a model without legacy (AG1) sequence data.

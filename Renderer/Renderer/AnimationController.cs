@@ -378,6 +378,15 @@ namespace ValveResourceFormat.Renderer
         }
 
         /// <summary>
+        /// Registers a morph mask for per-flex-controller weighting. Flex controllers only ever animate
+        /// the model's own skeleton, so this always targets the model player rather than any registered
+        /// external skeleton.
+        /// </summary>
+        /// <param name="name">The name of the morph mask.</param>
+        /// <param name="controllerWeights">Dictionary mapping flex controller names to weight values.</param>
+        public void RegisterMorphMask(string name, Dictionary<string, float> controllerWeights) => modelPlayer.RegisterMorphMask(name, controllerWeights);
+
+        /// <summary>
         /// Registers a pose parameter a 1D or 2D blend sequence can position its animations along by
         /// name. Blend sequences only ever play on the model's own skeleton, so this always targets the
         /// model player rather than any registered external skeleton.
