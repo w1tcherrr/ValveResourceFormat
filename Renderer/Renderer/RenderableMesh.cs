@@ -90,7 +90,7 @@ namespace ValveResourceFormat.Renderer
                 MeshBoneCount = model.BoneRemapTable.GetMeshBoneCount(meshIndex);
             }
 
-            BoneWeightCount = mesh.Data.GetSubCollection("m_skeleton")?.GetInt32Property("m_nBoneWeightCount") ?? 0;
+            BoneWeightCount = mesh.BoneWeightCount;
             Skinning = GetSkinning(vbib, BoneWeightCount);
 
             mesh.GetBounds();

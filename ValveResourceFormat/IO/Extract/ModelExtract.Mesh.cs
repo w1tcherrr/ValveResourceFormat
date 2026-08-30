@@ -448,11 +448,8 @@ partial class ModelExtract
             {
                 vertexData.JointCount = boneWeightCount;
 
-                // A vertex format can carry BLENDINDICES on a mesh with no bones (m_nBoneWeightCount
-                // 0) - the format is shared with skinned meshes, but nothing here is ever skinned to
-                // anything, so boneRemapTable is empty and the raw indices are not real bone
-                // references. GltfModelExporter already skips this data in that case; match it here
-                // instead of remapping and immediately discarding indices no one will read.
+                // An unskinned mesh can still carry the attribute, because the vertex format is shared
+                // with skinned ones, and then the indices reference nothing.
                 if (boneWeightCount == 0)
                 {
                     continue;
@@ -679,7 +676,7 @@ partial class ModelExtract
             }
         }
 
-        var boneWeightCount = mesh.Data.GetSubCollection("m_skeleton")?.GetInt32Property("m_nBoneWeightCount") ?? 0;
+        var boneWeightCount = mesh.BoneWeightCount;
 
         foreach (var (vertexBufferIndices, dmeObjects) in dmeVertexBuffers)
         {

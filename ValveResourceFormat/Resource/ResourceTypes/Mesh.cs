@@ -51,6 +51,41 @@ namespace ValveResourceFormat.ResourceTypes
         /// </summary>
         public Morph? MorphData { get; set; }
 
+        private int? cachedBoneWeightCount;
+
+        /// <summary>
+        /// Gets how many bone weights each vertex carries, or zero when the mesh is not skinned.
+        /// </summary>
+        /// <remarks>
+        /// Read off the vertex buffers as well as the skeleton's own <c>m_nBoneWeightCount</c>, which is 4
+        /// on plenty of meshes that carry no blend attributes at all. A buffer with blend indices but no
+        /// weights is skinned to one bone per vertex.
+        /// </remarks>
+        public int BoneWeightCount => cachedBoneWeightCount ??= ReadBoneWeightCount();
+
+        private int ReadBoneWeightCount()
+        {
+            var declared = Data.GetSubCollection("m_skeleton")?.GetInt32Property("m_nBoneWeightCount") ?? 0;
+
+            if (declared == 0)
+            {
+                return 0;
+            }
+
+            foreach (var buffer in VBIB.VertexBuffers)
+            {
+                foreach (var field in buffer.InputLayoutFields)
+                {
+                    if (field.SemanticName == "BLENDINDICES")
+                    {
+                        return declared;
+                    }
+                }
+            }
+
+            return 0;
+        }
+
         private VBIB? cachedVBIB { get; set; }
 
         /// <summary>
