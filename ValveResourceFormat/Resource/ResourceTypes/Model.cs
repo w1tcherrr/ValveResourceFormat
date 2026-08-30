@@ -153,7 +153,7 @@ namespace ValveResourceFormat.ResourceTypes
         private FlexController[]? cachedFlexControllers;
         private ModelInfo? cachedModelInfo;
         private ModelConfigList? cachedModelConfigList;
-        private List<(Mesh Mesh, int MeshIndex, string Name)>? cachedEmbeddedMeshes;
+        private List<ModelMesh>? cachedEmbeddedMeshes;
         private ModelLodInfo? cachedLodInfo;
         private BoneConstraint[]? cachedBoneConstraints;
         private BoneRemapTable? cachedBoneRemapTable;
@@ -247,17 +247,19 @@ namespace ValveResourceFormat.ResourceTypes
         public ModelMeshGroups MeshGroups => cachedMeshGroups ??= new ModelMeshGroups(Data);
 
         /// <summary>
-        /// Gets referenced mesh names and their LoD masks.
+        /// Gets the model's references to meshes that live in their own vmesh. A slot the model fills with
+        /// an embedded mesh instead carries no reference and is left out.
         /// </summary>
-        /// <returns>Enumerable of mesh index, mesh name, and LoD mask tuples.</returns>
-        public IEnumerable<(int MeshIndex, string MeshName, long LoDMask)> GetReferenceMeshNamesAndLoD()
+        public IEnumerable<ModelMeshReference> GetReferenceMeshNamesAndLoD()
         {
             var refMeshes = Data.GetArray<string>("m_refMeshes");
+
             if (refMeshes == null)
             {
                 return [];
             }
-            var result = new List<(int MeshIndex, string MeshName, long LoDMask)>(refMeshes.Length);
+
+            var result = new List<ModelMeshReference>(refMeshes.Length);
 
             for (var meshIndex = 0; meshIndex < refMeshes.Length; meshIndex++)
             {
@@ -265,24 +267,12 @@ namespace ValveResourceFormat.ResourceTypes
 
                 if (!string.IsNullOrEmpty(refMesh))
                 {
-                    var lodMask = LodInfo.GetMeshMask(meshIndex);
-                    result.Add((meshIndex, refMesh, lodMask));
+                    result.Add(new ModelMeshReference(meshIndex, refMesh, LodInfo.GetMeshMask(meshIndex)));
                 }
             }
 
             return result;
         }
-
-        /// <summary>
-        /// Gets embedded meshes with their LoD masks.
-        /// </summary>
-        /// <remarks>
-        /// A mesh's own index addresses the mask table, which covers embedded and referenced meshes
-        /// alike; an embedded mesh is not necessarily the nth entry of it.
-        /// </remarks>
-        /// <returns>Enumerable of mesh, mesh index, name, and LoD mask tuples.</returns>
-        public IEnumerable<(Mesh Mesh, int MeshIndex, string Name, long LoDMask)> GetEmbeddedMeshesAndLoD()
-            => GetEmbeddedMeshes().Select(m => (m.Mesh, m.MeshIndex, m.Name, LodInfo.GetMeshMask(m.MeshIndex)));
 
         /// <summary>
         /// Gets this model's level-of-detail structure (which meshes belong to which LOD level and the
@@ -295,20 +285,23 @@ namespace ValveResourceFormat.ResourceTypes
         /// <summary>
         /// Gets the embedded meshes present in the given LOD <paramref name="level"/>.
         /// </summary>
-        public IEnumerable<(Mesh Mesh, int MeshIndex, string Name, long LoDMask)> GetEmbeddedMeshesForLod(int level)
-            => GetEmbeddedMeshesAndLoD().Where(m => LodInfo.IsMeshInLevel(m.MeshIndex, level));
+        public IEnumerable<ModelMesh> GetEmbeddedMeshesForLod(int level)
+            => GetEmbeddedMeshes().Where(m => LodInfo.IsMeshInLevel(m.MeshIndex, level));
 
         /// <summary>
         /// Gets the referenced mesh names present in the given LOD <paramref name="level"/>.
         /// </summary>
-        public IEnumerable<(int MeshIndex, string MeshName, long LoDMask)> GetReferenceMeshNamesForLod(int level)
+        public IEnumerable<ModelMeshReference> GetReferenceMeshNamesForLod(int level)
             => GetReferenceMeshNamesAndLoD().Where(m => LodInfo.IsMeshInLevel(m.MeshIndex, level));
 
         /// <summary>
-        /// Gets embedded meshes from the model.
+        /// Gets the meshes embedded in the model itself.
         /// </summary>
-        /// <returns>Enumerable of mesh, mesh index, and name tuples.</returns>
-        public IEnumerable<(Mesh Mesh, int MeshIndex, string Name)> GetEmbeddedMeshes()
+        /// <remarks>
+        /// A mesh's own index addresses the model's mask tables, which cover embedded and referenced
+        /// meshes alike, so an embedded mesh is not necessarily the nth entry of them.
+        /// </remarks>
+        public IEnumerable<ModelMesh> GetEmbeddedMeshes()
         {
             if (cachedEmbeddedMeshes != null)
             {
@@ -324,7 +317,7 @@ namespace ValveResourceFormat.ResourceTypes
                 return cachedEmbeddedMeshes;
             }
 
-            var meshes = new List<(Mesh Mesh, int MeshIndex, string Name)>(embeddedMeshes.Count);
+            var meshes = new List<ModelMesh>(embeddedMeshes.Count);
 
             foreach (var embeddedMesh in embeddedMeshes)
             {
@@ -361,14 +354,14 @@ namespace ValveResourceFormat.ResourceTypes
                     }
                 }
 
-                meshes.Add((mesh, meshIndex, name));
+                meshes.Add(new ModelMesh(mesh, meshIndex, name, LodInfo.GetMeshMask(meshIndex)));
             }
 
             cachedEmbeddedMeshes = meshes;
             return cachedEmbeddedMeshes;
         }
 
-        private (Mesh Mesh, int MeshIndex, string Name) ParseEmbeddedMesh2(KVObject embeddedMesh)
+        private ModelMesh ParseEmbeddedMesh2(KVObject embeddedMesh)
         {
             var name = embeddedMesh.GetStringProperty("m_Name");
             var meshIndex = (int)embeddedMesh.GetIntegerProperty("m_nMeshIndex");
@@ -388,7 +381,7 @@ namespace ValveResourceFormat.ResourceTypes
                 mesh.MorphData = Resource.GetBlockByIndex(morphBlockIndex) as Morph;
             }
 
-            return (mesh, meshIndex, name);
+            return new ModelMesh(mesh, meshIndex, name, LodInfo.GetMeshMask(meshIndex));
         }
 
         /// <summary>

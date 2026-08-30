@@ -98,7 +98,7 @@ namespace ValveResourceFormat.Renderer
         public SceneAggregate(Scene scene, Model model)
             : base(scene)
         {
-            var embeddedMeshes = model.GetEmbeddedMeshesAndLoD().ToList();
+            var embeddedMeshes = model.GetEmbeddedMeshes().ToList();
 
             // TODO: Perhaps use ModelSceneNode.LoadMeshes
             if (embeddedMeshes.Count != 0)

@@ -380,7 +380,7 @@ namespace ValveResourceFormat.Renderer.SceneNodes
         private void LoadMeshes(Model model)
         {
             // All LoD levels are loaded; the active one is picked at render time.
-            foreach (var embeddedMesh in model.GetEmbeddedMeshesAndLoD())
+            foreach (var embeddedMesh in model.GetEmbeddedMeshes())
             {
                 embeddedMesh.Mesh.LoadExternalMorphData(Scene.RendererContext.FileLoader);
                 model.SetExternalMorphData(embeddedMesh.Mesh.MorphData);

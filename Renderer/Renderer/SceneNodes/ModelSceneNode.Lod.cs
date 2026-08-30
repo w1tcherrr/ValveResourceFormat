@@ -15,7 +15,7 @@ namespace ValveResourceFormat.Renderer.SceneNodes
 
         private readonly ModelLodInfo lodInfo;
 
-        private readonly List<(int MeshIndex, string MeshName, long LoDMask)> referenceMeshes;
+        private readonly List<ModelMeshReference> referenceMeshes;
 
         private int? lodOverride;
 
@@ -23,7 +23,7 @@ namespace ValveResourceFormat.Renderer.SceneNodes
 
 #pragma warning disable CA1024 // Use properties where appropriate
         /// <summary>Returns every external reference mesh name and its LoD mask, across all levels.</summary>
-        public IEnumerable<(int MeshIndex, string MeshName, long LoDMask)> GetReferenceMeshes()
+        public IEnumerable<ModelMeshReference> GetReferenceMeshes()
             => referenceMeshes;
 
         /// <summary>Returns all mesh group names defined by this model.</summary>
