@@ -63,10 +63,42 @@ namespace ValveResourceFormat.ResourceTypes
             }
         }
 
+        /// <summary>
+        /// Gets the authored collision/view bounds and other per-model metadata.
+        /// </summary>
+        public ModelInfo ModelInfo
+        {
+            get
+            {
+                cachedModelInfo ??= new ModelInfo(Data.GetSubCollection("m_modelInfo"));
+                return cachedModelInfo;
+            }
+        }
+
+        /// <summary>
+        /// Gets this model's named configuration list, or <see langword="null"/> if it does not have one.
+        /// </summary>
+        public ModelConfigList? ModelConfigList
+        {
+            get
+            {
+                if (cachedModelConfigList == null
+                    && Data.TryGetValue("m_pModelConfigList", out var modelConfigList)
+                    && modelConfigList.ValueType == KVValueType.Collection)
+                {
+                    cachedModelConfigList = new ModelConfigList(modelConfigList);
+                }
+
+                return cachedModelConfigList;
+            }
+        }
+
         private List<Animation>? CachedAnimations;
         private KVObject? cachedKeyValues;
         private Skeleton? cachedSkeleton;
         private FlexController[]? cachedFlexControllers;
+        private ModelInfo? cachedModelInfo;
+        private ModelConfigList? cachedModelConfigList;
         private List<(Mesh Mesh, int MeshIndex, string Name)>? cachedEmbeddedMeshes;
         private ModelLodInfo? cachedLodInfo;
 
@@ -271,6 +303,15 @@ namespace ValveResourceFormat.ResourceTypes
                 if (morphBlockIndex >= 0)
                 {
                     mesh.MorphData = Resource.GetBlockByIndex(morphBlockIndex) as Morph;
+                }
+
+                if (embeddedMesh.ContainsKey("tools_vb_block"))
+                {
+                    var toolsVbBlockIndex = (int)embeddedMesh.GetIntegerProperty("tools_vb_block");
+                    if (toolsVbBlockIndex >= 0 && Resource.GetBlockByIndex(toolsVbBlockIndex) is TBUF toolsBuffer)
+                    {
+                        mesh.VBIB.ToolsBuffers.AddRange(toolsBuffer.VertexBuffers);
+                    }
                 }
 
                 meshes.Add((mesh, meshIndex, name));
@@ -578,6 +619,15 @@ namespace ValveResourceFormat.ResourceTypes
 
             return GetMeshGroups().Where((group, index) => index < 64 && ((1UL << index) & defaultGroupMask) != 0);
         }
+
+        /// <summary>
+        /// Gets the material attributes the anim graph is allowed to drive, with their channel count
+        /// (1 for a scalar float target, 4 for a color target).
+        /// </summary>
+        /// <returns>Enumerable of attribute name and channel count pairs.</returns>
+        public IEnumerable<(string AttributeName, int NumChannels)> GetAnimatedMaterialAttributes()
+            => (Data.GetArray("m_AnimatedMaterialAttributes") ?? [])
+                .Select(attr => (attr.GetStringProperty("m_AttributeName"), (int)attr.GetIntegerProperty("m_nNumChannels")));
 
         KVObject? ParseKeyValuesText()
         {
