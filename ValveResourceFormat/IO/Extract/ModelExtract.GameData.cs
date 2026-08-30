@@ -81,11 +81,9 @@ partial class ModelExtract
             rootNode.Add("anim_graph_name", keyvalues.GetStringProperty("anim_graph_resource"));
         }
 
-        if (keyvalues.ContainsKey("BoneConstraintList"))
+        if (model.BoneConstraints.Count > 0)
         {
-            var boneConstraintListData = keyvalues.GetArray("BoneConstraintList");
-            var boneConstraintList = ExtractBoneConstraints(boneConstraintListData);
-            lists.RootChildren.Add(boneConstraintList);
+            lists.RootChildren.Add(ExtractBoneConstraints(model));
         }
 
         if (BuildIKData(model) is { } ikData)

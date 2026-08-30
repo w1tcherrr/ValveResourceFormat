@@ -40,6 +40,28 @@ namespace ValveResourceFormat.ResourceTypes
         }
 
         /// <summary>
+        /// Gets the bone constraints the model was authored with, in compiled order. These are read by
+        /// both the decompiler, which writes them back as constraint nodes, and the renderer, which
+        /// simulates the ones it supports.
+        /// </summary>
+        public IReadOnlyList<BoneConstraint> BoneConstraints => cachedBoneConstraints ??= BoneConstraint.ReadList(KeyValues);
+
+        /// <summary>
+        /// Gets the compiled data of every bone constraint of one class, in compiled order.
+        /// </summary>
+        /// <param name="className">The compiled constraint class, e.g. <c>CTiltTwistConstraint</c>.</param>
+        public IEnumerable<KVObject> GetBoneConstraints(string className)
+        {
+            foreach (var constraint in BoneConstraints)
+            {
+                if (constraint.ClassName == className)
+                {
+                    yield return constraint.Data;
+                }
+            }
+        }
+
+        /// <summary>
         /// Gets the skeleton for this model.
         /// </summary>
         public Skeleton Skeleton
@@ -101,6 +123,7 @@ namespace ValveResourceFormat.ResourceTypes
         private ModelConfigList? cachedModelConfigList;
         private List<(Mesh Mesh, int MeshIndex, string Name)>? cachedEmbeddedMeshes;
         private ModelLodInfo? cachedLodInfo;
+        private BoneConstraint[]? cachedBoneConstraints;
 
         /// <summary>
         /// Gets the hitbox sets for this model.

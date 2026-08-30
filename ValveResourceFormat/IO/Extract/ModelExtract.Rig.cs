@@ -1,8 +1,8 @@
-using System.Diagnostics;
 using System.Linq;
 using ValveKeyValue;
 using ValveResourceFormat.ResourceTypes;
 using ValveResourceFormat.ResourceTypes.ModelAnimation;
+using ValveResourceFormat.ResourceTypes.ModelData;
 using ValveResourceFormat.Serialization.KeyValues;
 using static ValveResourceFormat.IO.KVHelpers;
 
@@ -153,14 +153,10 @@ partial class ModelExtract
         node.Add("children", childrenKV);
     }
 
-    static KVObject? ProcessBoneConstraint(KVObject? boneConstraint)
+    static KVObject? ProcessBoneConstraint(BoneConstraint constraint)
     {
-        if (boneConstraint == null) //ModelDoc will compile constraints as null if it considers them invalid
-        {
-            return null;
-        }
-
-        var className = boneConstraint.GetStringProperty("_class");
+        var boneConstraint = constraint.Data;
+        var className = constraint.ClassName;
         var targetClassName = RemapBoneConstraintClassname(className);
         if (targetClassName == null)
         {
@@ -199,10 +195,8 @@ partial class ModelExtract
         return node;
     }
 
-    KVObject ExtractBoneConstraints(IReadOnlyList<KVObject> boneConstraintsList)
+    KVObject ExtractBoneConstraints(Model model)
     {
-        Debug.Assert(model is not null);
-
         var stringTokenKeys = model.Skeleton.Bones.Select(b => b.Name);
         if (RenderMeshesToExtract.Count > 0)
         {
@@ -214,7 +208,7 @@ partial class ModelExtract
 
         var childrenKV = KVObject.Array();
 
-        foreach (var boneConstraint in boneConstraintsList)
+        foreach (var boneConstraint in model.BoneConstraints)
         {
             var constraint = ProcessBoneConstraint(boneConstraint);
             if (constraint != null)
