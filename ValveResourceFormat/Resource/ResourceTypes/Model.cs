@@ -40,6 +40,38 @@ namespace ValveResourceFormat.ResourceTypes
         }
 
         /// <summary>
+        /// Gets the NM skeletons this model can be animated on, by resource path, in declaration order.
+        /// Empty for a model that declares none.
+        /// </summary>
+        public string[] NmSkeletonRefs => Data.GetArray<string>("m_vecNmSkeletonRefs") ?? [];
+
+        /// <summary>
+        /// Gets the animation graphs bound to this model, in declaration order. The first entry is the
+        /// model's default graph. Empty for a model that binds none.
+        /// </summary>
+        public IReadOnlyList<(string Identifier, string GraphPath)> AnimGraph2References
+            => cachedAnimGraph2References ??= ReadAnimGraph2References();
+
+        private (string Identifier, string GraphPath)[] ReadAnimGraph2References()
+        {
+            var graphRefs = Data.GetArray("m_animGraph2Refs");
+
+            if (graphRefs == null)
+            {
+                return [];
+            }
+
+            var references = new (string Identifier, string GraphPath)[graphRefs.Count];
+
+            for (var i = 0; i < graphRefs.Count; i++)
+            {
+                references[i] = (graphRefs[i].GetStringProperty("m_sIdentifier"), graphRefs[i].GetStringProperty("m_hGraph"));
+            }
+
+            return references;
+        }
+
+        /// <summary>
         /// Gets the bone constraints the model was authored with, in compiled order. These are read by
         /// both the decompiler, which writes them back as constraint nodes, and the renderer, which
         /// simulates the ones it supports.
@@ -126,6 +158,7 @@ namespace ValveResourceFormat.ResourceTypes
         private BoneConstraint[]? cachedBoneConstraints;
         private BoneRemapTable? cachedBoneRemapTable;
         private ModelMeshGroups? cachedMeshGroups;
+        private (string Identifier, string GraphPath)[]? cachedAnimGraph2References;
 
         /// <summary>
         /// Gets the hitbox sets for this model.

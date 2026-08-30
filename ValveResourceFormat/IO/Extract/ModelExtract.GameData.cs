@@ -41,32 +41,21 @@ partial class ModelExtract
             }
         }
 
-        if (model.Data.ContainsKey("m_vecNmSkeletonRefs"))
+        foreach (var skeletonRef in model.NmSkeletonRefs)
         {
-            foreach (var skeletonRef in model.Data.GetArray<string>("m_vecNmSkeletonRefs"))
-            {
-                lists.NmSkeletons.Add(MakeNode("NmSkeletonReference", ("filename", skeletonRef)));
-            }
+            lists.NmSkeletons.Add(MakeNode("NmSkeletonReference", ("filename", skeletonRef)));
         }
 
-        if (model.Data.ContainsKey("m_animGraph2Refs"))
-        {
-            var animGraph2Refs = model.Data.GetArray("m_animGraph2Refs");
-            for (int i = 0; i < animGraph2Refs.Count; i++)
-            {
-                var refObj = animGraph2Refs[i];
-                var identifier = refObj.GetStringProperty("m_sIdentifier");
-                var graphPath = refObj.GetStringProperty("m_hGraph");
+        var animGraph2Refs = model.AnimGraph2References;
 
-                if (i == 0)
-                {
-                    lists.AnimGraph2.Add(MakeNode("DefaultAnimGraph2", ("filename", graphPath)));
-                }
-                else
-                {
-                    lists.AnimGraph2.Add(MakeNode("AnimGraph2", ("name", identifier), ("filename", graphPath)));
-                }
-            }
+        for (var i = 0; i < animGraph2Refs.Count; i++)
+        {
+            var (identifier, graphPath) = animGraph2Refs[i];
+
+            // The first reference is the model's default graph, which takes a node of its own.
+            lists.AnimGraph2.Add(i == 0
+                ? MakeNode("DefaultAnimGraph2", ("filename", graphPath))
+                : MakeNode("AnimGraph2", ("name", identifier), ("filename", graphPath)));
         }
 
         var keyvalues = model.KeyValues;
