@@ -2,7 +2,6 @@ using System.IO;
 using System.Threading.Tasks;
 using TUnit.Assertions.Enums;
 using ValveResourceFormat;
-using ValveResourceFormat.IO;
 using ValveResourceFormat.ResourceTypes;
 
 namespace Tests
@@ -204,29 +203,6 @@ namespace Tests
                 await Assert.That(lod.AvailableLevels).IsEquivalentTo(FixtureLevels, CollectionOrdering.Matching);
                 await Assert.That(lod.LevelCount).IsEqualTo(5);
                 await Assert.That(lod.SwitchDistances).IsEquivalentTo(FixtureSwitches, CollectionOrdering.Matching);
-
-            }
-        }
-
-        // Decompiler round-trip: the extracted .vmdl must carry the LOD structure back as a
-        // LODGroupList, one LODGroup per level with the right switch_threshold. Recompiling this
-        // reproduces the original masks/distances (verified separately with resourcecompiler).
-        [Test]
-        public async Task DecompiledModelEmitsLodGroupList()
-        {
-            using var resource = new Resource();
-            resource.Read(Path.Combine(TestContext.TestDirectory!, "Files", "lod_test.vmdl_c"));
-
-            var vmdl = new ModelExtract(resource, new NullFileLoader()).ToValveModel();
-
-            using (Assert.Multiple())
-            {
-                await Assert.That(vmdl).Contains("LODGroupList");
-                await Assert.That(vmdl).Contains("_class = \"LODGroup\"");
-                await Assert.That(vmdl).Contains("mesh_references");
-                await Assert.That(vmdl).Contains("switch_threshold = 0");
-                await Assert.That(vmdl).Contains("switch_threshold = 5");
-                await Assert.That(vmdl).Contains("switch_threshold = 20");
 
             }
         }

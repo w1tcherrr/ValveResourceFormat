@@ -10,8 +10,6 @@ namespace Tests.Renderer
 {
     public class AnimationMorphMaskTest
     {
-        private static string FilePath(string name)
-            => Path.Combine(TestContext.TestDirectory!, "Files", name);
 
         // A minimal animation whose flex controller values are fixed regardless of playback time, so the
         // test isolates mask scoping (AnimationPlayer.Mixer.cs's GetBlendedFrame) from frame decoding and
@@ -47,12 +45,12 @@ namespace Tests.Renderer
         private static Skeleton LoadSkeleton()
         {
             using var resource = new Resource();
-            resource.Read(FilePath("necro_archer.vmdl_c"));
+            resource.Read(TestFixtures.Path("necro_archer.vmdl_c"));
             return ((Model)resource.DataBlock!).Skeleton;
         }
 
         [Test]
-        public async Task MaskedLayerOnlyMovesThePermittedFlexControllers()
+        public async Task AMorphMaskScopesALayerToThePermittedFlexControllers()
         {
             var flexControllers = new[]
             {
@@ -89,6 +87,20 @@ namespace Tests.Renderer
 
             var datas = controller.AnimationFrame!.Datas;
 
+            // The same layer without a mask, as the control: every controller must move, so the
+            // difference above is the mask and nothing else.
+            var unmasked = new AnimationController(LoadSkeleton(), flexControllers);
+            unmasked.SetAnimation(new FixedFlexAnimation("base", [0.2f, 0.2f, 0.2f]));
+            unmasked.Clips["layer"] = new AnimationPlayer.PlaybackClip(new FixedFlexAnimation("layer", [1f, 1f, 1f]))
+            {
+                IsAdditive = true,
+                Weight = 1f,
+            };
+
+            unmasked.Update(0f);
+
+            var unmaskedDatas = unmasked.AnimationFrame!.Datas;
+
             using (Assert.Multiple())
             {
                 await Assert.That(datas[0]).IsEqualTo(1.2f).Within(0.0001f)
@@ -97,39 +109,12 @@ namespace Tests.Renderer
                     .Because("jawClencher is explicitly excluded (weight 0) - only the base clip's value survives");
                 await Assert.That(datas[2]).IsEqualTo(1.2f).Within(0.0001f)
                     .Because("cheekPuff is unlisted in the mask and must default to 1 (unrestricted), not 0");
+
+                await Assert.That(unmaskedDatas[0]).IsEqualTo(1.2f).Within(0.0001f);
+                await Assert.That(unmaskedDatas[1]).IsEqualTo(1.2f).Within(0.0001f);
+                await Assert.That(unmaskedDatas[2]).IsEqualTo(1.2f).Within(0.0001f);
             }
         }
 
-        [Test]
-        public async Task UnmaskedLayerMovesEveryFlexController()
-        {
-            var flexControllers = new[]
-            {
-                new ValveResourceFormat.ResourceTypes.ModelFlex.FlexController("browLowerer", "default", 0f, 1f),
-                new ValveResourceFormat.ResourceTypes.ModelFlex.FlexController("jawClencher", "default", 0f, 1f),
-            };
-
-            var controller = new AnimationController(LoadSkeleton(), flexControllers);
-
-            var baseAnim = new FixedFlexAnimation("base", [0.2f, 0.2f]);
-            var layerAnim = new FixedFlexAnimation("layer", [1f, 1f]);
-
-            controller.SetAnimation(baseAnim);
-            controller.Clips["layer"] = new AnimationPlayer.PlaybackClip(layerAnim)
-            {
-                IsAdditive = true,
-                Weight = 1f,
-            };
-
-            controller.Update(0f);
-
-            var datas = controller.AnimationFrame!.Datas;
-
-            using (Assert.Multiple())
-            {
-                await Assert.That(datas[0]).IsEqualTo(1.2f).Within(0.0001f);
-                await Assert.That(datas[1]).IsEqualTo(1.2f).Within(0.0001f);
-            }
-        }
     }
 }

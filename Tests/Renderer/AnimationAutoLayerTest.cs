@@ -12,8 +12,6 @@ namespace Tests.Renderer
 {
     public class AnimationAutoLayerTest
     {
-        private static string FilePath(string name)
-            => Path.Combine(TestContext.TestDirectory!, "Files", name);
 
         private static void CollectSubtree(Bone bone, HashSet<int> indices)
         {
@@ -32,7 +30,7 @@ namespace Tests.Renderer
         public async Task RunSequenceComposesItsAutoLayerAdditively()
         {
             using var resource = new Resource();
-            resource.Read(FilePath("necro_archer.vmdl_c"));
+            resource.Read(TestFixtures.Path("necro_archer.vmdl_c"));
             var model = (Model)resource.DataBlock!;
 
             var animations = model.GetEmbeddedAnimations().ToDictionary(a => a.Name, a => (Animation)a, System.StringComparer.OrdinalIgnoreCase);
@@ -126,7 +124,7 @@ namespace Tests.Renderer
         public async Task AutoLayerWeightSurvivesACrossfade()
         {
             using var resource = new Resource();
-            resource.Read(FilePath("necro_archer.vmdl_c"));
+            resource.Read(TestFixtures.Path("necro_archer.vmdl_c"));
             var model = (Model)resource.DataBlock!;
 
             var animations = model.GetEmbeddedAnimations().ToDictionary(a => a.Name, a => (Animation)a, System.StringComparer.OrdinalIgnoreCase);

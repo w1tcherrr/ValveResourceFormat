@@ -11,8 +11,6 @@ namespace Tests.Renderer
 {
     public class AnimationBlendTest
     {
-        private static string FilePath(string name)
-            => Path.Combine(TestContext.TestDirectory!, "Files", name);
 
         // archer_turns is a 1D pose blend across three static "turn" poses at keys [-1, 0, 1] on the
         // "turn" pose parameter - the same authoring shape as Hoodwink's mouse_run_squirrel_turn_blend
@@ -20,7 +18,7 @@ namespace Tests.Renderer
         private static Resource ReadModel()
         {
             var resource = new Resource();
-            resource.Read(FilePath("necro_archer.vmdl_c"));
+            resource.Read(TestFixtures.Path("necro_archer.vmdl_c"));
             return resource;
         }
 
