@@ -96,23 +96,48 @@ namespace ValveResourceFormat.Renderer.SceneNodes
         /// model's scale, so where the model sits on screen doesn't matter and looking around won't flip LoDs.
         /// </summary>
         private float ComputeLodMetric(Camera camera)
+            => ComputeLodMetric(
+                MathF.Sqrt(GetCameraDistance(camera)),
+                GetLargestAxisScale(Transform),
+                camera.WindowSize.Y,
+                camera.ProjectionMatrix.M22);
+
+        /// <summary>
+        /// The LoD metric for a model at <paramref name="distance"/> from the camera: <c>100 / the
+        /// on-screen height of a unit sphere there</c>. It grows as the model gets smaller on screen, so a
+        /// higher metric selects a higher, lower-detail level.
+        /// </summary>
+        /// <param name="distance">Distance from the camera to the model, in world units.</param>
+        /// <param name="scale">The largest per-axis scale the model's transform bakes in.</param>
+        /// <param name="windowHeight">Viewport height in pixels.</param>
+        /// <param name="projectionYScale">
+        /// The projection's <c>M22</c>, which is <c>1 / tan(vFov / 2)</c>, so the pixel height of a unit
+        /// sphere is <c>windowHeight * projectionYScale * scale / distance</c>.
+        /// </param>
+        /// <returns>
+        /// The metric, or zero for a model that covers no pixels at all. A model at or behind the camera
+        /// takes the lowest metric, which selects the most detailed level.
+        /// </returns>
+        public static float ComputeLodMetric(float distance, float scale, float windowHeight, float projectionYScale)
         {
-            var distance = MathF.Sqrt(GetCameraDistance(camera));
-
-            // Largest per-axis scale baked into the transform.
-            var t = Transform;
-            var scaleX = new Vector3(t.M11, t.M12, t.M13).Length();
-            var scaleY = new Vector3(t.M21, t.M22, t.M23).Length();
-            var scaleZ = new Vector3(t.M31, t.M32, t.M33).Length();
-            var scale = MathF.Max(scaleX, MathF.Max(scaleY, scaleZ));
-
-            // Size on screen of a unit sphere at this distance. M22 is the projection's
-            // 1/tan(vFov/2) y-scale, so the pixel height is windowHeight * M22 * scale / distance.
             var unitSphereSize = distance > 0f
-                ? camera.WindowSize.Y * camera.ProjectionMatrix.M22 * scale / distance
+                ? windowHeight * projectionYScale * scale / distance
                 : float.MaxValue;
 
             return unitSphereSize > 0f ? 100f / unitSphereSize : 0f;
+        }
+
+        /// <summary>
+        /// The largest per-axis scale a transform bakes in, which is what decides how big the model
+        /// actually draws regardless of which axis was scaled.
+        /// </summary>
+        public static float GetLargestAxisScale(Matrix4x4 transform)
+        {
+            var scaleX = new Vector3(transform.M11, transform.M12, transform.M13).Length();
+            var scaleY = new Vector3(transform.M21, transform.M22, transform.M23).Length();
+            var scaleZ = new Vector3(transform.M31, transform.M32, transform.M33).Length();
+
+            return MathF.Max(scaleX, MathF.Max(scaleY, scaleZ));
         }
 
         private bool IsMeshInActiveLod(int meshIndex)

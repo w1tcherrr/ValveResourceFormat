@@ -292,5 +292,76 @@ namespace Tests
                 await Assert.That(model.GetRemapTable(remap.MeshCount)).IsNull();
             }
         }
+
+        /// <summary>
+        /// A mesh's own index addresses the model's LOD mask table, which covers embedded and referenced
+        /// meshes alike, so an embedded mesh is not necessarily the nth entry of it. Reading the mask by
+        /// position instead of by index is the bug this pins.
+        /// </summary>
+        [Test]
+        public async Task MeshesCarryTheMaskTheirOwnIndexAddresses()
+        {
+            using var resource = TestFixtures.Load("lod_test.vmdl_c");
+            var model = (Model)resource.DataBlock!;
+
+            var meshes = model.GetEmbeddedMeshes().ToList();
+            var lod = model.LodInfo;
+
+            using (Assert.Multiple())
+            {
+                await Assert.That(meshes).Count().IsEqualTo(5);
+
+                foreach (var mesh in meshes)
+                {
+                    // The mask on the mesh is the one its index addresses, not the one at its position.
+                    await Assert.That(mesh.LodMask).IsEqualTo(lod.GetMeshMask(mesh.MeshIndex));
+                    await Assert.That(mesh.Mesh).IsNotNull();
+                    await Assert.That(mesh.Name).IsNotEmpty();
+                }
+
+                // This fixture puts one mesh in each of its five levels.
+                await Assert.That(meshes.Select(mesh => mesh.LodMask).Order())
+                    .IsEquivalentTo([1L, 2L, 4L, 8L, 16L], CollectionOrdering.Matching);
+
+                // Filtering by level agrees with the mask each mesh carries.
+                for (var level = 0; level < 5; level++)
+                {
+                    var atLevel = model.GetEmbeddedMeshesForLod(level).Select(mesh => mesh.MeshIndex).ToList();
+                    var expected = meshes.Where(mesh => lod.IsMeshInLevel(mesh.MeshIndex, level)).Select(mesh => mesh.MeshIndex).ToList();
+
+                    await Assert.That(atLevel).IsEquivalentTo(expected, CollectionOrdering.Matching);
+                }
+            }
+        }
+
+        /// <summary>
+        /// A model whose meshes live in their own vmesh files reports them as references instead, keyed by
+        /// the same mesh index, so the two kinds address the model's tables the same way.
+        /// </summary>
+        [Test]
+        public async Task ReferencedMeshesUseTheSameIndexSpaceAsEmbeddedOnes()
+        {
+            using var resource = TestFixtures.Load("alchemist.vmdl_c");
+            var model = (Model)resource.DataBlock!;
+
+            var references = model.GetReferenceMeshNamesAndLoD().ToList();
+            var embedded = model.GetEmbeddedMeshes().ToList();
+
+            using (Assert.Multiple())
+            {
+                await Assert.That(references).IsNotEmpty();
+
+                // Every reference names a vmesh and carries the mask its own index addresses.
+                foreach (var reference in references)
+                {
+                    await Assert.That(reference.MeshName).EndsWith(".vmesh");
+                    await Assert.That(reference.LodMask).IsEqualTo(model.LodInfo.GetMeshMask(reference.MeshIndex));
+                }
+
+                // A slot is filled by one or the other, never both.
+                await Assert.That(references.Select(reference => reference.MeshIndex)
+                    .Intersect(embedded.Select(mesh => mesh.MeshIndex))).IsEmpty();
+            }
+        }
     }
 }
