@@ -64,7 +64,9 @@ namespace ValveResourceFormat.ResourceTypes
         public Dictionary<string, string> StringAttributes { get; } = [];
 
         /// <summary>
-        /// Gets the evaluated dynamic expressions for dynamic scalar and texture parameters.
+        /// Gets the dynamic scalar and texture parameter expressions, decompiled to readable source.
+        /// Nothing evaluates them: a parameter driven by one of these keeps its static baked value at
+        /// render time, so animated material attributes are decoded but never reach a shader.
         /// </summary>
         public Dictionary<string, string> DynamicExpressions { get; } = [];
 
