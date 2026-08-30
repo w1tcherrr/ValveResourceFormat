@@ -943,8 +943,6 @@ partial class ModelExtract
     /// </summary>
     public string ToValveModel()
     {
-        Debug.Assert(model is not null, "model should not be null when converting to ValveModel");
-
         var kv = KVObject.Collection();
 
         var root = MakeListNode("RootNode");
@@ -1009,6 +1007,7 @@ partial class ModelExtract
                 renderMeshList.Value.Add(renderMeshFile);
             }
 
+            if (model != null)
             {
                 // Mesh/Body Groups
                 var meshGroups = model.Data.GetArray<string>("m_meshGroups");
@@ -1104,6 +1103,7 @@ partial class ModelExtract
                 }
             }
 
+            if (model != null)
             {
                 // LOD groups. m_refLODGroupMasks says which level each mesh belongs to (bit N => level N) and
                 // m_lodGroupSwitchDistances gives each level's switch value. Emit one LODGroup per declared
@@ -1200,7 +1200,7 @@ partial class ModelExtract
         }
 
         // Material groups / skins.
-        if (model.GetMaterialGroups().ToList() is { Count: > 0 } materialGroups)
+        if (model?.GetMaterialGroups().ToList() is { Count: > 0 } materialGroups)
         {
             var defaultMaterials = materialGroups[0].Materials;
 
@@ -1580,8 +1580,8 @@ partial class ModelExtract
 
         if (model != null)
         {
-            ExtractModelKeyValues(root.Node);
-            ExtractHitboxSets();
+            ExtractModelKeyValues(model, root.Node);
+            ExtractHitboxSets(model);
 
             if (model.Skeleton.Roots.Length > 0)
             {
@@ -1878,7 +1878,7 @@ partial class ModelExtract
             return node;
         }
 
-        void ExtractHitboxSets()
+        void ExtractHitboxSets(Model model)
         {
             if (model.HitboxSets == null)
             {
@@ -2053,7 +2053,7 @@ partial class ModelExtract
             }
         }
 
-        void ExtractModelKeyValues(KVObject rootNode)
+        void ExtractModelKeyValues(Model model, KVObject rootNode)
         {
             if (model.Data.ContainsKey("m_refAnimIncludeModels"))
             {

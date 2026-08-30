@@ -496,7 +496,7 @@ partial class ModelExtract
                 continue;
             }
 
-            if (materialInputSignature.Elements.Length > 0)
+            if (materialInputSignature.Elements is { Length: > 0 })
             {
                 var insgElement = Material.FindD3DInputSignatureElement(materialInputSignature, attribute.SemanticName, attribute.SemanticIndex);
 
@@ -635,9 +635,9 @@ partial class ModelExtract
 
                 var material = drawCall.GetStringProperty("m_material") ?? drawCall.GetStringProperty("m_pMaterial");
 
-                if (material != null && options.MaterialInputSignatures != null && (materialInputSignature.Elements == null || materialInputSignature.Elements.Length == 0))
+                if (material != null && options.MaterialInputSignatures != null && materialInputSignature.Elements is not { Length: > 0 })
                 {
-                    materialInputSignature = options.MaterialInputSignatures.GetValueOrDefault(material);
+                    materialInputSignature = options.MaterialInputSignatures.GetValueOrDefault(material, Material.VsInputSignature.Empty);
                 }
 
                 if (material == null && Mesh.IsOccluder(drawCall))
