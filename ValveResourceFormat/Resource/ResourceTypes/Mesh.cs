@@ -223,6 +223,18 @@ namespace ValveResourceFormat.ResourceTypes
                 && drawCall.GetBooleanProperty("m_bIsOccluder");
 
         /// <summary>
+        /// Gets the material a draw call renders with, or <see langword="null"/> when it names none.
+        /// Older meshes carry the name under <c>m_pMaterial</c>.
+        /// </summary>
+        /// <param name="drawCall">The draw call to read.</param>
+        public static string? GetMaterialName(KVObject drawCall)
+        {
+            ArgumentNullException.ThrowIfNull(drawCall);
+
+            return drawCall.GetStringProperty("m_material") ?? drawCall.GetStringProperty("m_pMaterial");
+        }
+
+        /// <summary>
         /// Loads external morph data from the file loader.
         /// </summary>
         /// <param name="fileLoader">The file loader to use.</param>

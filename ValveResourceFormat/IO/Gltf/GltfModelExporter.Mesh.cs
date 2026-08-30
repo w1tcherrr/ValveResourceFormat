@@ -325,7 +325,9 @@ public partial class GltfModelExporter
         var indexBufferIndex = indexBufferInfo.GetInt32Property("m_hBuffer");
         var indexBuffer = vbib.IndexBuffers[indexBufferIndex];
 
-        var materialPath = skinMaterialPath ?? drawCall.GetStringProperty("m_material") ?? drawCall.GetStringProperty("m_pMaterial");
+        // A draw call always names a material here; ModelExtract is the path that has to cope with one
+        // that does not.
+        var materialPath = skinMaterialPath ?? VMesh.GetMaterialName(drawCall)!;
         Resource? materialResource = null;
 
         // Bake g_vLightmapUvScale into lightmap UVs. Like the renderer, only draw calls with baked

@@ -629,7 +629,7 @@ partial class ModelExtract
                 var indexBufferIndex = indexBufferInfo.GetInt32Property("m_hBuffer");
                 ReadOnlySpan<int> indexBuffer = indexBuffers[indexBufferIndex].Value;
 
-                var material = drawCall.GetStringProperty("m_material") ?? drawCall.GetStringProperty("m_pMaterial");
+                var material = Mesh.GetMaterialName(drawCall);
 
                 if (material != null && options.MaterialInputSignatures != null && materialInputSignature.Elements is not { Length: > 0 })
                 {
