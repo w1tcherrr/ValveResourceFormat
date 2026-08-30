@@ -936,15 +936,10 @@ partial class ModelExtract
 
         foreach (var face in faces)
         {
-            var startEdge = face.Edge;
-            var currentEdge = startEdge;
-            do
+            foreach (var vertex in RnShapes.Hull.GetFaceVertices(edges, face))
             {
-                var e = edges[currentEdge];
-                faceSet.Faces.Add(e.Origin);
-                currentEdge = e.Next;
+                faceSet.Faces.Add(vertex);
             }
-            while (currentEdge != startEdge);
 
             faceSet.Faces.Add(-1);
         }

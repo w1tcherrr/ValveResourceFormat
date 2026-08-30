@@ -286,6 +286,132 @@ namespace ValveResourceFormat.ResourceTypes.RubikonPhysics.Shapes
             return MemoryMarshal.Cast<byte, Plane>(Data.GetArray<byte>("m_Planes"));
         }
 
+        /// <summary>
+        /// Walks one face's edge loop and returns its vertex indices, in winding order. A hull face is a
+        /// polygon of any size, so a consumer that needs triangles wants <see cref="GetFaceTriangles"/>.
+        /// </summary>
+        /// <param name="edges">The hull's half edges, from <see cref="GetEdges"/>.</param>
+        /// <param name="face">The face to walk.</param>
+        public static FaceVertexEnumerable GetFaceVertices(ReadOnlySpan<HalfEdge> edges, Face face)
+            => new(edges, face.Edge);
+
+        /// <summary>
+        /// Triangulates one face as a fan from the first vertex of its edge loop, returning vertex index
+        /// triples. A hull face is convex and planar, so a fan is a complete triangulation of it.
+        /// </summary>
+        /// <param name="edges">The hull's half edges, from <see cref="GetEdges"/>.</param>
+        /// <param name="face">The face to triangulate.</param>
+        public static FaceTriangleEnumerable GetFaceTriangles(ReadOnlySpan<HalfEdge> edges, Face face)
+            => new(edges, face.Edge);
+
+        /// <summary>The vertex indices around one hull face, in winding order.</summary>
+        public readonly ref struct FaceVertexEnumerable
+        {
+            private readonly ReadOnlySpan<HalfEdge> edges;
+            private readonly int startEdge;
+
+            internal FaceVertexEnumerable(ReadOnlySpan<HalfEdge> edges, int startEdge)
+            {
+                this.edges = edges;
+                this.startEdge = startEdge;
+            }
+
+            /// <summary>Returns an enumerator over the face's vertex indices.</summary>
+            public Enumerator GetEnumerator() => new(edges, startEdge);
+
+            /// <summary>Enumerates the vertex indices around one hull face.</summary>
+            public ref struct Enumerator
+            {
+                private readonly ReadOnlySpan<HalfEdge> edges;
+                private readonly int startEdge;
+                private int edge;
+
+                internal Enumerator(ReadOnlySpan<HalfEdge> edges, int startEdge)
+                {
+                    this.edges = edges;
+                    this.startEdge = startEdge;
+                    edge = -1;
+                }
+
+                /// <summary>The current vertex index.</summary>
+                public readonly int Current => edges[edge].Origin;
+
+                /// <summary>Advances to the next vertex of the loop.</summary>
+                public bool MoveNext()
+                {
+                    if (edge == -1)
+                    {
+                        edge = startEdge;
+                        return true;
+                    }
+
+                    edge = edges[edge].Next;
+
+                    return edge != startEdge;
+                }
+            }
+        }
+
+        /// <summary>The triangles of one hull face, as vertex index triples.</summary>
+        public readonly ref struct FaceTriangleEnumerable
+        {
+            private readonly ReadOnlySpan<HalfEdge> edges;
+            private readonly int startEdge;
+
+            internal FaceTriangleEnumerable(ReadOnlySpan<HalfEdge> edges, int startEdge)
+            {
+                this.edges = edges;
+                this.startEdge = startEdge;
+            }
+
+            /// <summary>Returns an enumerator over the face's triangles.</summary>
+            public Enumerator GetEnumerator() => new(edges, startEdge);
+
+            /// <summary>Enumerates a hull face's triangles as a fan from its first vertex.</summary>
+            public ref struct Enumerator
+            {
+                private readonly ReadOnlySpan<HalfEdge> edges;
+                private readonly int startEdge;
+                private int edge;
+                private bool finished;
+
+                internal Enumerator(ReadOnlySpan<HalfEdge> edges, int startEdge)
+                {
+                    this.edges = edges;
+                    this.startEdge = startEdge;
+                    edge = edges[startEdge].Next;
+                    finished = false;
+                    Current = default;
+                }
+
+                /// <summary>The current triangle, as vertex indices into the hull's positions.</summary>
+                public (int A, int B, int C) Current { get; private set; }
+
+                /// <summary>Advances to the next triangle of the fan.</summary>
+                public bool MoveNext()
+                {
+                    if (finished || edge == startEdge)
+                    {
+                        finished = true;
+                        return false;
+                    }
+
+                    var next = edges[edge].Next;
+
+                    if (next == startEdge)
+                    {
+                        finished = true;
+                        return false;
+                    }
+
+                    Current = (edges[startEdge].Origin, edges[edge].Origin, edges[next].Origin);
+                    edge = next;
+
+                    return true;
+                }
+            }
+        }
+
         internal static ReadOnlySpan<Vector3> ParseVertices(KVObject data)
         {
             if (data.IsNotBlobType("m_Vertices"))
