@@ -124,6 +124,8 @@ namespace ValveResourceFormat.ResourceTypes
         private List<(Mesh Mesh, int MeshIndex, string Name)>? cachedEmbeddedMeshes;
         private ModelLodInfo? cachedLodInfo;
         private BoneConstraint[]? cachedBoneConstraints;
+        private BoneRemapTable? cachedBoneRemapTable;
+        private ModelMeshGroups? cachedMeshGroups;
 
         /// <summary>
         /// Gets the hitbox sets for this model.
@@ -196,34 +198,18 @@ namespace ValveResourceFormat.ResourceTypes
         /// Get the bone remap table of a specific mesh.
         /// This is used to remap bone indices in the mesh <see cref="VBIB"/> to bone indices of the model skeleton.
         /// </summary>
-        public int[]? GetRemapTable(int meshIndex)
-        {
-            var remappingTableStarts = Data.GetIntegerArray("m_remappingTableStarts");
+        public int[]? GetRemapTable(int meshIndex) => BoneRemapTable.GetMeshTable(meshIndex);
 
-            if (remappingTableStarts.Length <= meshIndex)
-            {
-                return null;
-            }
+        /// <summary>
+        /// Gets the model's bone remap table, which maps the bone indices a mesh's <c>BLENDINDICES</c>
+        /// carry to bone indices of the model skeleton.
+        /// </summary>
+        public BoneRemapTable BoneRemapTable => cachedBoneRemapTable ??= new BoneRemapTable(Data);
 
-            var remappingTable = Data.GetIntegerArray("m_remappingTable");
-
-            var remappingTableStart = (int)remappingTableStarts[meshIndex];
-
-            var nextMeshIndex = meshIndex + 1;
-            var nextMeshStart = remappingTableStarts.Length > nextMeshIndex
-                ? remappingTableStarts[nextMeshIndex]
-                : remappingTable.Length;
-
-            var meshBoneCount = nextMeshStart - remappingTableStart;
-
-            var meshRemappingTable = new int[meshBoneCount];
-            for (var i = 0; i < meshBoneCount; i++)
-            {
-                meshRemappingTable[i] = (int)remappingTable[remappingTableStart + i];
-            }
-
-            return meshRemappingTable;
-        }
+        /// <summary>
+        /// Gets the model's mesh groups, and the body groups their names encode.
+        /// </summary>
+        public ModelMeshGroups MeshGroups => cachedMeshGroups ??= new ModelMeshGroups(Data);
 
         /// <summary>
         /// Gets referenced mesh names and their LoD masks.
@@ -772,30 +758,12 @@ namespace ValveResourceFormat.ResourceTypes
         }
 
         /// <summary>
-        /// Gets the mesh groups defined in the model.
-        /// </summary>
-        /// <returns>Enumerable of mesh group names.</returns>
-        public IEnumerable<string> GetMeshGroups()
-            => Data.GetArray<string>("m_meshGroups");
-
-        /// <summary>
         /// Gets the material groups defined in the model.
         /// </summary>
         /// <returns>Enumerable of material group names and their materials.</returns>
         public IEnumerable<(string Name, string[] Materials)> GetMaterialGroups()
            => Data.GetArray("m_materialGroups")
                 .Select(group => (group.GetStringProperty("m_name"), group.GetArray<string>("m_materials")));
-
-        /// <summary>
-        /// Gets the default mesh groups based on the default mesh group mask.
-        /// </summary>
-        /// <returns>Enumerable of default mesh group names.</returns>
-        public IEnumerable<string> GetDefaultMeshGroups()
-        {
-            var defaultGroupMask = Data.GetUnsignedIntegerProperty("m_nDefaultMeshGroupMask");
-
-            return GetMeshGroups().Where((group, index) => index < 64 && ((1UL << index) & defaultGroupMask) != 0);
-        }
 
         /// <summary>
         /// Gets the material attributes the anim graph is allowed to drive, with their channel count

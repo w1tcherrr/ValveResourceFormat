@@ -11,9 +11,7 @@ namespace ValveResourceFormat.Renderer.SceneNodes
     {
         private HashSet<string> activeMeshGroups = [];
 
-        private readonly string[] meshGroups;
-
-        private readonly long[]? meshGroupMasks;
+        private readonly ModelMeshGroups meshGroups;
 
         private readonly ModelLodInfo lodInfo;
 
@@ -30,7 +28,7 @@ namespace ValveResourceFormat.Renderer.SceneNodes
 
         /// <summary>Returns all mesh group names defined by this model.</summary>
         public IEnumerable<string> GetMeshGroups()
-            => meshGroups;
+            => meshGroups.Names;
 
         /// <summary>Returns the set of currently active mesh group names.</summary>
         public ICollection<string> GetActiveMeshGroups()
@@ -42,7 +40,7 @@ namespace ValveResourceFormat.Renderer.SceneNodes
         /// </summary>
         public void SetActiveMeshGroups(IEnumerable<string> setMeshGroups)
         {
-            activeMeshGroups = new HashSet<string>(meshGroups.Intersect(setMeshGroups));
+            activeMeshGroups = new HashSet<string>(meshGroups.Names.Intersect(setMeshGroups));
             RebuildRenderableMeshes();
         }
 
@@ -121,23 +119,7 @@ namespace ValveResourceFormat.Renderer.SceneNodes
             => lodInfo.IsMeshInLevel(meshIndex, resolvedLod);
 
         private bool IsMeshInActiveGroup(int meshIndex)
-        {
-            if (meshGroups.Length <= 1 || meshGroupMasks == null)
-            {
-                return true;
-            }
-
-            foreach (var group in activeMeshGroups)
-            {
-                var groupIndex = Array.IndexOf(meshGroups, group);
-                if (groupIndex >= 0 && (meshGroupMasks[meshIndex] & 1L << groupIndex) != 0)
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
+            => meshGroups.IsMeshInAnyGroup(meshIndex, activeMeshGroups);
 
         private void RebuildRenderableMeshes()
         {

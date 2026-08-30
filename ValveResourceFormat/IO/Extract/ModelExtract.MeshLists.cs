@@ -41,72 +41,33 @@ partial class ModelExtract
 
             if (model != null)
             {
-                // Mesh/Body Groups
-                var meshGroups = model.Data.GetArray<string>("m_meshGroups");
-                var meshGroupMasks = model.Data.GetUnsignedIntegerArray("m_refMeshGroupMasks");
-                var hideInTools = Array.Empty<string>();
-                if (model.Data.GetArray<string>("m_BodyGroupsHiddenInTools") is string[] hideBodyGroups)
-                {
-                    hideInTools = hideBodyGroups;
-                }
+                var meshGroups = model.MeshGroups;
 
-                var groupedChoices = new Dictionary<string, List<(int ChoiceIndex, string FullName, string ChoiceName)>>();
-
-                for (var i = 0; i < meshGroups!.Length; i++)
-                {
-                    var fullName = meshGroups[i];
-                    var split = fullName.Split("_@");
-
-                    if (split.Length < 2)
-                    {
-                        continue;
-                    }
-
-                    var groupName = split[0];
-                    var choiceName = split[1];
-
-                    groupedChoices.TryAdd(groupName, []);
-                    groupedChoices[groupName].Add((i, fullName, choiceName));
-                }
-
-                foreach (var (groupName, choices) in groupedChoices)
+                foreach (var bodyGroupInfo in meshGroups.BodyGroups)
                 {
                     var choiceList = KVObject.Array();
                     var bodyGroup = MakeNode("BodyGroup",
-                        ("name", groupName),
+                        ("name", bodyGroupInfo.Name),
                         ("children", choiceList)
                     );
 
-                    if (hideInTools.Contains(groupName))
+                    if (meshGroups.IsHiddenInTools(bodyGroupInfo.Name))
                     {
                         bodyGroup.Add("hidden_in_tools", true);
                     }
 
-                    var i = 0;
-                    foreach (var (index, key, name) in choices)
+                    var choiceIndex = 0;
+
+                    foreach (var choice in bodyGroupInfo.Choices)
                     {
                         var meshGroupChoice = MakeNode("BodyGroupChoice");
 
-                        var choiceName = name;
-
-                        // Fix up weird substring added to newer models
-                        const string indexMarker = "#&";
-                        var markerIndex = name.IndexOf(indexMarker, StringComparison.Ordinal);
-                        if (markerIndex >= 0)
-                        {
-                            var start = markerIndex + indexMarker.Length;
-                            if (start < name.Length)
-                            {
-                                choiceName = name[start..];
-                            }
-                        }
-
                         // Every choice needs a name to recompile, even one that only repeats its index.
-                        meshGroupChoice.Add("name", string.IsNullOrEmpty(choiceName)
-                            ? i.ToString(CultureInfo.InvariantCulture)
-                            : choiceName);
+                        meshGroupChoice.Add("name", string.IsNullOrEmpty(choice.Name)
+                            ? choiceIndex.ToString(CultureInfo.InvariantCulture)
+                            : choice.Name);
 
-                        if (hideInTools.Contains(key))
+                        if (meshGroups.IsHiddenInTools(choice.FullName))
                         {
                             meshGroupChoice.Add("hide_in_tools", true);
                         }
@@ -117,18 +78,14 @@ partial class ModelExtract
                         foreach (var renderMesh in RenderMeshesToExtract)
                         {
                             // No mask will show up as 'Empty' in editor
-                            var mask = renderMesh.Index < meshGroupMasks.Length ? meshGroupMasks[renderMesh.Index] : 0UL;
-
-                            if ((mask & 1UL << index) == 0)
+                            if (meshGroups.IsMeshInGroup(renderMesh.Index, choice.GroupIndex))
                             {
-                                continue;
+                                meshes.Add(renderMesh.Name);
                             }
-
-                            meshes.Add(renderMesh.Name);
                         }
 
                         choiceList.Add(meshGroupChoice);
-                        i++;
+                        choiceIndex++;
                     }
 
                     lists.BodyGroups.Add(bodyGroup);

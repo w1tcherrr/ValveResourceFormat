@@ -70,20 +70,14 @@ namespace ValveResourceFormat.Renderer.SceneNodes
             : base(scene)
         {
             materialGroups = model.GetMaterialGroups().ToArray();
-            meshGroups = model.GetMeshGroups().ToArray();
-
-            if (meshGroups.Length > 1)
-            {
-                meshGroupMasks = model.Data.GetIntegerArray("m_refMeshGroupMasks");
-            }
-
+            meshGroups = model.MeshGroups;
             lodInfo = model.LodInfo;
             referenceMeshes = model.GetReferenceMeshNamesAndLoD().ToList();
             resolvedLod = lodInfo.LowestLevel;
 
             AnimationController = new(model.Skeleton, model.FlexControllers);
             boneCount = model.Skeleton.Bones.Length;
-            remappingTable = model.Data.GetIntegerArray("m_remappingTable").Select(i => (int)i).ToArray();
+            remappingTable = model.BoneRemapTable.Table;
 
             if (model.Data.GetArray<string>("m_vecNmSkeletonRefs") is { Length: > 0 } nmSkelRefs)
             {
@@ -411,7 +405,7 @@ namespace ValveResourceFormat.Renderer.SceneNodes
                 meshRenderers.Add(new RenderableMesh(mesh, refMesh.MeshIndex, Scene, model, materialTable));
             }
 
-            SetActiveMeshGroups(model.GetDefaultMeshGroups());
+            SetActiveMeshGroups(model.MeshGroups.Defaults);
         }
 
         /// <summary>Activates the animation with the given name, or stops animation if not found.</summary>

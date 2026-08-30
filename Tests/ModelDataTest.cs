@@ -1,4 +1,5 @@
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using TUnit.Assertions.Enums;
 using ValveResourceFormat;
@@ -6,7 +7,7 @@ using ValveResourceFormat.ResourceTypes;
 
 namespace Tests
 {
-    public class ModelLodTest
+    public class ModelDataTest
     {
         // Truck-like: one mesh per level, switch values per level.
         private static readonly long[] TruckMasks = [1, 2, 4];
@@ -204,6 +205,91 @@ namespace Tests
                 await Assert.That(lod.LevelCount).IsEqualTo(5);
                 await Assert.That(lod.SwitchDistances).IsEquivalentTo(FixtureSwitches, CollectionOrdering.Matching);
 
+            }
+        }
+
+        /// <summary>
+        /// Mesh group names encode body groups: a name of the form <c>group_@choice</c> declares one
+        /// choice of a body group, and newer models bury the authored choice name behind a marker. A name
+        /// without the separator belongs to no body group at all.
+        /// </summary>
+        [Test]
+        public async Task MeshGroupNamesDecodeIntoBodyGroups()
+        {
+            using var resource = TestFixtures.Load("necro_archer.vmdl_c");
+            var groups = ((Model)resource.DataBlock!).MeshGroups;
+
+            var gear = groups.BodyGroups.Single();
+
+            using (Assert.Multiple())
+            {
+                await Assert.That(groups.Names).IsEquivalentTo([
+                    "default_#&necro_archer_model",
+                    "necro_gear1_@0_#&necro_archer_gear1",
+                    "necro_gear1_@1_#&necro_archer_gear2",
+                    "necro_gear1_@2_#&necro_archer_gear3",
+                ], CollectionOrdering.Matching);
+
+                // "default_#&necro_archer_model" has no separator, so it declares no body group.
+                await Assert.That(gear.Name).IsEqualTo("necro_gear1");
+                await Assert.That(gear.Choices.Select(choice => choice.Name))
+                    .IsEquivalentTo(["necro_archer_gear1", "necro_archer_gear2", "necro_archer_gear3"], CollectionOrdering.Matching);
+
+                // A choice's index is the bit it occupies in a mesh's group mask, so it indexes Names.
+                await Assert.That(gear.Choices.Select(choice => choice.GroupIndex))
+                    .IsEquivalentTo([1, 2, 3], CollectionOrdering.Matching);
+                await Assert.That(gear.Choices.Select(choice => groups.Names[choice.GroupIndex]))
+                    .IsEquivalentTo(gear.Choices.Select(choice => choice.FullName), CollectionOrdering.Matching);
+
+                // The default mask picks the base model plus the first gear choice.
+                await Assert.That(groups.Defaults)
+                    .IsEquivalentTo(["default_#&necro_archer_model", "necro_gear1_@0_#&necro_archer_gear1"], CollectionOrdering.Matching);
+
+                // A model that declares no groups draws everything, whatever is asked for.
+                using var noGroups = TestFixtures.Load("box_creature_ik_model.vmdl_c");
+                var empty = ((Model)noGroups.DataBlock!).MeshGroups;
+
+                await Assert.That(empty.Names).IsEmpty();
+                await Assert.That(empty.IsMeshInAnyGroup(0, ["anything"])).IsTrue();
+                await Assert.That(empty.IndexOf("anything")).IsEqualTo(-1);
+            }
+        }
+
+        /// <summary>
+        /// Every mesh owns a contiguous slice of one bone remap table, so a mesh's slice starts where the
+        /// previous one ended and the last runs to the end of the table.
+        /// </summary>
+        [Test]
+        public async Task BoneRemapSlicesTileTheTable()
+        {
+            using var resource = TestFixtures.Load("necro_archer.vmdl_c");
+            var model = (Model)resource.DataBlock!;
+            var remap = model.BoneRemapTable;
+
+            var boneCount = model.Skeleton.Bones.Length;
+
+            using (Assert.Multiple())
+            {
+                await Assert.That(remap.MeshCount).IsEqualTo(4);
+                await Assert.That(remap.Table.Length).IsEqualTo(244);
+                await Assert.That(remap.GetMeshStart(0)).IsZero();
+
+                var expectedStart = 0;
+                for (var meshIndex = 0; meshIndex < remap.MeshCount; meshIndex++)
+                {
+                    await Assert.That(remap.GetMeshStart(meshIndex)).IsEqualTo(expectedStart);
+                    await Assert.That(remap.GetMeshTable(meshIndex)!.Length).IsEqualTo(remap.GetMeshBoneCount(meshIndex));
+                    expectedStart += remap.GetMeshBoneCount(meshIndex);
+                }
+
+                await Assert.That(expectedStart).IsEqualTo(remap.Table.Length);
+
+                // Every entry addresses a real skeleton bone.
+                await Assert.That(remap.Table).All(index => index >= 0 && index < boneCount);
+
+                // GetRemapTable is the same slice, and a mesh with no slice has none.
+                await Assert.That(model.GetRemapTable(1)).IsEquivalentTo(remap.GetMeshTable(1)!, CollectionOrdering.Matching);
+                await Assert.That(model.GetRemapTable(remap.MeshCount)).IsNull();
             }
         }
     }
