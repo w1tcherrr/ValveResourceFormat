@@ -1747,7 +1747,6 @@ partial class ModelExtract
                 var name = boneMask.GetStringProperty("m_sName");
                 var boneArray = boneMask.GetIntegerArray("m_nLocalBoneArray");
                 var boneWeights = boneMask.GetFloatArray("m_flBoneWeightArray");
-                // master_morph_weight = m_flDefaultMorphCtrlWeight
 
                 // skip default mask
                 if (name == "default" && boneArray.Length == 0)
@@ -1758,7 +1757,8 @@ partial class ModelExtract
                 var weights = KVObject.Array();
                 var weightListNode = MakeNode("WeightList",
                     ("name", name),
-                    ("weights", weights)
+                    ("weights", weights),
+                    ("master_morph_weight", boneMask.GetFloatProperty("m_flDefaultMorphCtrlWeight"))
                 );
 
                 foreach (var (boneIndex, boneWeight) in boneArray.Zip(boneWeights))
