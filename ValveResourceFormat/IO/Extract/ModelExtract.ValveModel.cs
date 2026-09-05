@@ -1492,16 +1492,6 @@ partial class ModelExtract
                     RemapMaterials(remapTable, globalReplace: false);
                 }
             }
-
-            foreach (var (physHull, fileName, parentBone) in PhysHullsToExtract)
-            {
-                HandlePhysMeshNode(physHull, fileName, parentBone);
-            }
-
-            foreach (var (physMesh, fileName, parentBone) in PhysMeshesToExtract)
-            {
-                HandlePhysMeshNode(physMesh, fileName, parentBone);
-            }
         }
 
         if (model != null)
@@ -1519,10 +1509,25 @@ partial class ModelExtract
 
         if (physAggregateData is not null)
         {
+            var nextPhysHull = 0;
+            var nextPhysMesh = 0;
+
             for (var i = 0; i < physAggregateData.Parts.Length; i++)
             {
                 var physicsPart = physAggregateData.Parts[i];
                 var parentBone = physAggregateData.GetParentBoneName(i);
+
+                for (var h = 0; h < physicsPart.Shape.Hulls.Length && nextPhysHull < PhysHullsToExtract.Count; h++)
+                {
+                    var (physHull, hullFileName, hullParentBone) = PhysHullsToExtract[nextPhysHull++];
+                    HandlePhysMeshNode(physHull, hullFileName, hullParentBone);
+                }
+
+                for (var m = 0; m < physicsPart.Shape.Meshes.Length && nextPhysMesh < PhysMeshesToExtract.Count; m++)
+                {
+                    var (physMesh, meshFileName, meshParentBone) = PhysMeshesToExtract[nextPhysMesh++];
+                    HandlePhysMeshNode(physMesh, meshFileName, meshParentBone);
+                }
 
                 foreach (var sphere in physicsPart.Shape.Spheres)
                 {
