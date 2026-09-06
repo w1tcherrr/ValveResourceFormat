@@ -244,6 +244,8 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation
                 dataChannelArray[i] = new AnimationDataChannel(skeleton, flexControllers, dataChannelArrayKV[i]);
             }
 
+            HashSet<string>? unhandledDecoders = null;
+
             var segmentArrayKV = animationData.GetArray("m_segmentArray");
             var segmentArray = new AnimationSegmentDecoder?[segmentArrayKV.Count];
             for (var i = 0; i < segmentArrayKV.Count; i++)
@@ -308,9 +310,12 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation
                     continue;
                 }
 
-#if DEBUG
-                Console.WriteLine($"Unhandled animation bone decoder type '{decoder}' for attribute '{localChannel.Attribute}'");
-#endif
+                unhandledDecoders ??= [];
+
+                if (unhandledDecoders.Add(decoder))
+                {
+                    Console.Error.WriteLine($"Unhandled animation bone decoder type '{decoder}' for attribute '{localChannel.Attribute}'");
+                }
             }
 
             return segmentArray;
