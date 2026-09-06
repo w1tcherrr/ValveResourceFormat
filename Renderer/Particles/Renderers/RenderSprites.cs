@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using OpenTK.Graphics.OpenGL;
 using ValveResourceFormat.Particles;
 using ValveResourceFormat.Particles.Utils;
+using ValveResourceFormat.ResourceTypes;
 using ValveResourceFormat.Serialization.KeyValues;
 
 namespace ValveResourceFormat.Renderer.Particles.Renderers
@@ -177,31 +178,103 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
             return instanceLayout.CreateVertexArray(label, vertexBufferHandle, indexBuffer: 0, instanceDivisor: 1);
         }
 
-        private (Vector2 UvMin, Vector2 UvMax, Vector2 NextMin, Vector2 NextMax) GetLayerSheetUvs(int layer, ref Particle particle, out float frameBlend)
+        /// <summary>
+        /// The part of a sheet tile its art covers, in card coordinates.
+        /// </summary>
+        private readonly record struct CropWindow(Vector2 Min, Vector2 Max)
         {
+            /// <summary>The window that covers a whole tile, for a sheet that crops nothing away.</summary>
+            public static CropWindow Full { get; } = new(Vector2.Zero, Vector2.One);
+
+            /// <summary>The window's extent along each card axis.</summary>
+            public Vector2 Size => Max - Min;
+        }
+
+        private static Vector2 Normalize(Vector2 point, Vector2 min, Vector2 size) => new(
+            size.X != 0f ? (point.X - min.X) / size.X : 0f,
+            size.Y != 0f ? (point.Y - min.Y) / size.Y : 0f);
+
+        /// <summary>The card coordinates a frame's cropped art occupies within its own tile.</summary>
+        private static CropWindow TileWindow(Texture.SpritesheetData.Sequence.Frame.Image image)
+        {
+            var size = image.UncroppedMax - image.UncroppedMin;
+
+            return new CropWindow(
+                Normalize(image.CroppedMin, image.UncroppedMin, size),
+                Normalize(image.CroppedMax, image.UncroppedMin, size));
+        }
+
+        /// <summary>Places a card window back in the atlas, against the tile it was measured in.</summary>
+        private static (Vector2 Min, Vector2 Max) WindowRect(Texture.SpritesheetData.Sequence.Frame.Image image, CropWindow window)
+        {
+            var size = image.UncroppedMax - image.UncroppedMin;
+
+            return (image.UncroppedMin + (window.Min * size), image.UncroppedMin + (window.Max * size));
+        }
+
+        private bool TryGetLayerFrames(int layer, ref Particle particle,
+            out Texture.SpritesheetData.Sequence.Frame.Image current,
+            out Texture.SpritesheetData.Sequence.Frame.Image next,
+            out float frameBlend)
+        {
+            current = null!;
+            next = null!;
             frameBlend = 0f;
 
             var spriteSheetData = layers[layer].Texture.SpriteSheetData;
+
             if (spriteSheetData == null || spriteSheetData.Sequences.Length == 0)
             {
-                return (Vector2.Zero, Vector2.One, Vector2.Zero, Vector2.One);
+                return false;
             }
 
             var sequence = spriteSheetData.Sequences[particle.SequenceNumber % spriteSheetData.Sequences.Length];
 
             if (sequence.Frames.Length == 0)
             {
-                return (Vector2.Zero, Vector2.One, Vector2.Zero, Vector2.One);
+                return false;
             }
 
             var (frame, nextFrame, blend) = GetSheetFrame(ref particle, sequence, animationRate, animationType, animateInFps);
             frameBlend = blend;
 
             // TODO: Support more than one image per frame?
-            var currentImage = sequence.Frames[frame].Images[0];
-            var nextImage = sequence.Frames[nextFrame].Images[0];
+            current = sequence.Frames[frame].Images[0];
+            next = sequence.Frames[nextFrame].Images[0];
+            return true;
+        }
 
-            return (currentImage.UncroppedMin, currentImage.UncroppedMax, nextImage.UncroppedMin, nextImage.UncroppedMax);
+        /// <summary>
+        /// The window the card shrinks to, covering the art of both frames it is blending so neither is
+        /// clipped, and none of the tile's packed neighbours is drawn.
+        /// </summary>
+        private CropWindow GetCardCropWindow(ref Particle particle)
+        {
+            if (!TryGetLayerFrames(0, ref particle, out var current, out var next, out _))
+            {
+                return CropWindow.Full;
+            }
+
+            var currentWindow = TileWindow(current);
+            var nextWindow = TileWindow(next);
+
+            return new CropWindow(
+                Vector2.Min(currentWindow.Min, nextWindow.Min),
+                Vector2.Max(currentWindow.Max, nextWindow.Max));
+        }
+
+        private (Vector2 UvMin, Vector2 UvMax, Vector2 NextMin, Vector2 NextMax) GetLayerSheetUvs(
+            int layer, ref Particle particle, CropWindow window, out float frameBlend)
+        {
+            if (!TryGetLayerFrames(layer, ref particle, out var current, out var next, out frameBlend))
+            {
+                return (Vector2.Zero, Vector2.One, Vector2.Zero, Vector2.One);
+            }
+
+            var (uvMin, uvMax) = WindowRect(current, window);
+            var (nextMin, nextMax) = WindowRect(next, window);
+
+            return (uvMin, uvMax, nextMin, nextMax);
         }
 
         // One corner of a uv rectangle, in the quad's winding order (top-left, bottom-left,
@@ -407,9 +480,18 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
                         + (centerOffset.X * right)
                         + (centerOffset.Y * up);
 
+                    var window = GetCardCropWindow(ref particle);
+                    var windowSize = window.Size;
+
+                    origin += ((window.Max.X + window.Min.X - 1f) * right)
+                        + ((1f - window.Min.Y - window.Max.Y) * up);
+
+                    right *= windowSize.X;
+                    up *= windowSize.Y;
+
                     // Each layer resolves frame rects against its own sheet, timed by the base sequence:
                     // companion sheets match the base rects, one-frame sequences pin an atlas region.
-                    var (uvMin, uvMax, uvNextMin, uvNextMax) = GetLayerSheetUvs(0, ref particle, out var frameBlend);
+                    var (uvMin, uvMax, uvNextMin, uvNextMax) = GetLayerSheetUvs(0, ref particle, window, out var frameBlend);
 
                     var start = i * instanceFloats;
 
@@ -429,7 +511,7 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
 
                     for (var layer = 1; layer < layers.Length; layer++)
                     {
-                        var (layerMin, layerMax, layerNextMin, layerNextMax) = GetLayerSheetUvs(layer, ref particle, out _);
+                        var (layerMin, layerMax, layerNextMin, layerNextMax) = GetLayerSheetUvs(layer, ref particle, window, out _);
 
                         layerRects[(layer - 1) * 2] = Rect(layerMin, layerMax);
                         layerRects[((layer - 1) * 2) + 1] = Rect(layerNextMin, layerNextMax);
