@@ -78,7 +78,7 @@ in the Dump column.
 | vseq     | Sequence Group             | text                          | generic | -                                                                                                            |
 | vsmart   | Smart Prop                 | 3D (partial)                  | yes     | KV3 text                                                                                                     |
 | vsnap    | Particle Snapshot          | 3D                            | yes     | `.vsnap`                                                                                                     |
-| vsnd     | Sound                      | audio                         | yes     | `.wav` / `.mp3` + phonemes `.txt` + `.vsnd` KV3 for newer sounds                                             |
+| vsnd     | Sound                      | audio                         | yes     | `.wav` / `.mp3` / `.aac` + phonemes `.txt` + `.vsnd` KV3 for newer sounds                                    |
 | vsndevts | Sound Event Script         | text                          | generic | KV3 text (lossless)                                                                                          |
 | vsndstck | Sound Stack Script         | text                          | yes     | script text                                                                                                  |
 | vsurf    | Surface Properties         | text                          | generic | -                                                                                                            |

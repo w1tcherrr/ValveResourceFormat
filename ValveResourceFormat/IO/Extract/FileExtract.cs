@@ -411,6 +411,7 @@ namespace ValveResourceFormat.IO
                         {
                             case Sound.AudioFileType.MP3: return "mp3";
                             case Sound.AudioFileType.WAV: return "wav";
+                            case Sound.AudioFileType.AAC: return "aac";
                         }
                     }
                     else
