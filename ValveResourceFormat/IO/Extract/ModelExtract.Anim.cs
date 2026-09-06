@@ -115,7 +115,7 @@ partial class ModelExtract
             }
         };
 
-        dmx.Save(stream, "keyvalues2", 4);
+        dmx.SaveDeterministic(stream, "keyvalues2", 4);
         return stream.ToArray();
     }
 
@@ -221,7 +221,7 @@ partial class ModelExtract
             }
         };
 
-        dmx.Save(stream, "binary", 9);
+        dmx.SaveDeterministic(stream, "binary", 9);
 
         return stream.ToArray();
     }
