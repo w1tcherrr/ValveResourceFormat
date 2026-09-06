@@ -178,6 +178,11 @@ namespace GUI.Types.GLViewers
 
                 var vfxDescription = vcsDescriptionByName.GetValueOrDefault(paramName);
 
+                if (parameterPresence == ParameterPresence.ShaderOnly && vcsDescriptionByName.Count > 0 && vfxDescription == null)
+                {
+                    continue;
+                }
+
                 // Handle float parameters
                 if (materialParams.FloatParams.ContainsKey(paramName) || shaderParams.FloatParams.ContainsKey(paramName))
                 {
