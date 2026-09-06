@@ -169,7 +169,7 @@ uniform float g_flTexCoordRotation = 0.0;
 #if (F_TEXTURE_ANIMATION == 1)
     uniform vec2 g_vAnimationGrid = vec2(1, 1);
     uniform int g_nNumAnimationCells = 1;
-    uniform float g_flAnimationTimePerFrame;
+    uniform float g_flAnimationTimePerFrame = 0.1;
     uniform float g_flAnimationTimeOffset;
     uniform float g_flAnimationFrame;
 #endif
@@ -199,13 +199,15 @@ uniform float g_flTexCoordRotation = 0.0;
 
 vec2 GetAnimatedUVs(vec2 texCoords)
 {
+    texCoords = RotateVector2D(texCoords, g_flTexCoordRotation, g_vTexCoordScale.xy, g_vTexCoordOffset.xy, g_vTexCoordCenter.xy);
+
     #if (F_TEXTURE_ANIMATION == 1)
         uint frame = uint(g_flAnimationFrame);
         uint cells = uint(g_nNumAnimationCells);
         if (F_TEXTURE_ANIMATION_MODE == 0) // Sequential
             frame = uint((g_flAnimationTimeOffset + g_flTime) / g_flAnimationTimePerFrame) % cells;
         else if (F_TEXTURE_ANIMATION_MODE == 1) // Random
-            frame = uint(Random2D(vec2(g_flAnimationFrame)) * float(g_nNumAnimationCells));
+            frame = uint(Random2D(vec2(float(uint(g_flAnimationFrame)))) * float(g_nNumAnimationCells));
 
         vec2 atlasGridInv = vec2(1.0) / g_vAnimationGrid.xy;
         vec2 atlasOffset = vec2(uvec2(
@@ -216,7 +218,6 @@ vec2 GetAnimatedUVs(vec2 texCoords)
         texCoords = texCoords * atlasGridInv + atlasOffset;
     #endif
 
-    texCoords = RotateVector2D(texCoords, g_flTexCoordRotation, g_vTexCoordScale.xy, g_vTexCoordOffset.xy, g_vTexCoordCenter.xy);
     return texCoords + g_vTexCoordScrollSpeed.xy * g_flTime;
 }
 
