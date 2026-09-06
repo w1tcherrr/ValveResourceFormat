@@ -320,6 +320,51 @@ namespace ValveResourceFormat.Particles
         /// <summary>The upgraded definition this system was built from.</summary>
         public KVObject Definition { get; }
 
+        private Texture.SpritesheetData? spriteSheet;
+        private bool spriteSheetResolved;
+
+        /// <summary>
+        /// The sheet of the first renderer texture that carries one, which the sequence-driven
+        /// initializers measure a particle's life against. Null when no renderer texture ships a sheet.
+        /// </summary>
+        internal Texture.SpritesheetData? SpriteSheet
+        {
+            get
+            {
+                if (!spriteSheetResolved)
+                {
+                    spriteSheetResolved = true;
+                    spriteSheet = ResolveSpriteSheet();
+                }
+
+                return spriteSheet;
+            }
+        }
+
+        private Texture.SpritesheetData? ResolveSpriteSheet()
+        {
+            foreach (var renderer in Definition.GetArray("m_Renderers") ?? [])
+            {
+                foreach (var textureInput in renderer.GetArray("m_vecTexturesInput") ?? [])
+                {
+                    var textureName = textureInput.GetStringProperty("m_hTexture");
+
+                    if (string.IsNullOrEmpty(textureName))
+                    {
+                        continue;
+                    }
+
+                    if (fileLoader.LoadFileCompiled(textureName)?.DataBlock is Texture texture
+                        && texture.GetSpriteSheetData() is { Sequences.Length: > 0 } sheet)
+                    {
+                        return sheet;
+                    }
+                }
+            }
+
+            return null;
+        }
+
         /// <summary>
         /// Spawns throwaway particles so a drawing layer can prime buffers that need some to fill, and
         /// captures the emission state they disturb. Returns null when the system already holds particles.
