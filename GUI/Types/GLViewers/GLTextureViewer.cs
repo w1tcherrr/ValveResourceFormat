@@ -208,12 +208,12 @@ namespace GUI.Types.GLViewers
             if (Bitmap != null)
             {
                 // Image viewer
-                AddChannelsComboBox();
+                AddChannelsComboBox(HasTranslucentPixels(Bitmap));
             }
             else if (Svg != null)
             {
                 // Svg viewer
-                AddChannelsComboBox();
+                AddChannelsComboBox(transparentByDefault: true);
             }
             else if (Resource != null)
             {
@@ -268,7 +268,7 @@ namespace GUI.Types.GLViewers
 
             if (Resource.ResourceType == ResourceType.PanoramaVectorGraphic)
             {
-                AddChannelsComboBox();
+                AddChannelsComboBox(Svg != null);
                 return;
             }
             else if (Resource.ResourceType == ResourceType.PostProcessing && Resource.DataBlock is PostProcessing postProcessingData)
@@ -443,7 +443,7 @@ namespace GUI.Types.GLViewers
 
             using (UiControl.BeginGroup("View"))
             {
-                AddChannelsComboBox();
+                AddChannelsComboBox(HasTranslucentPixels(textureData, decodeFlags));
 
                 var forceSoftwareDecode = textureData.IsRawAnyImage;
                 var projectionBeforeSoftwareDecode = (int)CubemapProjection.Equirectangular;
@@ -655,7 +655,50 @@ namespace GUI.Types.GLViewers
             OriginalHeight = Svg.Picture.CullRect.Height;
         }
 
-        private void AddChannelsComboBox()
+        private const int TranslucencyScanPixelLimit = 2048 * 2048;
+        private const TextureCodec DataInAlphaCodecs = TextureCodec.YCoCg | TextureCodec.RGBM | TextureCodec.HemiOctRB | TextureCodec.NormalizeNormals | TextureCodec.Dxt5nm;
+
+        private static bool HasTranslucentPixels(Texture textureData, TextureCodec codec)
+        {
+            if (textureData.Format == VTexFormat.UNKNOWN || (codec & DataInAlphaCodecs) != 0)
+            {
+                return false;
+            }
+
+            var mipLevel = Math.Max(textureData.NumMipLevels - 1, 0);
+            var width = Math.Max(textureData.Width >> mipLevel, 1);
+            var height = Math.Max(textureData.Height >> mipLevel, 1);
+
+            if (width * height > TranslucencyScanPixelLimit)
+            {
+                return false;
+            }
+
+            using var bitmap = textureData.GenerateBitmap(mipLevel: (uint)mipLevel);
+            return HasTranslucentPixels(bitmap);
+        }
+
+        private static bool HasTranslucentPixels(SKBitmap bitmap)
+        {
+            if (bitmap.ColorType is not (SKColorType.Bgra8888 or SKColorType.Rgba8888))
+            {
+                return false;
+            }
+
+            var pixels = bitmap.GetPixelSpan();
+
+            for (var i = 3; i < pixels.Length; i += 4)
+            {
+                if (pixels[i] != byte.MaxValue)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private void AddChannelsComboBox(bool transparentByDefault)
         {
             Debug.Assert(UiControl != null);
 
@@ -681,9 +724,8 @@ namespace GUI.Types.GLViewers
 
             channelsComboBox.Items.AddRange([.. ChannelsComboBoxOrder.Select(c => (object)c.ChoiceString)]);
 
-            channelsComboBox.SelectedIndex = Svg != null
-                ? Array.FindIndex(ChannelsComboBoxOrder, channel => channel.Channels == ChannelMapping.RGBA)
-                : Array.FindIndex(ChannelsComboBoxOrder, channel => channel.Channels == ChannelMapping.RGB);
+            var defaultChannels = transparentByDefault ? ChannelMapping.RGBA : ChannelMapping.RGB;
+            channelsComboBox.SelectedIndex = Array.FindIndex(ChannelsComboBoxOrder, channel => channel.Channels == defaultChannels && channel.ChannelSplitMode == ChannelSplitting.None);
 
             var samplingComboBox = UiControl.AddSelection("Sampling", (name, index) =>
             {
