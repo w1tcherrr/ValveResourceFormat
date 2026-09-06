@@ -558,6 +558,8 @@ namespace ValveResourceFormat.Renderer.Materials
             VTexFormat.DXT5            => ImageFormat.DXT5,
             VTexFormat.ETC2            => ImageFormat.R8G8B8_ETC2,
             VTexFormat.ETC2_EAC        => ImageFormat.R8G8B8A8_ETC2_EAC,
+            VTexFormat.R11_EAC         => ImageFormat.R11_EAC,
+            VTexFormat.RG11_EAC        => ImageFormat.RG11_EAC,
 
             VTexFormat.R16             => ImageFormat.R16,
             VTexFormat.RG1616          => ImageFormat.RG1616,
@@ -576,8 +578,6 @@ namespace ValveResourceFormat.Renderer.Materials
             VTexFormat.I8              => ImageFormat.I8,
 
             //VTexFormat.IA88
-            //VTexFormat.R11_EAC
-            //VTexFormat.RG11_EAC
             //VTexFormat.RGB323232F
 #pragma warning restore format
 

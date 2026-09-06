@@ -205,14 +205,28 @@ namespace ValveResourceFormat.ResourceTypes
             VTexFormat.IA88 => 2,
             VTexFormat.ETC2 => 8,
             VTexFormat.ETC2_EAC => 16,
+            VTexFormat.R11_EAC => 8,
+            VTexFormat.RG11_EAC => 16,
             VTexFormat.BGRA8888 => 4,
             VTexFormat.ATI1N => 8,
-            // TODO: ATI2N and RG11_EAC (16 bytes per 4x4 block) and R11_EAC (8 bytes per block) are
-            // block-compressed but fall through to 1 here, so their mip sizes are calculated as
-            // 1 byte per pixel with no block rounding. CalculateBufferSizeForMipLevel must also
-            // treat them as block-compressed.
+            VTexFormat.ATI2N => 16,
             _ => 1,
         };
+
+        /// <summary>
+        /// Gets a value indicating whether this texture stores 4x4 blocks rather than individual pixels.
+        /// </summary>
+        public bool IsBlockCompressed => Format
+            is VTexFormat.DXT1
+            or VTexFormat.DXT5
+            or VTexFormat.BC6H
+            or VTexFormat.BC7
+            or VTexFormat.ETC2
+            or VTexFormat.ETC2_EAC
+            or VTexFormat.R11_EAC
+            or VTexFormat.RG11_EAC
+            or VTexFormat.ATI1N
+            or VTexFormat.ATI2N;
 
         /// <inheritdoc/>
         public override BlockType Type => BlockType.DATA;
@@ -792,6 +806,8 @@ namespace ValveResourceFormat.ResourceTypes
                 // ETC
                 VTexFormat.ETC2 => new DecodeETC2(blockWidth, blockHeight),
                 VTexFormat.ETC2_EAC => new DecodeETC2EAC(blockWidth, blockHeight),
+                VTexFormat.R11_EAC => new DecodeR11EAC(blockWidth, blockHeight),
+                VTexFormat.RG11_EAC => new DecodeRG11EAC(blockWidth, blockHeight),
 
                 // Simple colors
                 VTexFormat.I8 => new DecodeI8(),
@@ -880,13 +896,7 @@ namespace ValveResourceFormat.ResourceTypes
         {
             var bytesPerPixel = BlockSize;
 
-            if (Format == VTexFormat.DXT1
-            || Format == VTexFormat.DXT5
-            || Format == VTexFormat.BC6H
-            || Format == VTexFormat.BC7
-            || Format == VTexFormat.ETC2
-            || Format == VTexFormat.ETC2_EAC
-            || Format == VTexFormat.ATI1N)
+            if (IsBlockCompressed)
             {
                 var misalign = width % 4;
 

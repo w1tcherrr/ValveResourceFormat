@@ -33,6 +33,16 @@ namespace Tests
             {
                 using var __ = texture.GenerateBitmap(decodeFlags: TextureCodec.ForceLDR);
             }
+
+            if (texture.IsRawAnyImage)
+            {
+                return;
+            }
+
+            for (var mipLevel = 1u; mipLevel < texture.NumMipLevels; mipLevel++)
+            {
+                using var ___ = texture.GenerateBitmap(mipLevel: mipLevel);
+            }
         }
 
         [Test, MethodDataSource(nameof(GetTextureFiles))]
@@ -63,6 +73,152 @@ namespace Tests
 
                 var matches = inPlace.AsSpan(0, size).SequenceEqual(expected);
                 await Assert.That(matches).IsTrue();
+            }
+        }
+
+        [Test]
+        public async Task R11EacDecodesToGreyscale()
+        {
+            using var resource = new Resource();
+            resource.Read(Path.Combine(TexturesDir, "R11_EAC_gradient.vtex_c"));
+
+            var texture = (Texture?)resource.DataBlock;
+            Debug.Assert(texture != null);
+
+            using var bitmap = texture.GenerateBitmap();
+
+            using (Assert.Multiple())
+            {
+                await Assert.That(texture.Format).IsEqualTo(VTexFormat.R11_EAC);
+                await Assert.That(texture.NumMipLevels).IsEqualTo((byte)5);
+
+                await Assert.That(bitmap.GetPixel(0, 0)).IsEqualTo(new SKColor(0, 0, 0));
+                await Assert.That(bitmap.GetPixel(63, 63)).IsEqualTo(new SKColor(255, 255, 255));
+                await Assert.That(bitmap.GetPixel(44, 22)).IsEqualTo(new SKColor(242, 242, 242));
+                await Assert.That(bitmap.GetPixel(32, 50)).IsEqualTo(new SKColor(13, 13, 13));
+            }
+        }
+
+        [Test]
+        public async Task RG11EacDecodesRedAndGreenIndependently()
+        {
+            using var resource = new Resource();
+            resource.Read(Path.Combine(TexturesDir, "RG11_EAC_gradient.vtex_c"));
+
+            var texture = (Texture?)resource.DataBlock;
+            Debug.Assert(texture != null);
+
+            using var bitmap = texture.GenerateBitmap();
+
+            using (Assert.Multiple())
+            {
+                await Assert.That(texture.Format).IsEqualTo(VTexFormat.RG11_EAC);
+
+                await Assert.That(bitmap.GetPixel(0, 0)).IsEqualTo(new SKColor(0, 255, 0));
+                await Assert.That(bitmap.GetPixel(63, 63)).IsEqualTo(new SKColor(255, 0, 0));
+                await Assert.That(bitmap.GetPixel(44, 22)).IsEqualTo(new SKColor(242, 77, 0));
+                await Assert.That(bitmap.GetPixel(32, 50)).IsEqualTo(new SKColor(13, 5, 0));
+            }
+        }
+
+        [Test]
+        public async Task EacDecodesMipsSmallerThanOneBlock()
+        {
+            using var resource = new Resource();
+            resource.Read(Path.Combine(TexturesDir, "RG11_EAC_nonaligned.vtex_c"));
+
+            var texture = (Texture?)resource.DataBlock;
+            Debug.Assert(texture != null);
+
+            using var smallest = texture.GenerateBitmap(mipLevel: 5);
+
+            using (Assert.Multiple())
+            {
+                await Assert.That(texture.Width).IsEqualTo((ushort)36);
+                await Assert.That(texture.Height).IsEqualTo((ushort)20);
+                await Assert.That(smallest.Width).IsEqualTo(1);
+                await Assert.That(smallest.Height).IsEqualTo(1);
+                await Assert.That(smallest.GetPixel(0, 0)).IsEqualTo(new SKColor(111, 97, 0));
+            }
+        }
+
+        private static byte[] BuildEacBlock(int baseCodeword, int multiplier, int table, ReadOnlySpan<int> indices)
+        {
+            var block = new byte[8];
+            block[0] = (byte)baseCodeword;
+            block[1] = (byte)(multiplier << 4 | table);
+
+            ulong bits = 0;
+
+            for (var i = 0; i < 16; i++)
+            {
+                bits = bits << 3 | (uint)indices[i];
+            }
+
+            for (var i = 0; i < 6; i++)
+            {
+                block[2 + i] = (byte)(bits >> (40 - i * 8));
+            }
+
+            return block;
+        }
+
+        [Test]
+        public async Task R11EacMatchesEtc2AlphaDecodeWhenMultiplierIsSet()
+        {
+            int[] indices = [0, 1, 2, 3, 4, 5, 6, 7, 7, 6, 5, 4, 3, 2, 1, 0];
+            int[] baseCodewords = [0, 37, 128, 200, 255];
+
+            using var red = new SKBitmap(4, 4, Texture.DefaultBitmapColorType, SKAlphaType.Unpremul);
+            using var alpha = new SKBitmap(4, 4, Texture.DefaultBitmapColorType, SKAlphaType.Unpremul);
+
+            var etc2Block = new byte[16];
+            var mismatches = 0;
+
+            foreach (var baseCodeword in baseCodewords)
+            {
+                for (var multiplier = 1; multiplier < 16; multiplier++)
+                {
+                    for (var table = 0; table < 16; table++)
+                    {
+                        var block = BuildEacBlock(baseCodeword, multiplier, table, indices);
+                        block.CopyTo(etc2Block, 0);
+
+                        new DecodeR11EAC(4, 4).Decode(red, block);
+                        new DecodeETC2EAC(4, 4).Decode(alpha, etc2Block);
+
+                        for (var y = 0; y < 4; y++)
+                        {
+                            for (var x = 0; x < 4; x++)
+                            {
+                                if (red.GetPixel(x, y).Red != alpha.GetPixel(x, y).Alpha)
+                                {
+                                    mismatches++;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            await Assert.That(mismatches).IsZero();
+        }
+
+        [Test]
+        public async Task R11EacStepsByOneWhenMultiplierIsZero()
+        {
+            int[] indices = [0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 2, 3, 4, 5, 6, 7];
+            var block = BuildEacBlock(100, 0, 0, indices);
+
+            using var bitmap = new SKBitmap(4, 4, Texture.DefaultBitmapColorType, SKAlphaType.Unpremul);
+            new DecodeR11EAC(4, 4).Decode(bitmap, block);
+
+            using (Assert.Multiple())
+            {
+                await Assert.That(bitmap.GetPixel(0, 0).Red).IsEqualTo((byte)100);
+                await Assert.That(bitmap.GetPixel(0, 3).Red).IsEqualTo((byte)98);
+                await Assert.That(bitmap.GetPixel(1, 0).Red).IsEqualTo((byte)100);
+                await Assert.That(bitmap.GetPixel(1, 3).Red).IsEqualTo((byte)102);
             }
         }
 
