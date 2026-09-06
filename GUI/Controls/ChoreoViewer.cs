@@ -4,6 +4,7 @@ using System.Text;
 using System.Windows.Forms;
 using ValveResourceFormat;
 using ValveResourceFormat.ResourceTypes;
+using ValveResourceFormat.ResourceTypes.Choreo;
 using ValveResourceFormat.Serialization.KeyValues;
 
 namespace GUI.Controls
@@ -34,18 +35,21 @@ namespace GUI.Controls
 
             fileListView.Columns.Add("Name", 250);
             fileListView.Columns.Add("Version");
+            fileListView.Columns.Add("Duration (s)", 90);
+            fileListView.Columns.Add("Sound duration (s)", 130);
+            fileListView.Columns.Add("Has sounds", 90);
 
-            AddListItem(null, fileName, choreoDataList.Version);
+            AddListItem(null, fileName, choreoDataList.Version, null);
             for (var i = 0; i < choreoDataList.Scenes.Length; i++)
             {
                 var scene = choreoDataList.Scenes[i];
-                AddListItem(i, scene.Name ?? string.Empty, scene.Version);
+                AddListItem(i, scene.Name ?? string.Empty, scene.Version, scene);
             }
 
             AddControl(fileListView);
         }
 
-        private void AddListItem(int? index, string name, int version)
+        private void AddListItem(int? index, string name, int version, ChoreoScene? scene)
         {
             var item = fileListView.Items.Add(new ListViewItem
             {
@@ -56,7 +60,16 @@ namespace GUI.Controls
             var versionString = version.ToString(CultureInfo.InvariantCulture);
             item.SubItems.Add(versionString);
 
+            item.SubItems.Add(scene == null ? string.Empty : FormatMilliseconds(scene.Duration));
+            item.SubItems.Add(scene == null ? string.Empty : FormatMilliseconds(scene.SoundDuration));
+            item.SubItems.Add(scene == null ? string.Empty : (scene.HasSounds ? "Yes" : "No"));
+
             item.Tag = index;
+        }
+
+        private static string FormatMilliseconds(int milliseconds)
+        {
+            return (milliseconds / 1000f).ToString("0.000", CultureInfo.InvariantCulture);
         }
 
         private void FileListView_ItemSelectionChanged(object? sender, EventArgs e)
