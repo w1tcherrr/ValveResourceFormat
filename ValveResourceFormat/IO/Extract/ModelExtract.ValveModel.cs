@@ -153,7 +153,7 @@ partial class ModelExtract
         node.Add("children", childrenKV);
     }
 
-    static KVObject? ProcessBoneConstraint(KVObject? boneConstraint)
+    KVObject? ProcessBoneConstraint(KVObject? boneConstraint)
     {
         if (boneConstraint == null) //ModelDoc will compile constraints as null if it considers them invalid
         {
@@ -161,12 +161,15 @@ partial class ModelExtract
         }
 
         var className = boneConstraint.GetStringProperty("_class");
+        if (string.IsNullOrEmpty(className)) //A constraint compiled as null keeps its array slot but carries no class
+        {
+            return null;
+        }
+
         var targetClassName = RemapBoneConstraintClassname(className);
         if (targetClassName == null)
         {
-#if DEBUG
-            Console.WriteLine($"Skipping unknown bone constraint type: {className}");
-#endif
+            ProgressReporter?.Report($"Skipping unknown bone constraint type: {className}");
             return null;
         }
 
