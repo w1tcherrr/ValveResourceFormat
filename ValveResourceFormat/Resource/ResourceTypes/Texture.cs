@@ -174,6 +174,68 @@ namespace ValveResourceFormat.ResourceTypes
                 /// Gets the dictionary of floating-point parameters associated with this sequence.
                 /// </summary>
                 public Dictionary<string, float> FloatParams { get; } = [];
+
+                /// <summary>
+                /// Gets the time this sequence spans for playback, standing in one second for a
+                /// sequence that carries no total of its own.
+                /// </summary>
+                public float EffectiveTotalTime => TotalTime > 0f ? TotalTime : 1f;
+
+                /// <summary>
+                /// Gets the time at which a frame starts, measured from the start of the sequence.
+                /// </summary>
+                /// <param name="frameIndex">Index of the frame to locate.</param>
+                /// <returns>The frame's start time in seconds.</returns>
+                public float GetFrameStartTime(int frameIndex)
+                {
+                    var start = 0f;
+
+                    for (var frame = 0; frame < frameIndex && frame < Frames.Length; frame++)
+                    {
+                        start += Frames[frame].DisplayTime;
+                    }
+
+                    return start;
+                }
+
+                /// <summary>
+                /// The two frames a playback position sits between and how far it has crossed from the
+                /// first to the second. Every frame is held for its own display time as a share of the
+                /// sequence's total, so a sequence whose frames have uneven display times does not play
+                /// at a uniform rate. A clamping sequence holds its last frame; otherwise it wraps back
+                /// to the first.
+                /// </summary>
+                /// <param name="position">Playback position in seconds, within <see cref="EffectiveTotalTime"/>.</param>
+                /// <returns>The frame to show, the frame after it, and the fraction crossed between them.</returns>
+                public (int Frame, int NextFrame, float Blend) GetFrameAtPosition(float position)
+                {
+                    var lastFrame = Frames.Length - 1;
+
+                    if (lastFrame < 1)
+                    {
+                        return (0, 0, 0f);
+                    }
+
+                    var frameStart = 0f;
+
+                    for (var frame = 0; frame < lastFrame; frame++)
+                    {
+                        var displayTime = Frames[frame].DisplayTime;
+
+                        if (frameStart + displayTime > position)
+                        {
+                            return (frame, frame + 1, CrossedFraction(position - frameStart, displayTime));
+                        }
+
+                        frameStart += displayTime;
+                    }
+
+                    return Clamp
+                        ? (lastFrame, lastFrame, 0f)
+                        : (lastFrame, 0, CrossedFraction(position - frameStart, EffectiveTotalTime - frameStart));
+                }
+
+                private static float CrossedFraction(float into, float span) => span > 0f ? into / span : 0f;
             }
 
             /// <summary>

@@ -117,9 +117,14 @@ uniform vec2 g_vViewportPosition;
 uniform float g_flScale = 1.0;
 uniform int g_nChannelSplitMode;
 uniform int g_nCubemapProjectionType;
+uniform int g_nSpriteSheetMode = 0;
+uniform vec4 g_vSpriteFrameMinMax = vec4(0.0, 0.0, 1.0, 1.0);
 
 #define g_bCubeEquiRectangularProjection (g_nCubemapProjectionType == 1)
 #define g_bCubeCubicProjection (g_nCubemapProjectionType == 2)
+
+#define g_bSpriteSheetOutlineFrame (g_nSpriteSheetMode == 1)
+#define g_bSpriteSheetCropToFrame (g_nSpriteSheetMode == 2)
 
 vec2 AdjustTextureViewerUvs(vec2 vTexCoord)
 {
@@ -165,6 +170,7 @@ void main()
 
     vec3 vBackgroundColor = vec3(0.0);
     int nColorSliceBoundsIndex = 0;
+    vec2 vSheetBoundsCoord = vec2(0.0);
 
     if (g_bTextureViewer)
     {
@@ -191,6 +197,15 @@ void main()
         {
             vChannelSliceTexCoord.x = fract(vChannelSliceTexCoord.x);
             vTexCoord.xy = bIsWideImage ? vChannelSliceTexCoord.yx : vChannelSliceTexCoord.xy;
+        }
+
+        vSheetBoundsCoord = vTexCoord.xy;
+
+        if (g_bSpriteSheetCropToFrame)
+        {
+            vec2 vFrameSize = g_vSpriteFrameMinMax.zw - g_vSpriteFrameMinMax.xy;
+            vSheetBoundsCoord = vTexCoord.xy / vFrameSize;
+            vTexCoord.xy += g_vSpriteFrameMinMax.xy;
         }
     }
 
@@ -291,7 +306,8 @@ void main()
         float flBackgroundMix = 1.0;
 
         const float flMaxUv = g_bVisualizeTiling ? 2.0 : 1.0;
-        bool bWithinImageBounds = vTexCoord.x < flMaxUv && vTexCoord.y < flMaxUv && vTexCoord.x >= 0.0 && vTexCoord.y >= 0.0;
+        vec2 vBoundsCoord = g_bSpriteSheetCropToFrame ? vSheetBoundsCoord : vTexCoord.xy;
+        bool bWithinImageBounds = vBoundsCoord.x < flMaxUv && vBoundsCoord.y < flMaxUv && vBoundsCoord.x >= 0.0 && vBoundsCoord.y >= 0.0;
 
         if (g_nChannelSplitMode > 0 && (bWithinImageBounds || nColorSliceBoundsIndex > 0))
         {
@@ -313,5 +329,22 @@ void main()
         }
 
         vColorOutput.rgb = mix(vColorOutput.rgb, vBackgroundColor, flBackgroundMix);
+
+        if (g_bSpriteSheetOutlineFrame)
+        {
+            vec2 vMin = g_vSpriteFrameMinMax.xy;
+            vec2 vMax = g_vSpriteFrameMinMax.zw;
+            vec2 vThickness = fwidth(vTexCoord.xy) * 1.5;
+
+            bool bInsideX = vTexCoord.x >= vMin.x - vThickness.x && vTexCoord.x <= vMax.x + vThickness.x;
+            bool bInsideY = vTexCoord.y >= vMin.y - vThickness.y && vTexCoord.y <= vMax.y + vThickness.y;
+            bool bOnVerticalEdge = (abs(vTexCoord.x - vMin.x) < vThickness.x || abs(vTexCoord.x - vMax.x) < vThickness.x) && bInsideY;
+            bool bOnHorizontalEdge = (abs(vTexCoord.y - vMin.y) < vThickness.y || abs(vTexCoord.y - vMax.y) < vThickness.y) && bInsideX;
+
+            if (bOnVerticalEdge || bOnHorizontalEdge)
+            {
+                vColorOutput = vec4(1.0, 0.5, 0.0, 1.0);
+            }
+        }
     }
 }

@@ -221,9 +221,8 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
 
         /// <summary>
         /// The two sheet frames a particle sits between and how far it has crossed from the first to
-        /// the second. Every frame is held for its own display time as a share of the sequence's total,
-        /// so a sequence whose frames have uneven display times does not play at a uniform rate.
-        /// A clamping sequence holds its last frame; otherwise it wraps back to the first.
+        /// the second. The particle's age and animation type give the playback position, which
+        /// <see cref="Texture.SpritesheetData.Sequence.GetFrameAtPosition"/> then resolves to frames.
         /// </summary>
         protected static (int Frame, int NextFrame, float Blend) GetSheetFrame(ref Particle particle,
             Texture.SpritesheetData.Sequence sequence, float animationRate, ParticleAnimationType animationType, bool animateInFps)
@@ -235,7 +234,7 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
                 return (0, 0, 0f);
             }
 
-            var totalTime = sequence.TotalTime > 0f ? sequence.TotalTime : 1f;
+            var totalTime = sequence.EffectiveTotalTime;
             var lastFrame = frameCount - 1;
 
             if (animationType == ParticleAnimationType.ANIMATION_TYPE_MANUAL_FRAMES)
@@ -263,26 +262,8 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
                 ? Math.Clamp(passes, 0f, 1f)
                 : passes - MathF.Floor(passes));
 
-            var frameStart = 0f;
-
-            for (var frame = 0; frame < lastFrame; frame++)
-            {
-                var displayTime = sequence.Frames[frame].DisplayTime;
-
-                if (frameStart + displayTime > position)
-                {
-                    return (frame, frame + 1, CrossedFraction(position - frameStart, displayTime));
-                }
-
-                frameStart += displayTime;
-            }
-
-            return sequence.Clamp
-                ? (lastFrame, lastFrame, 0f)
-                : (lastFrame, 0, CrossedFraction(position - frameStart, totalTime - frameStart));
+            return sequence.GetFrameAtPosition(position);
         }
-
-        private static float CrossedFraction(float into, float span) => span > 0f ? into / span : 0f;
 
         /// <summary>
         /// Replaces the texture this renderer draws with.
