@@ -30,6 +30,14 @@ namespace ValveResourceFormat.Renderer.SceneNodes
         public float FrametimeMultiplier { get; set; } = 1.0f;
 
         /// <summary>
+        /// Gets or sets whether the effect holds its state instead of advancing. Unlike <see cref="Stop"/>
+        /// it keeps drawing the particles it has, and a <see cref="Restart"/> requested while it is set
+        /// still takes effect. Independent of <see cref="ParticleSystemState.Frozen"/>, which belongs to
+        /// the simulation.
+        /// </summary>
+        public bool IsPaused { get; set; }
+
+        /// <summary>
         /// Whether to load preview control point state, and loop playback when finished.
         /// </summary>
         public bool Preview { get; set; }
@@ -589,6 +597,11 @@ namespace ValveResourceFormat.Renderer.SceneNodes
                 {
                     particleRenderer.Replay();
                 }
+            }
+
+            if (IsPaused)
+            {
+                return;
             }
 
             if (frameTime > 0f && (Preview || particleRenderer.IsWithinDrawDistance(context.Camera)))
