@@ -701,6 +701,11 @@ namespace GUI.Types.Viewers
                         var specialTabPage = new ThemedTabPage("SOUND");
                         var autoPlay = ((Settings.QuickPreviewFlags)Settings.Config.QuickFilePreview & Settings.QuickPreviewFlags.AutoPlaySounds) != 0;
 
+                        if (resource.DataBlock is Sound soundData)
+                        {
+                            specialTabPage.Controls.Add(CreateSoundInfoLabel(soundData));
+                        }
+
                         try
                         {
                             if (AudioPlayer.CreateWaveStream(resource) is var (waveStream, loopMarkers))
@@ -764,6 +769,29 @@ namespace GUI.Types.Viewers
             }
 
             return false;
+        }
+
+        private static Label CreateSoundInfoLabel(Sound sound)
+        {
+            var text = new StringBuilder();
+
+            foreach (var (label, value) in sound.GetInfoRows())
+            {
+                if (text.Length > 0)
+                {
+                    text.Append("    ");
+                }
+
+                text.Append(label).Append(": ").Append(value);
+            }
+
+            return new Label
+            {
+                AutoSize = true,
+                Dock = DockStyle.Top,
+                Padding = new Padding(6, 6, 6, 2),
+                Text = text.ToString(),
+            };
         }
 
         public static bool OpenExternalReference(VrfGuiContext vrfGuiContext, string name)

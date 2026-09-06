@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
 using ValveKeyValue;
@@ -480,6 +481,53 @@ namespace ValveResourceFormat.ResourceTypes
                 RunTimePhonemes = runTimePhonemes,
                 EmphasisSamples = emphasisSamples,
             };
+        }
+
+        /// <summary>
+        /// Returns human readable label and value pairs describing this sound: its duration,
+        /// container and encoding, channel layout, sample rate, bit depth, sample count, loop
+        /// points when the sound loops, and the size of the streaming audio data.
+        /// </summary>
+        /// <returns>The metadata rows, in display order.</returns>
+        public IReadOnlyList<(string Label, string Value)> GetInfoRows()
+        {
+            var duration = TimeSpan.FromSeconds(Duration);
+            var durationFormat = duration.TotalHours >= 1d ? @"h\:mm\:ss\.fff" : @"m\:ss\.fff";
+
+            var format = AudioFormat == WaveAudioFormat.Unknown
+                ? SoundType.ToString()
+                : $"{SoundType} {AudioFormat}";
+
+            var channels = Channels switch
+            {
+                1 => "Mono",
+                2 => "Stereo",
+                _ => Channels.ToString(CultureInfo.InvariantCulture),
+            };
+
+            var rows = new List<(string Label, string Value)>
+            {
+                ("Duration", duration.ToString(durationFormat, CultureInfo.InvariantCulture)),
+                ("Format", format),
+                ("Channels", channels),
+                ("Sample rate", $"{SampleRate.ToString(CultureInfo.InvariantCulture)} Hz"),
+            };
+
+            if (Bits > 0)
+            {
+                rows.Add(("Bit depth", $"{Bits.ToString(CultureInfo.InvariantCulture)}-bit"));
+            }
+
+            rows.Add(("Samples", SampleCount.ToString("N0", CultureInfo.InvariantCulture)));
+
+            if (LoopStart >= 0 && LoopEnd > LoopStart)
+            {
+                rows.Add(("Loop", $"{LoopStart.ToString("N0", CultureInfo.InvariantCulture)} to {LoopEnd.ToString("N0", CultureInfo.InvariantCulture)}"));
+            }
+
+            rows.Add(("Streaming data", $"{StreamingDataSize.ToString("N0", CultureInfo.InvariantCulture)} bytes"));
+
+            return rows;
         }
 
         private static uint ExtractSub(uint l, byte offset, byte nrBits)
