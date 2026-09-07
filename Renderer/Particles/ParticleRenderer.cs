@@ -40,23 +40,6 @@ namespace ValveResourceFormat.Renderer.Particles
         /// </summary>
         public bool WantsSceneDepth { get; }
 
-        /// <inheritdoc/>
-        public Texture.SpritesheetData? SpriteSheet
-        {
-            get
-            {
-                foreach (var renderer in renderers)
-                {
-                    if (renderer.SpriteSheet is { } sheet)
-                    {
-                        return sheet;
-                    }
-                }
-
-                return null;
-            }
-        }
-
         private SceneNode? ownerNode;
 
         /// <summary>
@@ -96,6 +79,8 @@ namespace ValveResourceFormat.Renderer.Particles
 
             SetupRenderers(simulation.Definition.GetArray("m_Renderers") ?? [], scene);
 
+            simulation.RenderState.SequenceDurations = CollectSequenceDurations();
+
             foreach (var childSimulation in simulation.Children)
             {
                 childRenderers.Add(new ParticleRenderer(childSimulation, rendererContext, scene));
@@ -127,6 +112,32 @@ namespace ValveResourceFormat.Renderer.Particles
 
                 renderers.Add(renderer);
             }
+        }
+
+        /// <summary>
+        /// How long each sequence of the first sheet this system's renderers offer runs, in frames, or
+        /// null when none of them draws with one.
+        /// </summary>
+        private float[]? CollectSequenceDurations()
+        {
+            foreach (var renderer in renderers)
+            {
+                if (renderer.SpriteSheet is not { } sheet)
+                {
+                    continue;
+                }
+
+                var durations = new float[sheet.Sequences.Length];
+
+                for (var i = 0; i < durations.Length; i++)
+                {
+                    durations[i] = sheet.Sequences[i].TotalTime;
+                }
+
+                return durations;
+            }
+
+            return null;
         }
 
         private CustomRenderPasses CollectPasses()

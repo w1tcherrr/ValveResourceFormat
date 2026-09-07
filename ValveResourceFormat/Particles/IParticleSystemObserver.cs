@@ -1,5 +1,3 @@
-using ValveResourceFormat.ResourceTypes;
-
 namespace ValveResourceFormat.Particles;
 
 /// <summary>
@@ -8,12 +6,6 @@ namespace ValveResourceFormat.Particles;
 /// </summary>
 public interface IParticleSystemObserver
 {
-    /// <summary>
-    /// The sheet the drawing layer animates this system's particles with, which the sequence-driven
-    /// functions measure a particle's life against. Null when nothing it draws with carries one.
-    /// </summary>
-    Texture.SpritesheetData? SpriteSheet { get; }
-
     /// <summary>
     /// Called after the system finishes a simulated frame, once per substep, and never during a
     /// pre-simulation burst.

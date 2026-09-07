@@ -64,6 +64,13 @@ namespace ValveResourceFormat.Particles
         /// <summary>World-space position of the render camera, updated once per simulation step.</summary>
         public Vector3 CameraPosition { get; set; }
 
+        /// <summary>
+        /// How long each sequence of the sheet the drawing layer animates this system's particles with
+        /// runs, in frames, or null when nothing it draws with carries a sheet. Set by whatever draws
+        /// the system; <c>C_INIT_SequenceLifeTime</c> measures a particle's life against it.
+        /// </summary>
+        public float[]? SequenceDurations { get; set; }
+
         /// <summary>Whether the system stops at <see cref="EndTime"/> rather than running until it empties.</summary>
         public bool EndEarly { get; set; }
 
