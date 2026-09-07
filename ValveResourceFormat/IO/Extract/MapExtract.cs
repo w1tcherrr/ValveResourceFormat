@@ -2138,7 +2138,11 @@ public sealed class MapExtract
                 continue;
             }
 
-            var mapEntity = new CMapEntity();
+            var pathNodes = PathParticleRope.ParseNodes(compiledEntity.GetStringProperty("pathnodes"));
+            var mapEntity = pathNodes.Count == 0
+                ? new CMapEntity()
+                : className is "cable_static" or "cable_dynamic" ? new CMapCable() : new CMapPath();
+
             var entityLineage = AddProperties(className, compiledEntity, mapEntity);
             var localTransform = EntityTransformHelper.ToTransformationMatrix(compiledEntity);
             var worldTransform = parentTransform is { } parent ? localTransform * parent : localTransform;
@@ -2163,6 +2167,11 @@ public sealed class MapExtract
                 {
                     continue;
                 }
+            }
+
+            if (mapEntity is CMapPath mapPath)
+            {
+                AddPathNodes(mapPath, className, compiledEntity, pathNodes, worldTransform);
             }
 
             if (entityLineage.Length > 1)
@@ -2231,31 +2240,38 @@ public sealed class MapExtract
 
             if (modelName != null && PathIsSubPath(modelName, LumpFolder))
             {
-                var firstReference = ModelEntityAssociations.TryAdd(modelName, className);
-                if (!firstReference)
+                if (mapEntity is CMapPath)
                 {
-                    var otherClass = ModelEntityAssociations[modelName];
-                    Debug.Assert(className == otherClass, "Model living in lump folder referenced by more than one entity type!\n" +
-                        $"model = {modelName} {className} != {otherClass}");
+                    mapEntity.EntityProperties.Remove("model");
                 }
-
-                ExtractEntityModel(mapEntity, modelName, worldTransform.Translation);
-
-                ReadOnlySpan<char> entityIdFull = Path.GetFileNameWithoutExtension(modelName);
-                var nameCutoff = entityIdFull.Length;
-                foreach (var entityId in entityLineage.Reverse())
+                else
                 {
-                    ReadOnlySpan<char> entityIdString = '_' + entityId.ToString(CultureInfo.InvariantCulture);
-                    if (entityIdFull[..nameCutoff].EndsWith(entityIdString, StringComparison.Ordinal))
+                    var firstReference = ModelEntityAssociations.TryAdd(modelName, className);
+                    if (!firstReference)
                     {
-                        nameCutoff -= entityIdString.Length;
+                        var otherClass = ModelEntityAssociations[modelName];
+                        Debug.Assert(className == otherClass, "Model living in lump folder referenced by more than one entity type!\n" +
+                            $"model = {modelName} {className} != {otherClass}");
                     }
-                }
 
-                var entityName = new string(entityIdFull[..nameCutoff]);
-                if (entityName != "unnamed")
-                {
-                    mapEntity.Name = entityName;
+                    ExtractEntityModel(mapEntity, modelName, worldTransform.Translation);
+
+                    ReadOnlySpan<char> entityIdFull = Path.GetFileNameWithoutExtension(modelName);
+                    var nameCutoff = entityIdFull.Length;
+                    foreach (var entityId in entityLineage.Reverse())
+                    {
+                        ReadOnlySpan<char> entityIdString = '_' + entityId.ToString(CultureInfo.InvariantCulture);
+                        if (entityIdFull[..nameCutoff].EndsWith(entityIdString, StringComparison.Ordinal))
+                        {
+                            nameCutoff -= entityIdString.Length;
+                        }
+                    }
+
+                    var entityName = new string(entityIdFull[..nameCutoff]);
+                    if (entityName != "unnamed")
+                    {
+                        mapEntity.Name = entityName;
+                    }
                 }
             }
 
@@ -2274,6 +2290,109 @@ public sealed class MapExtract
             }
 
             MapDocument.World.Children.Add(mapEntity);
+        }
+    }
+
+    private const int LinearPathInterpolation = 0;
+    private const int SplinePathInterpolation = 1;
+
+    /// <summary>
+    /// Reads back the interpolation Hammer was set to from the handles the compiler derived with it.
+    /// Both rules scale a handle to a third of its own segment, and differ only in its direction.
+    /// </summary>
+    private static int DetectPathInterpolation(List<PathParticleRopeNode> nodes)
+    {
+        var linearError = 0f;
+        var splineError = 0f;
+
+        for (var i = 0; i < nodes.Count; i++)
+        {
+            var node = nodes[i];
+            var interior = i > 0 && i < nodes.Count - 1;
+
+            var toPrevious = i > 0 ? nodes[i - 1].Position - node.Position : Vector3.Zero;
+            var toNext = i < nodes.Count - 1 ? nodes[i + 1].Position - node.Position : Vector3.Zero;
+
+            var chord = toNext - toPrevious;
+            var splineDirection = chord.Length() > 0f ? Vector3.Normalize(chord) : Vector3.Zero;
+
+            var linearIn = toPrevious / 3f;
+            var linearOut = toNext / 3f;
+
+            var splineIn = interior ? splineDirection * (-toPrevious.Length() / 3f) : linearIn;
+            var splineOut = interior ? splineDirection * (toNext.Length() / 3f) : linearOut;
+
+            linearError += (node.InTangent - linearIn).Length() + (node.OutTangent - linearOut).Length();
+            splineError += (node.InTangent - splineIn).Length() + (node.OutTangent - splineOut).Length();
+        }
+
+        return splineError < linearError ? SplinePathInterpolation : LinearPathInterpolation;
+    }
+
+    /// <summary>
+    /// Rebuilds the nodes a path was authored with from the blobs the compiler flattened them into,
+    /// placing each one by the path's own world transform, which the blob positions are relative to.
+    /// </summary>
+    private static void AddPathNodes(CMapPath path, string className, Entity compiledEntity,
+        List<PathParticleRopeNode> nodes, Matrix4x4 worldTransform)
+    {
+        var pins = PathParticleRope.ParsePins(compiledEntity.GetStringProperty("pathnodepinsenabled"));
+        var radiusScales = PathParticleRope.ParseRadiusScales(compiledEntity.GetStringProperty("pathnoderadiusscales"));
+        var colors = PathParticleRope.ParseColors(compiledEntity.GetStringProperty("pathnodecolors"));
+        var moveSpeedTypes = PathParticleRope.ParseFloatBlob(compiledEntity.GetStringProperty("pathnodemovespeedtypes"));
+        var nodeClassName = className switch
+        {
+            "path_particle_rope" or "path_particle_rope_clientside" => "path_node_particle_rope",
+            "cable_static" or "cable_dynamic" => "path_node_cable",
+            "map_preview_camera_path" => "map_preview_camera_path_node",
+            "dota_movespeed_modifier_path" => "dota_movespeed_path_node",
+            _ => "path_node_generic",
+        };
+
+        path.InterpolationType = DetectPathInterpolation(nodes);
+
+        for (var i = 0; i < nodes.Count; i++)
+        {
+            var node = nodes[i];
+
+            var pathNode = new CMapPathNode
+            {
+                Origin = Vector3.Transform(node.Position, worldTransform),
+                InTangent = Vector3.TransformNormal(node.InTangent, worldTransform),
+                OutTangent = Vector3.TransformNormal(node.OutTangent, worldTransform),
+            };
+
+            pathNode.WithClassName(nodeClassName);
+
+            if (i < pins.Length)
+            {
+                pathNode.PinEnabled = pins[i];
+                pathNode.WithProperty("pin_enabled", pins[i] ? "1" : "0");
+            }
+
+            if (i < radiusScales.Length)
+            {
+                pathNode.RadiusScale = radiusScales[i];
+                pathNode.WithProperty("radius_scale", radiusScales[i].ToString(CultureInfo.InvariantCulture));
+            }
+
+            if (i < colors.Length)
+            {
+                var color = Vector3.Clamp(colors[i], Vector3.Zero, Vector3.One) * 255f;
+                var red = (byte)MathF.Round(color.X);
+                var green = (byte)MathF.Round(color.Y);
+                var blue = (byte)MathF.Round(color.Z);
+
+                pathNode.TintColor = new Datamodel.Color(red, green, blue, 255);
+                pathNode.WithProperty("color_tint", string.Format(CultureInfo.InvariantCulture, "{0} {1} {2}", red, green, blue));
+            }
+
+            if (i < moveSpeedTypes.Length)
+            {
+                pathNode.WithProperty("MoveSpeedType", ((int)moveSpeedTypes[i]).ToString(CultureInfo.InvariantCulture));
+            }
+
+            path.Children.Add(pathNode);
         }
     }
 
@@ -2409,6 +2528,16 @@ public sealed class MapExtract
         else if (key == "scales")
         {
             mapEntity.Scales = compiledEntity.GetVector3Property(key);
+            return true;
+        }
+        else if (mapEntity is CMapPath path && key is "closed_loop" or "pathnodes" or "pathnodepinsenabled"
+            or "pathnoderadiusscales" or "pathnodecolors" or "pathnodemovespeedtypes")
+        {
+            if (key == "closed_loop")
+            {
+                path.ClosedLoop = compiledEntity.TryGetValue(key, out var closedLoop) && ToEditString(closedLoop) is "1" or "true";
+            }
+
             return true;
         }
         else if (key == "hammeruniqueid")

@@ -30,7 +30,7 @@ namespace ValveResourceFormat.ResourceTypes
         /// <summary>Floats per <c>pathnodes</c> entry: position(3) + inTangent(3) + outTangent(3).</summary>
         public const int FloatsPerNode = 9;
 
-        private static readonly char[] SplitChars = ['[', ']', ',', ' ', '\t', '\r', '\n', '\f', '\v'];
+        private static readonly char[] SplitChars = ['[', ']', ',', '"', ' ', '\t', '\r', '\n', '\f', '\v'];
 
         /// <summary>
         /// Flattens a bracketed blob to a flat array of floats, ignoring all bracket nesting and whitespace.

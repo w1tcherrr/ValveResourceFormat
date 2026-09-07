@@ -514,6 +514,64 @@ public class CMapEntity : BaseEntity
 }
 
 /// <summary>
+/// A path: an ordered chain of <see cref="CMapPathNode"/> children that Hammer edits as one spline,
+/// carrying the entity keys of the path class it was placed as. The map compiler flattens the chain
+/// into the entity's own <c>pathNodes</c> key and drops the children.
+/// </summary>
+[CamelCaseProperties]
+public class CMapPath : CMapEntity
+{
+    /// <summary>How the spline runs between its nodes.</summary>
+    public int InterpolationType { get; set; } = 1;
+
+    /// <summary>Whether the last node joins back onto the first.</summary>
+    public bool ClosedLoop { get; set; }
+
+    /// <summary>Distance, in units, between the points of the particle snapshot a path can generate.</summary>
+    public float ParticleSnapshotSpacing { get; set; } = 16f;
+}
+
+/// <summary>
+/// One node of a <see cref="CMapPath"/>: a point on the spline, its two handles, and the entity keys
+/// of the path node class the parent path declares.
+/// </summary>
+[CamelCaseProperties]
+public class CMapPathNode : CMapEntity
+{
+    /// <summary>Name entity IO addresses this node by.</summary>
+    public string PathNodeName { get; set; } = string.Empty;
+
+    /// <summary>Incoming spline handle, relative to <see cref="MapNode.Origin"/>.</summary>
+    public Vector3 InTangent { get; set; }
+
+    /// <summary>Outgoing spline handle, relative to <see cref="MapNode.Origin"/>.</summary>
+    public Vector3 OutTangent { get; set; }
+
+    /// <summary>How Hammer derives the incoming handle.</summary>
+    public int InTangentType { get; set; } = 1;
+
+    /// <summary>How Hammer derives the outgoing handle.</summary>
+    public int OutTangentType { get; set; } = 1;
+
+    /// <summary>Colour this node tints the path with, written to the path's <c>pathNodeColors</c>.</summary>
+    public Datamodel.Color TintColor { get; set; } = new Datamodel.Color(255, 255, 255, 255);
+
+    /// <summary>Whether a simulated path is held in place at this node.</summary>
+    public bool PinEnabled { get; set; } = true;
+
+    /// <summary>Multiplier on the path's radius at this node.</summary>
+    public float RadiusScale { get; set; } = 1f;
+}
+
+/// <summary>
+/// A cable: a path whose mesh and hanging handles the map compiler generates for it.
+/// </summary>
+[CamelCaseProperties]
+public class CMapCable : CMapPath
+{
+}
+
+/// <summary>
 /// Places another map group into the map with its own transform and tint.
 /// </summary>
 [CamelCaseProperties]
