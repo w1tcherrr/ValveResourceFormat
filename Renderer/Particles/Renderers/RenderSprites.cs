@@ -113,6 +113,9 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
         }
 
         /// <inheritdoc/>
+        public override Texture.SpritesheetData? SpriteSheet => ParticleTextureLayer.FindSpriteSheet(layers);
+
+        /// <inheritdoc/>
         // The override stands in for the card's base texture; the layers composited over it keep their
         // own textures along with the channels and blend settings that fold them together.
         public override void SetTextureOverride(RenderTexture texture)
@@ -190,6 +193,12 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
             public Vector2 Size => Max - Min;
         }
 
+        /// <summary>The two sheet frames one layer is blending between, and how far it has crossed.</summary>
+        private readonly record struct LayerFrames(
+            Texture.SpritesheetData.Sequence.Frame.Image Current,
+            Texture.SpritesheetData.Sequence.Frame.Image Next,
+            float Blend);
+
         private static Vector2 Normalize(Vector2 point, Vector2 min, Vector2 size) => new(
             size.X != 0f ? (point.X - min.X) / size.X : 0f,
             size.Y != 0f ? (point.Y - min.Y) / size.Y : 0f);
@@ -212,67 +221,59 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
             return (image.UncroppedMin + (window.Min * size), image.UncroppedMin + (window.Max * size));
         }
 
-        private bool TryGetLayerFrames(int layer, ref Particle particle,
-            out Texture.SpritesheetData.Sequence.Frame.Image current,
-            out Texture.SpritesheetData.Sequence.Frame.Image next,
-            out float frameBlend)
+        /// <summary>The frames a layer's own sheet is showing, or null when it carries no sequence.</summary>
+        private LayerFrames? GetLayerFrames(int layer, ref Particle particle)
         {
-            current = null!;
-            next = null!;
-            frameBlend = 0f;
-
             var spriteSheetData = layers[layer].Texture.SpriteSheetData;
 
             if (spriteSheetData == null || spriteSheetData.Sequences.Length == 0)
             {
-                return false;
+                return null;
             }
 
             var sequence = spriteSheetData.Sequences[particle.SequenceNumber % spriteSheetData.Sequences.Length];
 
             if (sequence.Frames.Length == 0)
             {
-                return false;
+                return null;
             }
 
             var (frame, nextFrame, blend) = GetSheetFrame(ref particle, sequence, animationRate, animationType, animateInFps);
-            frameBlend = blend;
 
             // TODO: Support more than one image per frame?
-            current = sequence.Frames[frame].Images[0];
-            next = sequence.Frames[nextFrame].Images[0];
-            return true;
+            return new LayerFrames(sequence.Frames[frame].Images[0], sequence.Frames[nextFrame].Images[0], blend);
         }
 
         /// <summary>
         /// The window the card shrinks to, covering the art of both frames it is blending so neither is
         /// clipped, and none of the tile's packed neighbours is drawn.
         /// </summary>
-        private CropWindow GetCardCropWindow(ref Particle particle)
+        private static CropWindow GetCardCropWindow(LayerFrames? frames)
         {
-            if (!TryGetLayerFrames(0, ref particle, out var current, out var next, out _))
+            if (frames is not { } cardFrames)
             {
                 return CropWindow.Full;
             }
 
-            var currentWindow = TileWindow(current);
-            var nextWindow = TileWindow(next);
+            var current = TileWindow(cardFrames.Current);
+            var next = TileWindow(cardFrames.Next);
 
             return new CropWindow(
-                Vector2.Min(currentWindow.Min, nextWindow.Min),
-                Vector2.Max(currentWindow.Max, nextWindow.Max));
+                Vector2.Min(current.Min, next.Min),
+                Vector2.Max(current.Max, next.Max));
         }
 
-        private (Vector2 UvMin, Vector2 UvMax, Vector2 NextMin, Vector2 NextMax) GetLayerSheetUvs(
-            int layer, ref Particle particle, CropWindow window, out float frameBlend)
+        /// <summary>The atlas rectangles a layer draws its two frames from, cropped to the card's window.</summary>
+        private static (Vector2 UvMin, Vector2 UvMax, Vector2 NextMin, Vector2 NextMax) GetLayerSheetUvs(
+            LayerFrames? frames, CropWindow window)
         {
-            if (!TryGetLayerFrames(layer, ref particle, out var current, out var next, out frameBlend))
+            if (frames is not { } layerFrames)
             {
                 return (Vector2.Zero, Vector2.One, Vector2.Zero, Vector2.One);
             }
 
-            var (uvMin, uvMax) = WindowRect(current, window);
-            var (nextMin, nextMax) = WindowRect(next, window);
+            var (uvMin, uvMax) = WindowRect(layerFrames.Current, window);
+            var (nextMin, nextMax) = WindowRect(layerFrames.Next, window);
 
             return (uvMin, uvMax, nextMin, nextMax);
         }
@@ -480,7 +481,8 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
                         + (centerOffset.X * right)
                         + (centerOffset.Y * up);
 
-                    var window = GetCardCropWindow(ref particle);
+                    var cardFrames = GetLayerFrames(0, ref particle);
+                    var window = GetCardCropWindow(cardFrames);
                     var windowSize = window.Size;
 
                     origin += ((window.Max.X + window.Min.X - 1f) * right)
@@ -491,7 +493,7 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
 
                     // Each layer resolves frame rects against its own sheet, timed by the base sequence:
                     // companion sheets match the base rects, one-frame sequences pin an atlas region.
-                    var (uvMin, uvMax, uvNextMin, uvNextMax) = GetLayerSheetUvs(0, ref particle, window, out var frameBlend);
+                    var (uvMin, uvMax, uvNextMin, uvNextMax) = GetLayerSheetUvs(cardFrames, window);
 
                     var start = i * instanceFloats;
 
@@ -503,7 +505,7 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
                         Color = new Vector4(particle.Color * colorFade, alpha),
                         UvRect = Rect(uvMin, uvMax),
                         UvRectNext = Rect(uvNextMin, uvNextMax),
-                        FrameBlend = frameBlend,
+                        FrameBlend = cardFrames?.Blend ?? 0f,
                     };
 
                     var layerRects = MemoryMarshal.Cast<float, Vector4>(
@@ -511,7 +513,7 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
 
                     for (var layer = 1; layer < layers.Length; layer++)
                     {
-                        var (layerMin, layerMax, layerNextMin, layerNextMax) = GetLayerSheetUvs(layer, ref particle, window, out _);
+                        var (layerMin, layerMax, layerNextMin, layerNextMax) = GetLayerSheetUvs(GetLayerFrames(layer, ref particle), window);
 
                         layerRects[(layer - 1) * 2] = Rect(layerMin, layerMax);
                         layerRects[((layer - 1) * 2) + 1] = Rect(layerNextMin, layerNextMax);

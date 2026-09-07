@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using OpenTK.Graphics.OpenGL;
 using ValveResourceFormat.Particles;
 using ValveResourceFormat.Particles.Utils;
+using ValveResourceFormat.ResourceTypes;
 using ValveResourceFormat.Serialization.KeyValues;
 
 namespace ValveResourceFormat.Renderer.Particles.Renderers
@@ -117,6 +118,9 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
                 maxLength = minLength;
             }
         }
+
+        /// <inheritdoc/>
+        public override Texture.SpritesheetData? SpriteSheet => ParticleTextureLayer.FindSpriteSheet(layers);
 
         /// <inheritdoc/>
         public override void SetTextureOverride(RenderTexture texture)

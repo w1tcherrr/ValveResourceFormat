@@ -214,6 +214,13 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
         {
         }
 
+        /// <summary>
+        /// The sheet this renderer animates its particles with, or null when the textures it draws
+        /// with carry none. <c>C_INIT_SequenceLifeTime</c> times a particle against the first one a
+        /// system's renderers offer.
+        /// </summary>
+        public virtual Texture.SpritesheetData? SpriteSheet => null;
+
         /// <summary>A sheet frame rectangle as the shader reads it: minimum in xy, maximum in zw.</summary>
         /// <param name="min">Lower corner.</param>
         /// <param name="max">Upper corner.</param>

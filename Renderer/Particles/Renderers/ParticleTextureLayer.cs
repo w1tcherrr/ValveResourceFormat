@@ -1,5 +1,6 @@
 using System.Linq;
 using ValveResourceFormat.Particles;
+using ValveResourceFormat.ResourceTypes;
 using ValveResourceFormat.Serialization.KeyValues;
 
 namespace ValveResourceFormat.Renderer.Particles.Renderers
@@ -143,6 +144,21 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
             }
 
             return rectMin + (placed * (rectMax - rectMin));
+        }
+
+        /// <summary>The first sheet these layers carry, or null when none of their textures ships one.</summary>
+        /// <param name="layers">The layers in composite order.</param>
+        public static Texture.SpritesheetData? FindSpriteSheet(ParticleTextureLayer[] layers)
+        {
+            foreach (var layer in layers)
+            {
+                if (layer.Texture.SpriteSheetData is { Sequences.Length: > 0 } sheet)
+                {
+                    return sheet;
+                }
+            }
+
+            return null;
         }
 
         /// <summary>

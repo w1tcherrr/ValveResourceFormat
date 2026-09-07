@@ -20,14 +20,12 @@ namespace ValveResourceFormat.Particles.Initializers
 
         public override Particle Initialize(ref Particle particle, ParticleCollection particles, ParticleSystemState particleSystemState)
         {
-            var sheet = particleSystemState.Data?.SpriteSheet;
+            var sequences = particleSystemState.Data?.Observer?.SpriteSheet?.Sequences;
 
-            if (frameRate == 0f || sheet == null)
+            if (frameRate == 0f || sequences == null)
             {
                 return particle;
             }
-
-            var sequences = sheet.Sequences;
 
             var totalTime = particle.SequenceNumber >= 0 && particle.SequenceNumber < sequences.Length
                 ? sequences[particle.SequenceNumber].TotalTime

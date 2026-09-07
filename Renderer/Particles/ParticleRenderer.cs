@@ -40,6 +40,23 @@ namespace ValveResourceFormat.Renderer.Particles
         /// </summary>
         public bool WantsSceneDepth { get; }
 
+        /// <inheritdoc/>
+        public Texture.SpritesheetData? SpriteSheet
+        {
+            get
+            {
+                foreach (var renderer in renderers)
+                {
+                    if (renderer.SpriteSheet is { } sheet)
+                    {
+                        return sheet;
+                    }
+                }
+
+                return null;
+            }
+        }
+
         private SceneNode? ownerNode;
 
         /// <summary>
