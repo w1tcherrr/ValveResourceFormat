@@ -58,6 +58,18 @@ namespace Tests
         }
 
         [Test]
+        public async Task SplitsOnEverySeparator()
+        {
+            var floats = PathParticleRope.ParseFloatBlob("[\"1\",\t2\r\n3\f4\v5 6]");
+            float[] expected = [1f, 2f, 3f, 4f, 5f, 6f];
+            await Assert.That(floats).IsEquivalentTo(expected, CollectionOrdering.Matching);
+
+            var pins = PathParticleRope.ParsePins("[\"true\",\t\"false\"\r\n\"1\"]");
+            bool[] expectedPins = [true, false, true];
+            await Assert.That(pins).IsEquivalentTo(expectedPins, CollectionOrdering.Matching);
+        }
+
+        [Test]
         public async Task ParsesRadiusScalesWithTrailingCommas()
         {
             var scales = PathParticleRope.ParseRadiusScales("[ 1.4, 1.0, 2.0, ]");

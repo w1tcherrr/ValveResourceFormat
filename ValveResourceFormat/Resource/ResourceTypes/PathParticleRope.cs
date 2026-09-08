@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Globalization;
 
 namespace ValveResourceFormat.ResourceTypes
@@ -30,23 +31,24 @@ namespace ValveResourceFormat.ResourceTypes
         /// <summary>Floats per <c>pathnodes</c> entry: position(3) + inTangent(3) + outTangent(3).</summary>
         public const int FloatsPerNode = 9;
 
-        private static readonly char[] SplitChars = ['[', ']', ',', '"', ' ', '\t', '\r', '\n', '\f', '\v'];
+        private static readonly SearchValues<char> Separators = SearchValues.Create("[],\" \t\r\n\f\v");
 
         /// <summary>
         /// Flattens a bracketed blob to a flat array of floats, ignoring all bracket nesting and whitespace.
         /// </summary>
-        public static float[] ParseFloatBlob(string? input)
+        public static float[] ParseFloatBlob(ReadOnlySpan<char> input)
         {
-            if (string.IsNullOrEmpty(input))
-            {
-                return [];
-            }
+            var result = new List<float>();
 
-            var tokens = input.Split(SplitChars, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            var result = new List<float>(tokens.Length);
-
-            foreach (var token in tokens)
+            foreach (var range in input.SplitAny(Separators))
             {
+                var token = input[range].Trim();
+
+                if (token.IsEmpty)
+                {
+                    continue;
+                }
+
                 // Keep the flat array aligned with the fixed-size node groups: substitute 0 for an unparseable
                 // token instead of dropping it, which would shift every later field.
                 result.Add(float.TryParse(token, NumberStyles.Float, CultureInfo.InvariantCulture, out var value) ? value : 0f);
@@ -59,7 +61,7 @@ namespace ValveResourceFormat.ResourceTypes
         /// Parses the <c>pathnodes</c> blob into a list of spline nodes (groups of 9 floats).
         /// Returns an empty list for empty/degenerate input.
         /// </summary>
-        public static List<PathParticleRopeNode> ParseNodes(string? pathNodes)
+        public static List<PathParticleRopeNode> ParseNodes(ReadOnlySpan<char> pathNodes)
         {
             var floats = ParseFloatBlob(pathNodes);
             var nodeCount = floats.Length / FloatsPerNode;
@@ -82,12 +84,12 @@ namespace ValveResourceFormat.ResourceTypes
         /// <summary>
         /// Parses the <c>pathnoderadiusscales</c> blob into a flat array of per-node radius multipliers.
         /// </summary>
-        public static float[] ParseRadiusScales(string? input) => ParseFloatBlob(input);
+        public static float[] ParseRadiusScales(ReadOnlySpan<char> input) => ParseFloatBlob(input);
 
         /// <summary>
         /// Parses the <c>pathnodecolors</c> blob (nested <c>[[r,g,b],...]</c>, components in 0-1) into per-node colors.
         /// </summary>
-        public static Vector3[] ParseColors(string? input)
+        public static Vector3[] ParseColors(ReadOnlySpan<char> input)
         {
             var floats = ParseFloatBlob(input);
             var count = floats.Length / 3;
@@ -104,18 +106,19 @@ namespace ValveResourceFormat.ResourceTypes
         /// <summary>
         /// Parses the <c>pathnodepinsenabled</c> blob (<c>[true, false, ...]</c>) into a flat array of booleans.
         /// </summary>
-        public static bool[] ParsePins(string? input)
+        public static bool[] ParsePins(ReadOnlySpan<char> input)
         {
-            if (string.IsNullOrEmpty(input))
-            {
-                return [];
-            }
+            var result = new List<bool>();
 
-            var tokens = input.Split(SplitChars, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            var result = new List<bool>(tokens.Length);
-
-            foreach (var token in tokens)
+            foreach (var range in input.SplitAny(Separators))
             {
+                var token = input[range].Trim();
+
+                if (token.IsEmpty)
+                {
+                    continue;
+                }
+
                 if (bool.TryParse(token, out var value))
                 {
                     result.Add(value);
