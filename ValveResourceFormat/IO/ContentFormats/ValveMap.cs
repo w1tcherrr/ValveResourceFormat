@@ -564,11 +564,56 @@ public class CMapPathNode : CMapEntity
 }
 
 /// <summary>
-/// A cable: a path whose mesh and hanging handles the map compiler generates for it.
+/// A cable: a path the map compiler turns into a tube mesh, with the tube's shape and texturing
+/// carried on the path itself.
 /// </summary>
 [CamelCaseProperties]
 public class CMapCable : CMapPath
 {
+    /// <summary>Material of the tube mesh.</summary>
+    public string MaterialName { get; set; } = string.Empty;
+
+    /// <summary>Colour a cable_dynamic renders with, written to its <c>rendercolor</c> key.</summary>
+    public Datamodel.Color TintColor { get; set; } = new Datamodel.Color(255, 255, 255, 255);
+
+    /// <summary>Name of the entity the cable takes its lighting origin from.</summary>
+    public string LightingOriginName { get; set; } = string.Empty;
+
+    /// <summary>Vertices around the tube.</summary>
+    public int NumSides { get; set; } = 8;
+
+    /// <summary>Distance, in units, between the rings along the tube.</summary>
+    public float TessellationSpacing { get; set; } = 16f;
+
+    /// <summary>Tube radius, in units, before the per-node radius scale.</summary>
+    public float Radius { get; set; } = 16f;
+
+    /// <summary>Whether the tube faces inwards.</summary>
+    public bool FlipFaces { get; set; }
+
+    /// <summary>0 runs U along the path, 1 runs V along the path.</summary>
+    public int TextureOrientation { get; set; }
+
+    /// <summary>Units of path per texture repeat, divided by the texture's size in pixels.</summary>
+    public float TextureScale { get; set; } = 0.25f;
+
+    /// <summary>Texture repeats around the tube.</summary>
+    public float TextureRepeatsCircumference { get; set; } = 1f;
+
+    /// <summary>Texture offset along the path, in repeats.</summary>
+    public float TextureOffsetAlongPath { get; set; }
+
+    /// <summary>Texture offset around the tube, in repeats.</summary>
+    public float TextureOffsetCircumference { get; set; }
+
+    /// <summary>Whether a collision tube is generated.</summary>
+    public bool CollisionEnabled { get; set; } = true;
+
+    /// <summary>Simplification error allowed on the collision tube; 0 keeps every ring.</summary>
+    public float PhysicsSimplificationError { get; set; } = 2f;
+
+    /// <summary>Whether the tube occludes visibility.</summary>
+    public bool VisOccluder { get; set; }
 }
 
 /// <summary>
