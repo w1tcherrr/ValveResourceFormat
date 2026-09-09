@@ -2116,9 +2116,10 @@ public sealed partial class MapExtract
         }
 
         Dictionary<int, CMapSelectionSet> lineageSelectionSets = [];
-        var pathNodeEntities = GroupPathNodeEntities(entityLump);
+        var entities = entityLump.GetEntities();
+        var pathNodeEntities = GroupPathNodeEntities(entities);
 
-        foreach (var compiledEntity in entityLump.GetEntities())
+        foreach (var compiledEntity in entities)
         {
             var className = compiledEntity.GetStringProperty("classname");
 
@@ -2144,7 +2145,7 @@ public sealed partial class MapExtract
                 continue;
             }
 
-            var pathNodes = PathParticleRope.ParseNodes(compiledEntity.GetStringProperty("pathnodes"));
+            var pathNodes = compiledEntity.GetStringProperty("pathnodes") is { } pathNodesBlob ? PathParticleRope.ParseNodes(pathNodesBlob) : [];
             var mapEntity = CreateMapEntity(className, pathNodes.Count);
 
             var entityLineage = AddProperties(className, compiledEntity, mapEntity);
@@ -2175,7 +2176,13 @@ public sealed partial class MapExtract
 
             if (mapEntity is CMapPath mapPath)
             {
-                pathNodeEntities.TryGetValue(compiledEntity.GetStringProperty("hammeruniqueid") ?? string.Empty, out var nodeEntities);
+                Dictionary<int, Entity>? nodeEntities = null;
+
+                if (compiledEntity.GetStringProperty("hammeruniqueid") is { } pathId)
+                {
+                    pathNodeEntities.TryGetValue(pathId, out nodeEntities);
+                }
+
                 AddPathNodes(mapPath, className, compiledEntity, pathNodes, nodeEntities, worldTransform);
             }
 
@@ -2243,45 +2250,42 @@ public sealed partial class MapExtract
                 modelName = NormalizePath(rawModelName);
             }
 
-            if (modelName != null && PathIsSubPath(modelName, LumpFolder))
+            if (modelName != null && PathIsSubPath(modelName, LumpFolder) && mapEntity is CMapPath)
             {
-                if (mapEntity is CMapPath)
+                if (mapEntity is CMapCable cable)
                 {
-                    if (mapEntity is CMapCable cable)
-                    {
-                        RecoverCableAttributes(cable, className, compiledEntity, modelName, pathNodes);
-                    }
-
-                    mapEntity.EntityProperties.Remove("model");
+                    RecoverCableAttributes(cable, className, compiledEntity, modelName, pathNodes);
                 }
-                else
+
+                mapEntity.EntityProperties.Remove("model");
+            }
+            else if (modelName != null && PathIsSubPath(modelName, LumpFolder))
+            {
+                var firstReference = ModelEntityAssociations.TryAdd(modelName, className);
+                if (!firstReference)
                 {
-                    var firstReference = ModelEntityAssociations.TryAdd(modelName, className);
-                    if (!firstReference)
-                    {
-                        var otherClass = ModelEntityAssociations[modelName];
-                        Debug.Assert(className == otherClass, "Model living in lump folder referenced by more than one entity type!\n" +
-                            $"model = {modelName} {className} != {otherClass}");
-                    }
+                    var otherClass = ModelEntityAssociations[modelName];
+                    Debug.Assert(className == otherClass, "Model living in lump folder referenced by more than one entity type!\n" +
+                        $"model = {modelName} {className} != {otherClass}");
+                }
 
-                    ExtractEntityModel(mapEntity, modelName, worldTransform.Translation);
+                ExtractEntityModel(mapEntity, modelName, worldTransform.Translation);
 
-                    ReadOnlySpan<char> entityIdFull = Path.GetFileNameWithoutExtension(modelName);
-                    var nameCutoff = entityIdFull.Length;
-                    foreach (var entityId in entityLineage.Reverse())
+                ReadOnlySpan<char> entityIdFull = Path.GetFileNameWithoutExtension(modelName);
+                var nameCutoff = entityIdFull.Length;
+                foreach (var entityId in entityLineage.Reverse())
+                {
+                    ReadOnlySpan<char> entityIdString = '_' + entityId.ToString(CultureInfo.InvariantCulture);
+                    if (entityIdFull[..nameCutoff].EndsWith(entityIdString, StringComparison.Ordinal))
                     {
-                        ReadOnlySpan<char> entityIdString = '_' + entityId.ToString(CultureInfo.InvariantCulture);
-                        if (entityIdFull[..nameCutoff].EndsWith(entityIdString, StringComparison.Ordinal))
-                        {
-                            nameCutoff -= entityIdString.Length;
-                        }
+                        nameCutoff -= entityIdString.Length;
                     }
+                }
 
-                    var entityName = new string(entityIdFull[..nameCutoff]);
-                    if (entityName != "unnamed")
-                    {
-                        mapEntity.Name = entityName;
-                    }
+                var entityName = new string(entityIdFull[..nameCutoff]);
+                if (entityName != "unnamed")
+                {
+                    mapEntity.Name = entityName;
                 }
             }
 
@@ -2437,7 +2441,7 @@ public sealed partial class MapExtract
             mapEntity.Scales = compiledEntity.GetVector3Property(key);
             return true;
         }
-        else if (TryHandlePathProperty(key, compiledEntity, mapEntity))
+        else if (IsPathProperty(key, mapEntity))
         {
             return true;
         }

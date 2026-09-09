@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Linq;
 using ValveResourceFormat.Blocks;
 using ValveResourceFormat.IO.ContentFormats.ValveMap;
+using ValveResourceFormat.Particles.Utils;
 using ValveResourceFormat.ResourceTypes;
 using ValveResourceFormat.Serialization.KeyValues;
 using static ValveResourceFormat.ResourceTypes.EntityLump;
@@ -10,31 +11,28 @@ namespace ValveResourceFormat.IO;
 
 public sealed partial class MapExtract
 {
+    private static bool IsCableClass(string className) => className is "cable_static" or "cable_dynamic";
+
     private static CMapEntity CreateMapEntity(string className, int pathNodeCount)
     {
         if (pathNodeCount == 0)
         {
-            return new CMapEntity();
+            return [];
         }
 
-        return className is "cable_static" or "cable_dynamic" ? new CMapCable() : new CMapPath();
+        return IsCableClass(className) ? new CMapCable() : new CMapPath();
     }
 
     /// <summary>
-    /// Consumes the keys the compiler flattens a path and its nodes into, which the recovered path
-    /// objects carry as their own attributes and children instead.
+    /// The keys the compiler flattens a path and its nodes into, which the recovered path objects
+    /// carry as their own attributes and children instead.
     /// </summary>
-    private static bool TryHandlePathProperty(string key, Entity compiledEntity, BaseEntity mapEntity)
+    private static bool IsPathProperty(string key, BaseEntity mapEntity)
     {
-        if (mapEntity is CMapPath path && key is "closed_loop" or "pathnodes" or "pathnodenames" or "pathnodepinsenabled"
-            or "pathnoderadiusscales" or "pathnodecolors" or "pathnodemovespeedtypes")
+        if (mapEntity is CMapPath)
         {
-            if (key == "closed_loop")
-            {
-                path.ClosedLoop = compiledEntity.TryGetValue(key, out var closedLoop) && ToEditString(closedLoop) is "1" or "true";
-            }
-
-            return true;
+            return key is "closed_loop" or "pathnodes" or "pathnodenames" or "pathnodepinsenabled"
+                or "pathnoderadiusscales" or "pathnodecolors" or "pathnodemovespeedtypes";
         }
 
         return mapEntity is CMapPathNode && key is "path_uniqueid" or "path_index" or "in_tangent_local" or "out_tangent_local";
@@ -49,11 +47,10 @@ public sealed partial class MapExtract
     private const int DirectionTangent = 2;
     private const int FreeTangent = 3;
 
-    private static bool SameHandle(Vector3 a, Vector3 b)
-        => Vector3.Distance(a, b) <= 0.001f + 0.0001f * MathF.Max(a.Length(), b.Length());
+    private static float HandleTolerance(float length) => 0.001f + 0.0001f * length;
 
-    private static Vector3 Direction(Vector3 v)
-        => v.Length() > 0f ? Vector3.Normalize(v) : Vector3.Zero;
+    private static bool SameHandle(Vector3 a, Vector3 b)
+        => Vector3.Distance(a, b) <= HandleTolerance(MathF.Max(a.Length(), b.Length()));
 
     /// <summary>
     /// Reads back the interpolation Hammer was set to from the handles the compiler derived with it.
@@ -76,10 +73,10 @@ public sealed partial class MapExtract
             var inThird = Vector3.Distance(node, previous) / 3f;
             var outThird = Vector3.Distance(next, node) / 3f;
 
-            var inLinear = SameHandle(nodes[i].InTangent, Direction(previous - node) * inThird);
-            var inSpline = SameHandle(nodes[i].InTangent, Direction(previous - next) * inThird);
-            var outLinear = SameHandle(nodes[i].OutTangent, Direction(next - node) * outThird);
-            var outSpline = SameHandle(nodes[i].OutTangent, Direction(next - previous) * outThird);
+            var inLinear = SameHandle(nodes[i].InTangent, ParticleMath.Normalize(previous - node) * inThird);
+            var inSpline = SameHandle(nodes[i].InTangent, ParticleMath.Normalize(previous - next) * inThird);
+            var outLinear = SameHandle(nodes[i].OutTangent, ParticleMath.Normalize(next - node) * outThird);
+            var outSpline = SameHandle(nodes[i].OutTangent, ParticleMath.Normalize(next - previous) * outThird);
 
             allLinear &= inLinear && outLinear;
             allSpline &= inSpline && outSpline;
@@ -104,7 +101,7 @@ public sealed partial class MapExtract
             return LinearTangent;
         }
 
-        return MathF.Abs(handle.Length() - third) <= 0.001f + 0.0001f * third ? DirectionTangent : FreeTangent;
+        return MathF.Abs(handle.Length() - third) <= HandleTolerance(third) ? DirectionTangent : FreeTangent;
     }
 
     /// <summary>
@@ -146,36 +143,35 @@ public sealed partial class MapExtract
     /// Groups the node entities the compiler emits for a path whose node class is not editor-only,
     /// keyed by the hammeruniqueid of the path in this lump they belong to, then by node index.
     /// </summary>
-    private static Dictionary<string, Dictionary<int, Entity>> GroupPathNodeEntities(EntityLump entityLump)
+    private static Dictionary<string, Dictionary<int, Entity>> GroupPathNodeEntities(List<Entity> entities)
     {
         var pathIds = new HashSet<string>();
         var nodeEntities = new Dictionary<string, Dictionary<int, Entity>>();
 
-        foreach (var entity in entityLump.GetEntities())
+        foreach (var entity in entities)
         {
             if (entity.GetStringProperty("pathnodes") is not null && entity.GetStringProperty("hammeruniqueid") is { } pathId)
             {
                 pathIds.Add(pathId);
-            }
-        }
-
-        foreach (var entity in entityLump.GetEntities())
-        {
-            var pathId = entity.GetStringProperty("path_uniqueid");
-
-            if (pathId is null || !pathIds.Contains(pathId) || !entity.TryGetValue("path_index", out var indexValue)
-                || !int.TryParse(ToEditString(indexValue), NumberStyles.Integer, CultureInfo.InvariantCulture, out var nodeIndex))
-            {
                 continue;
             }
 
-            if (!nodeEntities.TryGetValue(pathId, out var pathNodes))
+            if (entity.GetStringProperty("path_uniqueid") is { } ownerId && entity.TryGetValue("path_index", out var indexValue)
+                && int.TryParse(ToEditString(indexValue), NumberStyles.Integer, CultureInfo.InvariantCulture, out var nodeIndex))
             {
-                pathNodes = [];
-                nodeEntities[pathId] = pathNodes;
-            }
+                if (!nodeEntities.TryGetValue(ownerId, out var pathNodes))
+                {
+                    pathNodes = [];
+                    nodeEntities[ownerId] = pathNodes;
+                }
 
-            pathNodes[nodeIndex] = entity;
+                pathNodes[nodeIndex] = entity;
+            }
+        }
+
+        foreach (var ownerId in nodeEntities.Keys.Where(ownerId => !pathIds.Contains(ownerId)).ToList())
+        {
+            nodeEntities.Remove(ownerId);
         }
 
         return nodeEntities;
@@ -193,14 +189,9 @@ public sealed partial class MapExtract
         var radiusScales = ReadRadiusScales(compiledEntity);
         var colors = PathParticleRope.ParseColors(compiledEntity.GetStringProperty("pathnodecolors"));
         var moveSpeedTypes = PathParticleRope.ParseFloatBlob(compiledEntity.GetStringProperty("pathnodemovespeedtypes"));
-        var nodeClassName = className switch
-        {
-            "path_particle_rope" or "path_particle_rope_clientside" => "path_node_particle_rope",
-            "cable_static" or "cable_dynamic" => "path_node_cable",
-            "map_preview_camera_path" => "map_preview_camera_path_node",
-            "dota_movespeed_modifier_path" => "dota_movespeed_path_node",
-            _ => "path_node_generic",
-        };
+        var nodeClassName = PathNodeClassName(className);
+
+        path.ClosedLoop = compiledEntity.TryGetValue("closed_loop", out var closedLoop) && ToEditString(closedLoop) is "1" or "true";
 
         if (nodes.Count >= 3 && nodes[^1].Position == nodes[0].Position
             && nodes[^1].InTangent == nodes[0].InTangent && nodes[^1].OutTangent == nodes[0].OutTangent)
@@ -215,20 +206,44 @@ public sealed partial class MapExtract
         for (var i = 0; i < nodes.Count; i++)
         {
             var node = nodes[i];
+            var pathNode = new CMapPathNode();
 
-            var origin = Vector3.Transform(node.Position, worldTransform);
-            var pathNode = new CMapPathNode
+            if (nodeEntities is not null && nodeEntities.TryGetValue(i, out var nodeEntity))
             {
-                Origin = origin,
-                InTangent = Vector3.TransformNormal(node.InTangent, worldTransform),
-                OutTangent = Vector3.TransformNormal(node.OutTangent, worldTransform),
-            };
-
-            if (names.TryGetValue(i, out var name))
-            {
-                pathNode.PathNodeName = name;
-                pathNode.WithProperty("node_name", name);
+                AddProperties(nodeEntity.GetStringProperty("classname") ?? nodeClassName, nodeEntity, pathNode);
             }
+            else
+            {
+                pathNode.WithClassName(nodeClassName);
+
+                if (i < pins.Length)
+                {
+                    pathNode.PinEnabled = pins[i];
+                    pathNode.WithProperty("pin_enabled", StringBool(pins[i]));
+                }
+
+                if (i < radiusScales.Length)
+                {
+                    pathNode.RadiusScale = radiusScales[i];
+                    pathNode.WithProperty("radius_scale", radiusScales[i].ToString(CultureInfo.InvariantCulture));
+                }
+
+                if (i < colors.Length)
+                {
+                    var color = ToColor(colors[i]);
+                    pathNode.TintColor = color;
+                    pathNode.WithProperty("color_tint", string.Create(CultureInfo.InvariantCulture, $"{color.R} {color.G} {color.B}"));
+                }
+
+                if (i < moveSpeedTypes.Length)
+                {
+                    pathNode.WithProperty("MoveSpeedType", ((int)moveSpeedTypes[i]).ToString(CultureInfo.InvariantCulture));
+                }
+            }
+
+            pathNode.Origin = Vector3.Transform(node.Position, worldTransform);
+            pathNode.InTangent = Vector3.TransformNormal(node.InTangent, worldTransform);
+            pathNode.OutTangent = Vector3.TransformNormal(node.OutTangent, worldTransform);
 
             if (path.InterpolationType == BezierPathInterpolation)
             {
@@ -236,57 +251,46 @@ public sealed partial class MapExtract
                 pathNode.OutTangentType = tangentTypes[i].Out;
             }
 
-            if (nodeEntities is not null && nodeEntities.TryGetValue(i, out var nodeEntity))
+            if (names.TryGetValue(i, out var name))
             {
-                AddProperties(nodeEntity.GetStringProperty("classname") ?? nodeClassName, nodeEntity, pathNode);
-                pathNode.Origin = origin;
-                path.Children.Add(pathNode);
-                continue;
-            }
-
-            pathNode.WithClassName(nodeClassName);
-
-            if (i < pins.Length)
-            {
-                pathNode.PinEnabled = pins[i];
-                pathNode.WithProperty("pin_enabled", pins[i] ? "1" : "0");
-            }
-
-            if (i < radiusScales.Length)
-            {
-                pathNode.RadiusScale = radiusScales[i];
-                pathNode.WithProperty("radius_scale", radiusScales[i].ToString(CultureInfo.InvariantCulture));
-            }
-
-            if (i < colors.Length)
-            {
-                var color = Vector3.Clamp(colors[i], Vector3.Zero, Vector3.One) * 255f;
-                var red = (byte)MathF.Round(color.X);
-                var green = (byte)MathF.Round(color.Y);
-                var blue = (byte)MathF.Round(color.Z);
-
-                pathNode.TintColor = new Datamodel.Color(red, green, blue, 255);
-                pathNode.WithProperty("color_tint", string.Format(CultureInfo.InvariantCulture, "{0} {1} {2}", red, green, blue));
-            }
-
-            if (i < moveSpeedTypes.Length)
-            {
-                pathNode.WithProperty("MoveSpeedType", ((int)moveSpeedTypes[i]).ToString(CultureInfo.InvariantCulture));
+                pathNode.PathNodeName = name;
+                pathNode.WithProperty("node_name", name);
             }
 
             path.Children.Add(pathNode);
         }
     }
 
-    private const float DefaultCableTessellationSpacing = 16f;
-
-    private sealed class CableRing
+    private static string PathNodeClassName(string pathClassName)
     {
-        public required float Along { get; init; }
-        public required Vector3 Centre { get; init; }
-        public required float Radius { get; init; }
-        public required int[] Vertices { get; init; }
+        if (IsCableClass(pathClassName))
+        {
+            return "path_node_cable";
+        }
+
+        return pathClassName switch
+        {
+            "path_particle_rope" or "path_particle_rope_clientside" => "path_node_particle_rope",
+            "map_preview_camera_path" => "map_preview_camera_path_node",
+            "dota_movespeed_modifier_path" => "dota_movespeed_path_node",
+            _ => "path_node_generic",
+        };
     }
+
+    private static Datamodel.Color ToColor(Vector3 color)
+    {
+        var color32 = Color32.FromVector4Clamped(new Vector4(color, 1f));
+        return new Datamodel.Color(color32.R, color32.G, color32.B, color32.A);
+    }
+
+    private const float DefaultCableTessellationSpacing = 16f;
+    private const float MaxCableTessellationSpacing = 100000f;
+    private const float SnapTolerance = 2e-3f;
+    private const float HalfPrecisionSnapTolerance = 4e-3f;
+
+    private readonly record struct CableRing(float Along, Vector3 Centre, float Radius, int[] Vertices);
+
+    private readonly record struct RingSeam(float AroundStart, float AroundEnd, bool HasSeam);
 
     /// <summary>
     /// Reads the tube the compiler built for a cable back into the cable's own attributes: the compiled
@@ -298,8 +302,7 @@ public sealed partial class MapExtract
     {
         if (className == "cable_dynamic")
         {
-            var tint = Vector3.Clamp(compiledEntity.GetVector3Property("rendercolor", new Vector3(255f)), Vector3.Zero, new Vector3(255f));
-            cable.TintColor = new Datamodel.Color((byte)MathF.Round(tint.X), (byte)MathF.Round(tint.Y), (byte)MathF.Round(tint.Z), 255);
+            cable.TintColor = ToColor(compiledEntity.GetColor32Property("rendercolor"));
         }
 
         using var modelResource = FileLoader.LoadFileCompiled(modelName);
@@ -378,11 +381,11 @@ public sealed partial class MapExtract
             rings.Reverse();
         }
 
-        FindSeam(rings[0], rings[1].Centre - rings[0].Centre, positions, texCoords, alongIsU, out var aroundStart, out var aroundEnd, out var hasSeam);
-        cable.NumSides = hasSeam ? ringSize - 1 : ringSize;
-        var tolerance = halfPrecision ? 4e-3f : 2e-3f;
-        cable.TextureOffsetCircumference = Snap(aroundStart, tolerance);
-        cable.TextureRepeatsCircumference = Snap(aroundEnd - aroundStart, tolerance);
+        var seam = FindSeam(rings[0], rings[1].Centre - rings[0].Centre, positions, texCoords, alongIsU);
+        cable.NumSides = seam.HasSeam ? ringSize - 1 : ringSize;
+        var tolerance = halfPrecision ? HalfPrecisionSnapTolerance : SnapTolerance;
+        cable.TextureOffsetCircumference = Snap(seam.AroundStart, tolerance);
+        cable.TextureRepeatsCircumference = Snap(seam.AroundEnd - seam.AroundStart, tolerance);
         cable.TextureOffsetAlongPath = Snap(rings[0].Along, tolerance);
         cable.FlipFaces = FacesPointInward(positions, indices, rings);
 
@@ -391,7 +394,7 @@ public sealed partial class MapExtract
         cable.Radius = Snap(rings[0].Radius / firstScale);
 
         var nodeRings = FindNodeRings(rings, nodes, cable.ClosedLoop);
-        cable.TessellationSpacing = RecoverTessellationSpacing(nodes, nodeRings, cable.ClosedLoop);
+        cable.TessellationSpacing = RecoverTessellationSpacing(nodes, nodeRings);
 
         var tubeLength = 0f;
 
@@ -451,9 +454,14 @@ public sealed partial class MapExtract
 
     private static float SpacingScore(List<CableRing>? rings)
     {
-        if (rings is null || rings.Count < 3)
+        if (rings is null)
         {
-            return rings is null ? float.MaxValue : 0f;
+            return float.MaxValue;
+        }
+
+        if (rings.Count < 3)
+        {
+            return 0f;
         }
 
         var ratios = new List<float>(rings.Count - 1);
@@ -528,13 +536,7 @@ public sealed partial class MapExtract
             centre /= distinct.Count;
             var radius = distinct.Average(i => Vector3.Distance(positions[i], centre));
 
-            rings.Add(new CableRing
-            {
-                Along = alongIsU ? texCoords[group[0]].X : texCoords[group[0]].Y,
-                Centre = centre,
-                Radius = radius,
-                Vertices = [.. group],
-            });
+            rings.Add(new CableRing(alongIsU ? texCoords[group[0]].X : texCoords[group[0]].Y, centre, radius, [.. group]));
         }
 
         return rings;
@@ -598,7 +600,7 @@ public sealed partial class MapExtract
     /// the tube at both of them: the tube's vertices run clockwise about its direction, so the seam vertex
     /// that the next vertex clockwise continues from is where the coordinate starts.
     /// </summary>
-    private static void FindSeam(CableRing ring, Vector3 tangent, Vector3[] positions, Vector2[] texCoords, bool alongIsU, out float aroundStart, out float aroundEnd, out bool hasSeam)
+    private static RingSeam FindSeam(CableRing ring, Vector3 tangent, Vector3[] positions, Vector2[] texCoords, bool alongIsU)
     {
         float Around(int i) => alongIsU ? texCoords[i].Y : texCoords[i].X;
 
@@ -620,13 +622,10 @@ public sealed partial class MapExtract
 
         if (seamA < 0)
         {
-            hasSeam = false;
-            aroundStart = Around(ring.Vertices[0]);
-            aroundEnd = aroundStart;
-            return;
+            var around = Around(ring.Vertices[0]);
+            return new RingSeam(around, around, HasSeam: false);
         }
 
-        hasSeam = true;
         var sides = ring.Vertices.Length - 1;
         var axisA = Vector3.Normalize(positions[seamA] - ring.Centre);
         var axisB = Vector3.Cross(Vector3.Normalize(tangent), axisA);
@@ -666,12 +665,21 @@ public sealed partial class MapExtract
             }
         }
 
-        aroundStart = valueA;
-        aroundEnd = valueB;
+        return new RingSeam(valueA, valueB, HasSeam: true);
     }
 
     private static bool FacesPointInward(Vector3[] positions, int[] indices, List<CableRing> rings)
     {
+        var ringOfVertex = new int[positions.Length];
+
+        for (var r = 0; r < rings.Count; r++)
+        {
+            foreach (var vertex in rings[r].Vertices)
+            {
+                ringOfVertex[vertex] = r;
+            }
+        }
+
         var inward = 0;
         var outward = 0;
 
@@ -682,21 +690,7 @@ public sealed partial class MapExtract
             var c = positions[indices[t + 2]];
             var faceNormal = Vector3.Cross(b - a, c - a);
             var centroid = (a + b + c) / 3f;
-            var nearest = rings[0].Centre;
-            var nearestDistance = float.MaxValue;
-
-            foreach (var ring in rings)
-            {
-                var distance = Vector3.DistanceSquared(ring.Centre, centroid);
-
-                if (distance < nearestDistance)
-                {
-                    nearestDistance = distance;
-                    nearest = ring.Centre;
-                }
-            }
-
-            var dot = Vector3.Dot(faceNormal, centroid - nearest);
+            var dot = Vector3.Dot(faceNormal, centroid - rings[ringOfVertex[indices[t]]].Centre);
 
             if (dot < 0f)
             {
@@ -749,7 +743,7 @@ public sealed partial class MapExtract
     /// Every path segment is sampled max(4, ceil(length / spacing)) times, so the sample counts the tube
     /// shows bound the spacing from both sides; the default is kept whenever it reproduces them.
     /// </summary>
-    private static float RecoverTessellationSpacing(List<PathParticleRopeNode> nodes, int[] nodeRings, bool closedLoop)
+    private static float RecoverTessellationSpacing(List<PathParticleRopeNode> nodes, int[] nodeRings)
     {
         var segments = new List<(float Length, int Samples)>();
 
@@ -789,7 +783,7 @@ public sealed partial class MapExtract
 
         if (high == float.MaxValue)
         {
-            for (var candidate = DefaultCableTessellationSpacing; candidate <= 100000f; candidate *= 2f)
+            for (var candidate = DefaultCableTessellationSpacing; candidate <= MaxCableTessellationSpacing; candidate *= 2f)
             {
                 if (candidate >= low && Reproduces(candidate, segments))
                 {
@@ -901,7 +895,7 @@ public sealed partial class MapExtract
         return alongIsU ? texture.Width : texture.Height;
     }
 
-    private static float Snap(float value, float tolerance = 2e-3f)
+    private static float Snap(float value, float tolerance = SnapTolerance)
     {
         for (var decimals = 2; decimals <= 4; decimals++)
         {
