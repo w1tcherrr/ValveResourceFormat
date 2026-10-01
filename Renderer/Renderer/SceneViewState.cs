@@ -221,7 +221,12 @@ public sealed class SceneViewState : IDisposable
                 return; // Skip individual fragment draws if aggregate can be drawn with indirect draw
             }
 
-            renderPass = RenderPass.Opaque;
+            renderPass = request.Call.Material switch
+            {
+                { IsOverlay: true } => RenderPass.StaticOverlay,
+                { IsTranslucent: true } => RenderPass.Translucent,
+                _ => RenderPass.Opaque,
+            };
         }
 
         var isViewmodelLayer = (request.Node.RenderPasses & CustomRenderPasses.Viewmodel) != 0
@@ -378,6 +383,7 @@ public sealed class SceneViewState : IDisposable
                 {
                     Mesh = fragment.RenderMesh,
                     Call = fragment.DrawCall,
+                    DistanceFromCamera = node.GetCameraDistance(camera),
                     Node = node,
                 }, RenderPass.OpaqueFragments);
             }

@@ -283,6 +283,14 @@ namespace ValveResourceFormat.Renderer
             });
         }
 
+        /// <summary>
+        /// Whether any draw call uses a translucent material that is not an overlay. The indirect path
+        /// draws everything other than overlays in the opaque aggregate pass, so such aggregates draw
+        /// per fragment instead.
+        /// </summary>
+        private bool HasBlendedDrawCalls()
+            => RenderMesh.DrawCallsOpaque.Any(drawCall => drawCall.Material is { IsTranslucent: true, IsOverlay: false });
+
         private IEnumerable<Fragment> CreateFragments(KVObject aggregateSceneObject, Matrix4x4 rootTransform, WorldNode? worldNode)
         {
             var aggregateMeshes = aggregateSceneObject.GetArray("m_aggregateMeshes");
@@ -291,7 +299,7 @@ namespace ValveResourceFormat.Renderer
             if (aggregateMeshes.Count > 0 && !aggregateMeshes[0].ContainsKey("m_nDrawCallIndex"))
             {
                 var createDrawMeshlets = RenderMesh.Meshlets.Count == 0;
-                CanDrawIndirect = RenderMesh.DrawCallsOpaque.Count > 0 && createDrawMeshlets;
+                CanDrawIndirect = RenderMesh.DrawCallsOpaque.Count > 0 && createDrawMeshlets && !HasBlendedDrawCalls();
 
                 foreach (var drawCall in RenderMesh.DrawCallsOpaque)
                 {
@@ -327,7 +335,7 @@ namespace ValveResourceFormat.Renderer
             var transformIndex = 0;
             var fragmentTransforms = aggregateSceneObject.GetArray("m_fragmentTransforms");
 
-            CanDrawIndirect = RenderMesh.DrawCallsOpaque.Count > 0;
+            CanDrawIndirect = RenderMesh.DrawCallsOpaque.Count > 0 && !HasBlendedDrawCalls();
 
             // CS2 goes from aggregate mesh -> draw call (many meshes can share one draw call)
             foreach (var fragmentData in aggregateMeshes)
