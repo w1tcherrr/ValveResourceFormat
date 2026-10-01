@@ -846,7 +846,7 @@ MaterialProperties_t GetMaterial(vec3 vertexNormals)
             vec2(baseHeight1, baseHeight2),
             vec2(g_flHeightMapScale1, g_flHeightMapScale2),
             vec2(g_flHeightMapZeroPoint1, g_flHeightMapZeroPoint2),
-            vec4(vColorBlendValues.xyz, softness2)
+            vec4(blendFactor2, vColorBlendValues.yz, softness2)
         );
 
         weight2 = weights.y;
