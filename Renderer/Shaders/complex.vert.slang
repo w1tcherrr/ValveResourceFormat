@@ -228,7 +228,9 @@ vec4 GetTintColorLinear(vec4 vTint)
     vec4 TintFade = vec4(1.0);
     if (F_NOTINT == 0)
     {
-    #if (GameVfx_csgo_complex != 0) || (GameVfx_csgo_static_overlay != 0)
+    #if (GameVfx_csgo_glass != 0)
+        TintFade.rgb = SrgbGammaToLinear(vTint.rgb);
+    #elif (GameVfx_csgo_complex != 0) || (GameVfx_csgo_static_overlay != 0)
         TintFade.rgb = mix(vec3(1.0), SrgbGammaToLinear(vTint.rgb), g_flModelTintAmount) * g_vColorTint.rgb;
     #else
         TintFade.rgb = mix(vec3(1.0), SrgbGammaToLinear(vTint.rgb) * g_vColorTint.rgb, g_flModelTintAmount);
@@ -364,7 +366,7 @@ void main()
 #endif
 
 #if !defined(vFoliageParams) && ((F_VERTEX_COLOR == 1) || (F_PAINT_VERTEX_COLORS == 1))
-    #if (GameVfx_csgo_static_overlay != 0) || (GameVfx_vr_static_overlay != 0) || (GameVfx_csgo_complex != 0)
+    #if (GameVfx_csgo_static_overlay != 0) || (GameVfx_vr_static_overlay != 0) || (GameVfx_csgo_complex != 0) || (GameVfx_csgo_glass != 0)
         // Paint is multiplied without sRGB decode, and all-zero paint means unpainted
         vVertexColorOut *= mix(vec4(1.0), vCOLOR, sign(dot(vCOLOR, vec4(1.0))));
     #else

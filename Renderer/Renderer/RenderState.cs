@@ -38,17 +38,22 @@ namespace ValveResourceFormat.Renderer
             set => Blend.SetRenderTargetWriteMask(0, value);
         }
 
-        /// <summary>Gets the source blend factor. Both factors are set at once, by <see cref="SetBlend"/>.</summary>
+        /// <summary>Gets the source blend factor. Both factors are set at once, by <see cref="SetBlend(RsBlendMode, RsBlendMode)"/>.</summary>
         public readonly RsBlendMode SrcBlend => Blend.SrcBlend[0];
 
         /// <summary>Gets the destination blend factor.</summary>
         public readonly RsBlendMode DestBlend => Blend.DestBlend[0];
 
-        /// <summary>Sets the source and destination blend factors.</summary>
-        public void SetBlend(RsBlendMode src, RsBlendMode dst)
+        /// <summary>Sets the source and destination blend factors for both color and alpha.</summary>
+        public void SetBlend(RsBlendMode src, RsBlendMode dst) => SetBlend(src, dst, src, dst);
+
+        /// <summary>Sets the color and alpha source and destination blend factors separately.</summary>
+        public void SetBlend(RsBlendMode src, RsBlendMode dst, RsBlendMode srcAlpha, RsBlendMode dstAlpha)
         {
             Blend.SetSrcBlend(0, src);
             Blend.SetDestBlend(0, dst);
+            Blend.SetSrcBlendAlpha(0, srcAlpha);
+            Blend.SetDestBlendAlpha(0, dstAlpha);
         }
 
         /// <summary>Sets the stencil comparison and the value it compares against, for both faces.</summary>
@@ -173,7 +178,11 @@ namespace ValveResourceFormat.Renderer
 
             state.BlendEnable = blend ?? state.BlendEnable;
             state.ColorWriteMask = colorWriteMask ?? state.ColorWriteMask;
-            state.SetBlend(srcBlend ?? state.SrcBlend, dstBlend ?? state.DestBlend);
+
+            if (srcBlend.HasValue || dstBlend.HasValue)
+            {
+                state.SetBlend(srcBlend ?? state.SrcBlend, dstBlend ?? state.DestBlend);
+            }
 
             return new RenderPassScope(this, in state);
         }
@@ -413,8 +422,7 @@ namespace ValveResourceFormat.Renderer
             }
         }
 
-        // Alpha factors and blend ops are not applied yet; the renderer always blends with the
-        // color factors and the add operation.
+        // Blend ops are not applied yet; the renderer always blends with the add operation.
         private static void ApplyBlend(in RsBlendStateDesc blend, in RsBlendStateDesc prev, bool pushEverything)
         {
             if (pushEverything || blend.BlendEnable[0] != prev.BlendEnable[0])
@@ -422,10 +430,12 @@ namespace ValveResourceFormat.Renderer
                 SetEnabled(EnableCap.Blend, blend.BlendEnable[0]);
             }
 
-            if (pushEverything || blend.SrcBlend[0] != prev.SrcBlend[0] || blend.DestBlend[0] != prev.DestBlend[0])
+            if (pushEverything
+                || blend.SrcBlend[0] != prev.SrcBlend[0] || blend.DestBlend[0] != prev.DestBlend[0]
+                || blend.SrcBlendAlpha[0] != prev.SrcBlendAlpha[0] || blend.DestBlendAlpha[0] != prev.DestBlendAlpha[0])
             {
                 CountDriverCall();
-                GL.BlendFunc(ToGL(blend.SrcBlend[0]), ToGL(blend.DestBlend[0]));
+                GL.BlendFuncSeparate((BlendingFactorSrc)ToGL(blend.SrcBlend[0]), (BlendingFactorDest)ToGL(blend.DestBlend[0]), (BlendingFactorSrc)ToGL(blend.SrcBlendAlpha[0]), (BlendingFactorDest)ToGL(blend.DestBlendAlpha[0]));
             }
 
             if (pushEverything || blend.AlphaToCoverageEnable != prev.AlphaToCoverageEnable)

@@ -190,35 +190,8 @@ vec3 GetCorrectedSampleCoords(vec3 R, mat4x3 envMapWorldToLocal, vec3 envMapLoca
         : localReflectionVector;
 }
 
-vec3 GetEnvironmentNoBRDF(MaterialProperties_t mat, float reflectionCorrectionAmount)
+vec3 GetEnvironmentNoBRDF(vec3 R, float lod)
 {
-    #if (defined(ANISO_ROUGHNESS) && ((F_SPECULAR_CUBE_MAP_ANISOTROPIC_WARP == 1) || !anisoCubemapWarpOptional))
-        vec3 reflectionNormal = CalculateAnisoCubemapWarpVector(mat);
-    #else
-        vec3 reflectionNormal = mat.AmbientNormal;
-    #endif
-
-    if (g_iRenderMode == renderMode_Cubemaps)
-    {
-        reflectionNormal = mat.GeometricNormal;
-        mat.IsometricRoughness = 0.0;
-    }
-
-    float perceptualRoughness = saturate(mat.IsometricRoughness);
-
-    // Reflection Vector
-    vec3 R = normalize(reflect(-mat.ViewDir, reflectionNormal));
-
-    // Roughness rather than the perceptual remap, so that a caller raising mat.Roughness to 1
-    // for the diffuse lookup lands exactly on the normal.
-    float roughnessSquared = pow2(max(mat.Roughness.x, mat.Roughness.y));
-    float smoothness = saturate(1.0 - roughnessSquared);
-    float dominantDirection = smoothness * (sqrt(smoothness) + roughnessSquared);
-
-    R = normalize(mix(reflectionNormal, R, mix(1.0, dominantDirection, reflectionCorrectionAmount)));
-
-    float lod = GetEnvMapLOD(sqrt(perceptualRoughness), R);
-
     vec3 envMap = vec3(0.0);
 
     #if (S_SCENE_CUBEMAP_TYPE == 0)
@@ -317,6 +290,38 @@ vec3 GetEnvironmentNoBRDF(MaterialProperties_t mat, float reflectionCorrectionAm
     #endif // S_SCENE_CUBEMAP_TYPE == 2
 
     return envMap;
+}
+
+vec3 GetEnvironmentNoBRDF(MaterialProperties_t mat, float reflectionCorrectionAmount)
+{
+    #if (defined(ANISO_ROUGHNESS) && ((F_SPECULAR_CUBE_MAP_ANISOTROPIC_WARP == 1) || !anisoCubemapWarpOptional))
+        vec3 reflectionNormal = CalculateAnisoCubemapWarpVector(mat);
+    #else
+        vec3 reflectionNormal = mat.AmbientNormal;
+    #endif
+
+    if (g_iRenderMode == renderMode_Cubemaps)
+    {
+        reflectionNormal = mat.GeometricNormal;
+        mat.IsometricRoughness = 0.0;
+    }
+
+    float perceptualRoughness = saturate(mat.IsometricRoughness);
+
+    // Reflection Vector
+    vec3 R = normalize(reflect(-mat.ViewDir, reflectionNormal));
+
+    // Roughness rather than the perceptual remap, so that a caller raising mat.Roughness to 1
+    // for the diffuse lookup lands exactly on the normal.
+    float roughnessSquared = pow2(max(mat.Roughness.x, mat.Roughness.y));
+    float smoothness = saturate(1.0 - roughnessSquared);
+    float dominantDirection = smoothness * (sqrt(smoothness) + roughnessSquared);
+
+    R = normalize(mix(reflectionNormal, R, mix(1.0, dominantDirection, reflectionCorrectionAmount)));
+
+    float lod = GetEnvMapLOD(sqrt(perceptualRoughness), R);
+
+    return GetEnvironmentNoBRDF(R, lod);
 }
 
 vec3 GetEnvironment(MaterialProperties_t mat, float reflectionCorrectionAmount)

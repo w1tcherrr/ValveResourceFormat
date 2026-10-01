@@ -49,6 +49,10 @@
     #define static_overlay_vfx_common
 #endif
 
+#if (GameVfx_csgo_glass != 0)
+    #define GLASS_BACKFACE_DIFFUSE
+#endif
+
 //Parameter defines - These are default values and can be overwritten based on material/model parameters
 // MODES
 #define S_MODE_DEPTH 0
@@ -61,6 +65,7 @@
 #define F_TRANSLUCENT 0 // most shaders
 #define F_BLEND_MODE 0 // csgo_projected_decals, csgo_static_overlay, csgo_unlitgeneric, vr_projected_decals, vr_static_overlay
 #define F_GLASS 0 // complex, pbr, vr_standard
+#define F_OPAQUE_CUBEMAP_REFRACTION 0 // csgo_glass
 uniform int F_DISABLE_TONE_MAPPING; // vr_complex
 uniform int F_SCALE_NORMAL_MAP; // vr_complex
 // TEXTURING
@@ -144,13 +149,15 @@ uniform sampler2D g_tTintMask;
     #define IBL F_SPECULAR
 #elif defined(csgo_generic_vfx_common)
     #define IBL F_SPECULAR_INDIRECT
-#elif (GameVfx_generic != 0)
+#elif (GameVfx_generic != 0) || (GameVfx_csgo_glass != 0)
     #define IBL 0
 #else
     #define IBL 1 // Indirect
 #endif
 
-#define TINT_NOT_APPLIED
+#if (GameVfx_csgo_glass == 0) // csgo_glass tints the transmission, not the dust
+    #define TINT_NOT_APPLIED
+#endif
 
 #if (defined(csgo_generic_vfx_common) && F_LAYERS > 0)
     #define csgo_generic_blend
@@ -240,7 +247,11 @@ uniform sampler2D g_tTintMask;
 #endif
 
 #if (GameVfx_csgo_glass != 0)
+    uniform sampler2D g_tGlassDust; // SrgbRead(true) Sampler(UserConfig)
+    uniform sampler2D g_tGlassTintColor; // SrgbRead(true) Sampler(UserConfig)
     uniform vec2 g_flTranslucencyRemap = vec2(0.0, 1.0);
+    uniform float g_flModelTintAmount = 1.0;
+    uniform float g_flRefractMinRoughness = 0.0;
 #endif
 
 #if (_uniformMetalness)
@@ -399,7 +410,11 @@ MaterialProperties_t GetMaterial(vec2 texCoord, vec3 vertexNormals)
     mat.IllumColor = mix(layer2Emissive, layer1Emissive, layer1Color.a) * (1.0 - mask);
 
 #else
+#if (GameVfx_csgo_glass != 0)
+    vec4 color = texture(g_tGlassDust, texCoord);
+#else
     vec4 color = texture(g_tColor, texCoord);
+#endif
     vec4 normalTexture = texture(g_tNormal, texCoord);
 
 #if defined(static_overlay_vfx_common) && (F_BLEND_MODE == 3)
@@ -577,6 +592,9 @@ MaterialProperties_t GetMaterial(vec2 texCoord, vec3 vertexNormals)
     #endif
 #else
     mat.RoughnessTex.xy = normalTexture.bb;
+    #if (GameVfx_csgo_glass != 0)
+        mat.RoughnessTex.xy *= vVertexColorOut.a;
+    #endif
 #endif
 
 
@@ -724,7 +742,7 @@ MaterialProperties_t GetMaterial(vec2 texCoord, vec3 vertexNormals)
     #endif
 
     #if (GameVfx_csgo_glass != 0)
-        mat.Opacity = mix(g_flTranslucencyRemap.x, g_flTranslucencyRemap.y, mat.Opacity);
+        mat.Opacity = mix(g_flTranslucencyRemap.x, g_flTranslucencyRemap.y, saturate(mat.Opacity * vVertexColorOut.a));
     #endif
 
     mat.DiffuseAO = vec3(mat.AmbientOcclusion);
@@ -736,6 +754,69 @@ MaterialProperties_t GetMaterial(vec2 texCoord, vec3 vertexNormals)
 
     return mat;
 }
+
+#if (GameVfx_csgo_glass != 0)
+// Alpha is the transmittance luminance, which the blend state multiplies the background by.
+// With opaque cube map refraction the transmitted cube map is added here and the output is opaque.
+vec4 GetCsgoGlassColor(MaterialProperties_t mat, inout LightingTerms_t lighting, vec2 texCoord)
+{
+    vec4 tintTexture = texture(g_tGlassTintColor, texCoord);
+    vec3 tint = tintTexture.rgb * mix(vec3(1.0), vVertexColorOut.rgb, g_flModelTintAmount);
+    float dust = mat.Opacity;
+
+    #if (F_OPAQUE_CUBEMAP_REFRACTION == 1)
+        tint *= vVertexColorOut.rgb;
+    #endif
+
+    #if (D_BAKED_LIGHTING_FROM_LIGHTMAP == 1)
+        vec3 irradiance = texture(g_tIrradiance, mat.LightmapUv).rgb;
+    #elif (D_BAKED_LIGHTING_FROM_PROBE == 1)
+        vec3 irradiance = ComputeLightProbeShading(mat);
+    #elif (D_BAKED_LIGHTING_FROM_VERTEX_STREAM == 1)
+        vec3 irradiance = vPerVertexLightingOut;
+    #else
+        MaterialProperties_t ambientMat = mat;
+        ambientMat.Roughness = vec2(1.0);
+        ambientMat.IsometricRoughness = 1.0;
+        vec3 irradiance = GetEnvironmentNoBRDF(ambientMat, 1.0);
+    #endif
+
+    EnvBRDF_t brdf = EnvBRDF(mat.SpecularColor, mat.IsometricRoughness, mat.AmbientNormal, mat.ViewDir, mat.ClothMask);
+    vec3 envBrdf = brdf.SingleScatter + brdf.MultiScatter;
+
+    lighting.SpecularIndirect = envBrdf * GetEnvironmentNoBRDF(mat, 1.0)
+        * GetEnvMapNormalization(mat.IsometricRoughness, mat.AmbientNormal, irradiance);
+
+    vec3 diffuseLighting = lighting.DiffuseDirect + irradiance * (vec3(1.0) - envBrdf) + lighting.TransmissiveDirect * (tintTexture.a * dust);
+    vec3 dustColor = dust * mat.Albedo * diffuseLighting;
+
+    vec3 color = dustColor + lighting.SpecularDirect + lighting.SpecularIndirect;
+
+    float cosIncident = ClampToPositive(dot(mat.ViewDir, mat.GeometricNormal));
+    float cosRefracted = max(0.01, sqrt(1.0 - (1.0 - pow2(cosIncident)) / pow2(1.5)));
+    float fresnel = F_Schlick(0.04, 1.0, ClampToPositive(dot(mat.ViewDir, mat.Normal)));
+    vec3 transmittance = (1.0 - fresnel) * pow(tint, vec3(1.0 / cosRefracted)) * (1.0 - dust);
+
+    color += transmittance * dustColor * pow(tint, vec3(1.6));
+
+    vec3 foggedColor = color;
+    ApplyFog(foggedColor, mat.PositionWS);
+    transmittance *= GetFogAttenuation(mat.PositionWS);
+
+    #if (F_OPAQUE_CUBEMAP_REFRACTION == 1)
+        float refractRoughness = mix(g_flRefractMinRoughness, 1.0, dot(mat.RoughnessTex, vec2(0.5)));
+        vec3 refracted = refract(-mat.ViewDir, mat.Normal, 1.0 / 1.5);
+        vec3 refraction = GetEnvironmentNoBRDF(refracted, GetEnvMapLOD(sqrt(refractRoughness), refracted));
+        refraction *= GetEnvMapNormalization(refractRoughness, refracted, irradiance);
+
+        return vec4(foggedColor + transmittance * refraction, 1.0);
+    #else
+        color = mix(color, foggedColor, 1.0 - dust);
+
+        return vec4(color, GetLuma(transmittance));
+    #endif
+}
+#endif
 
 // MAIN
 
@@ -756,6 +837,11 @@ void main()
 #if (unlit)
     lighting.DiffuseDirect = mat.Albedo + mat.IllumColor;
     outputColor.rgb = lighting.DiffuseDirect;
+#elif (GameVfx_csgo_glass != 0)
+    lighting = CalculateLighting(mat);
+    ApplyAmbientOcclusion(lighting, mat);
+
+    outputColor = GetCsgoGlassColor(mat, lighting, texCoord);
 #else
 
     lighting = CalculateLighting(mat);
@@ -780,7 +866,9 @@ void main()
     outputColor.rgb = combinedLighting;
 #endif
 
+#if (GameVfx_csgo_glass == 0)
     ApplyFog(outputColor.rgb, mat.PositionWS);
+#endif
 
     if (F_DISABLE_TONE_MAPPING == 1)
     {
@@ -797,7 +885,11 @@ void main()
 
     if (HandleMaterialRenderModes(outputColor, mat)
     || HandleLightingRenderModes(outputColor, mat, lighting)
+#if (GameVfx_csgo_glass != 0)
+    || HandleUVRenderModes(outputColor, mat, g_tGlassDust, vTexCoordOut.xy))
+#else
     || HandleUVRenderModes(outputColor, mat, g_tColor, vTexCoordOut.xy))
+#endif
     {
         //
     }
@@ -821,6 +913,13 @@ void main()
     else if (g_iRenderMode == renderMode_TerrainBlend)
     {
         outputColor.rgb = vColorBlendValues.rgb;
+    }
+#endif
+
+#if (GameVfx_csgo_glass != 0) && (F_OPAQUE_CUBEMAP_REFRACTION == 0)
+    if (g_iRenderMode != 0)
+    {
+        outputColor.a = 0.0;
     }
 #endif
 }

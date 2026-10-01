@@ -316,6 +316,8 @@ void CalculateShading(inout LightingTerms_t lighting, vec3 lightVector, vec3 lig
     #if (F_TRANSMISSIVE_BACKFACE_NDOTL == 1)
         float transmissiveLight = ClampToPositive(-dot(mat.Normal, lightVector)); // Light passing through the back face
         lighting.TransmissiveDirect += transmissiveLight * lightColor * mat.TransmissiveColor;
+    #elif defined(GLASS_BACKFACE_DIFFUSE)
+        lighting.TransmissiveDirect += ClampToPositive(-dot(mat.GeometricNormal, lightVector)) * lightColor;
     #endif
 
     #if (subsurfaceSkin)

@@ -92,6 +92,7 @@ namespace ValveResourceFormat.Renderer.Materials
         Multiply,
         Mod2x,
         ModThenAdd,
+        Transmittance,
     }
 
     /// <summary>
@@ -263,7 +264,6 @@ namespace ValveResourceFormat.Renderer.Materials
             "vr_glass.vfx",
             "vr_glass_markable.vfx",
             "vr_energy_field.vfx",
-            "csgo_glass.vfx",
             "csgo_effects.vfx",
         ];
 
@@ -349,6 +349,13 @@ namespace ValveResourceFormat.Renderer.Materials
             || material.IntAttributes.ContainsKey("mapbuilder.water"))
             {
                 blendMode = BlendMode.Translucent;
+            }
+
+            if (ShaderName == "csgo_glass.vfx")
+            {
+                blendMode = IntParams.GetValueOrDefault("F_OPAQUE_CUBEMAP_REFRACTION") == 1
+                    ? BlendMode.Opaque
+                    : BlendMode.Transmittance;
             }
 
             if (IntParams.GetValueOrDefault("F_ADDITIVE_BLEND") == 1)
@@ -893,9 +900,13 @@ namespace ValveResourceFormat.Renderer.Materials
                     BlendMode.Multiply => (RsBlendMode.Zero, RsBlendMode.SrcColor),
                     BlendMode.Mod2x => (RsBlendMode.DestColor, RsBlendMode.SrcColor),
                     BlendMode.ModThenAdd => (RsBlendMode.DestColor, RsBlendMode.InvSrcAlpha),
+                    BlendMode.Transmittance => (RsBlendMode.One, RsBlendMode.SrcAlpha),
                     _ => (RsBlendMode.SrcAlpha, RsBlendMode.InvSrcAlpha),
                 };
-                state.SetBlend(srcBlend, dstBlend);
+                var (srcBlendAlpha, dstBlendAlpha) = blendMode == BlendMode.Transmittance
+                    ? (RsBlendMode.SrcAlpha, RsBlendMode.InvSrcAlpha)
+                    : (srcBlend, dstBlend);
+                state.SetBlend(srcBlend, dstBlend, srcBlendAlpha, dstBlendAlpha);
             }
 
             if (hasDepthBias || IsOverlay)

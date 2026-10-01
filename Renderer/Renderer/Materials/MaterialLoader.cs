@@ -47,7 +47,6 @@ namespace ValveResourceFormat.Renderer.Materials
             ["g_tColorA"] = ["g_tColor"],
             ["g_tColorB"] = ["g_tLayer2Color", "g_tColor"],
             ["g_tColorC"] = ["g_tColor"],
-            ["g_tGlassDust"] = ["g_tColor"],
             ["g_tNormalA"] = ["g_tNormal"],
             ["g_tNormalB"] = ["g_tLayer2NormalRoughness"],
             ["g_tNormalRoughness"] = ["g_tNormal"],
