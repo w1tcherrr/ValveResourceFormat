@@ -99,6 +99,14 @@ in vec3 vBitangentOut;
 in vec2 vTexCoordOut;
 centroid in vec4 vVertexColorOut;
 
+#if (GameVfx_csgo_complex != 0)
+    // Painted alpha only dithers while the instance itself is fading
+    flat in float vOpaqueFadeOut;
+    #define OPAQUE_FADE_ALPHA vOpaqueFadeOut
+#else
+    #define OPAQUE_FADE_ALPHA vVertexColorOut.a
+#endif
+
 #if (F_USE_PER_VERTEX_CURVATURE == 1)
     in float vCurvatureOut;
 #endif
@@ -491,10 +499,10 @@ MaterialProperties_t GetMaterial(vec2 texCoord, vec3 vertexNormals)
     mat.Opacity = color.a;
 #else
     // D_OPAQUE_FADE
-    if (vVertexColorOut.a <= (254.0/255.0))
+    if (OPAQUE_FADE_ALPHA <= (254.0/255.0))
     {
         vec4 blueNoiseZeroToOne = texelFetch(g_tBlueNoise, ivec2(mod(gl_FragCoord.xy, textureSize(g_tBlueNoise, 0))), 0);
-        if (vVertexColorOut.a <= blueNoiseZeroToOne.x)
+        if (vVertexColorOut.a <= blueNoiseZeroToOne.y)
         {
             discard;
         }

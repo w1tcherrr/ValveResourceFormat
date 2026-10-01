@@ -149,6 +149,9 @@ uniform int F_TEXTURE_ANIMATION_MODE; // csgo_complex, csgo_static_overlay, csgo
 #endif
 
 centroid out vec4 vVertexColorOut;
+#if (GameVfx_csgo_complex != 0)
+    flat out float vOpaqueFadeOut;
+#endif
 out vec3 vFragPosition;
 out vec3 vNormalOut;
 out vec3 vTangentOut;
@@ -352,8 +355,12 @@ void main()
 
     vVertexColorOut = GetTintColorLinear(object.vTint);
 
+#if (GameVfx_csgo_complex != 0)
+    vOpaqueFadeOut = vVertexColorOut.a;
+#endif
+
 #if !defined(vFoliageParams) && ((F_VERTEX_COLOR == 1) || (F_PAINT_VERTEX_COLORS == 1))
-    #if (GameVfx_csgo_static_overlay != 0) || (GameVfx_vr_static_overlay != 0)
+    #if (GameVfx_csgo_static_overlay != 0) || (GameVfx_vr_static_overlay != 0) || (GameVfx_csgo_complex != 0)
         // Paint is multiplied without sRGB decode, and all-zero paint means unpainted
         vVertexColorOut *= mix(vec4(1.0), vCOLOR, sign(dot(vCOLOR, vec4(1.0))));
     #else
