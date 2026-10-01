@@ -345,6 +345,18 @@ uniform int F_USE_NEW_BLENDING;
         return o;
     }
 
+    // Legacy height blend term of a layer measured against layer 1, whose height is scaled by scale1Softened.
+    float LegacyLayerTerm(float baseHeight, float scale, float zeroPoint, float softness, float blendFactor,
+        float scale1Softened, float zeroPoint1)
+    {
+        float softenedScale = scale + softness;
+
+        float blend1 = (-zeroPoint1 * scale1Softened - ((1.0 - zeroPoint) * softenedScale)) - softness;
+        float blend2 = (1.0 - zeroPoint1) * scale1Softened - ((-zeroPoint) * softenedScale);
+
+        return baseHeight * (scale - softness) + mix(blend1, blend2, blendFactor);
+    }
+
     vec2 GetBlendWeights(vec2 heightTex, vec2 heightScale, vec2 heightZero, vec4 vColorBlendValues)
     {
         float blendFactor = vColorBlendValues.x;
@@ -354,13 +366,7 @@ uniform int F_USE_NEW_BLENDING;
         float h1 = heightScale.x + blendSoftness;
         float height1 = heightTex.x * h1;
 
-        float h2 = heightScale.y + blendSoftness;
-        float h22 = heightTex.y * (heightScale.y - blendSoftness);
-
-        float blend1 = (-heightZero.x * h1 - ((1.0 - heightZero.y) * h2)) - blendSoftness;
-        float blend2 = (1.0 - heightZero.x) * h1 - ((-heightZero.y) * h2);
-
-        float h2x = h22 + mix(blend1, blend2, blendFactor);
+        float h2x = LegacyLayerTerm(heightTex.y, heightScale.y, heightZero.y, blendSoftness, blendFactor, h1, heightZero.x);
 
         vec2 weights = vec2(height1, h2x) - vec2(max(height1, h2x) - blendSoftness);
 
@@ -374,6 +380,17 @@ uniform int F_USE_NEW_BLENDING;
         weights = weights / vec2(weights.x + weights.y);
 
         return weights;
+    }
+
+    // Share of layer 3 among the legacy terms of layers 1, 2 and 3, measured against the
+    // composite of layers 1 and 2 below it.
+    float GetLayer3BlendWeight(vec3 layerTerms, float layer2Height, float weight2, float softness)
+    {
+        float below = weight2 > 0.05 ? mix(layerTerms.x, layer2Height, weight2) : layerTerms.x;
+
+        vec3 weights = max(layerTerms - vec3(max(below, layerTerms.z) - softness), vec3(0.0));
+
+        return weights.z / (weights.x + 1e-4 + weights.y + weights.z);
     }
 #endif
 
@@ -849,8 +866,8 @@ MaterialProperties_t GetMaterial(vec3 vertexNormals)
             vec4(blendFactor2, vColorBlendValues.yz, softness2)
         );
 
-        weight2 = weights.y;
-        weightBase2 = weights.x;
+        weight2 = saturate(weights.y * mix(0.5, height2.r, g_flMaskWithHeight2) * 2.0);
+        weightBase2 = 1.0 - weight2;
     }
 
     // Tint mask of everything composited so far, used for masking borders
@@ -930,14 +947,19 @@ MaterialProperties_t GetMaterial(vec3 vertexNormals)
         }
         else
         {
-            vec2 weights3 = GetBlendWeights(
-                vec2(max(height.r, height2.r), baseHeight3),
-                vec2(max(g_flHeightMapScale1, g_flHeightMapScale2), g_flHeightMapScale3),
-                vec2(max(g_flHeightMapZeroPoint1, g_flHeightMapZeroPoint2), g_flHeightMapZeroPoint3),
-                vec4(blendFactor3, 0.0, 0.0, softness3)
+            float scale1Softened = g_flHeightMapScale1 + softness2;
+            float layer2Height = baseHeight2 * (g_flHeightMapScale2 - softness2);
+
+            vec3 layerTerms = vec3(
+                baseHeight1 * scale1Softened,
+                LegacyLayerTerm(baseHeight2, g_flHeightMapScale2, g_flHeightMapZeroPoint2, softness2, blendFactor2,
+                    scale1Softened, g_flHeightMapZeroPoint1),
+                LegacyLayerTerm(baseHeight3, g_flHeightMapScale3, g_flHeightMapZeroPoint3, softness3, blendFactor3,
+                    scale1Softened, g_flHeightMapZeroPoint1)
             );
 
-            weight3 = weights3.y;
+            weight3 = saturate(GetLayer3BlendWeight(layerTerms, layer2Height, weight2, softness3)
+                * mix(0.5, height3.r, g_flMaskWithHeight3) * 2.0);
         }
 
         #if (F_BLEND_EFFECTS_3 == 1)
