@@ -228,7 +228,11 @@ vec4 GetTintColorLinear(vec4 vTint)
     vec4 TintFade = vec4(1.0);
     if (F_NOTINT == 0)
     {
+    #if (GameVfx_csgo_complex != 0) || (GameVfx_csgo_static_overlay != 0)
+        TintFade.rgb = mix(vec3(1.0), SrgbGammaToLinear(vTint.rgb), g_flModelTintAmount) * g_vColorTint.rgb;
+    #else
         TintFade.rgb = mix(vec3(1.0), SrgbGammaToLinear(vTint.rgb) * g_vColorTint.rgb, g_flModelTintAmount);
+    #endif
     }
     TintFade.a = pow(vTint.a, max(g_flFadeExponent, 0.0001));
     return TintFade;
