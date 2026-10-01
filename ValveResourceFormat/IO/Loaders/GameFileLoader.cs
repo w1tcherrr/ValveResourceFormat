@@ -48,6 +48,8 @@ namespace ValveResourceFormat.IO
         /// <summary>Gets the game declared by the nearest <c>gameinfo.gi</c>, or <see langword="null"/> when none was found.</summary>
         public string? GameName { get; private set; }
 
+        private KVObject? GameInfo;
+
         private readonly Dictionary<string, ShaderCollection> CachedShaders = [];
         private readonly Lock CachedShadersLock = new();
         private readonly HashSet<string> CurrentGameSearchPaths = [];
@@ -437,6 +439,7 @@ namespace ValveResourceFormat.IO
 
             // The walk starts at the file being opened, so the first one found is the mod it belongs to.
             GameName ??= gameName?.ToString();
+            GameInfo ??= gameInfo;
 
             var fileSystem = gameInfo["FileSystem"];
 
@@ -469,6 +472,26 @@ namespace ValveResourceFormat.IO
                     CurrentGameAddonsPaths.Add(Path.Combine(gameRoot, searchPath.ToString()!));
                 }
             }
+        }
+
+        /// <summary>
+        /// Gets a value from the <c>gameinfo.gi</c> of the mod the opened file belongs to.
+        /// </summary>
+        /// <param name="keyPath">Slash separated key path below the root, such as <c>FileSystem/SteamAppId</c>.</param>
+        /// <returns>The value, or <see langword="null"/> when no gameinfo was found or it does not contain the path.</returns>
+        public KVObject? GetGameInfoValue(string keyPath)
+        {
+            var value = GameInfo;
+
+            foreach (var key in keyPath.Split('/'))
+            {
+                if (value is null || !value.IsCollection || !value.TryGetValue(key, out value))
+                {
+                    return null;
+                }
+            }
+
+            return value;
         }
 
         /// <summary>

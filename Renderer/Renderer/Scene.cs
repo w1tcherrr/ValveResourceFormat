@@ -98,7 +98,7 @@ namespace ValveResourceFormat.Renderer
         public WorldFogInfo FogInfo { get; set; } = new();
 
         /// <summary>Gets or sets the post-processing parameters for this scene.</summary>
-        public WorldPostProcessInfo PostProcessInfo { get; set; } = new();
+        public WorldPostProcessInfo PostProcessInfo { get; set; }
 
         /// <summary>Gets or sets the 2D sky the map's sky entities provide, or <see langword="null"/> when it has none.</summary>
         public SceneSkybox2D? Skybox2D { get; set; }
@@ -305,6 +305,11 @@ namespace ValveResourceFormat.Renderer
             StaticOctree = new(sizeHint);
 
             LightingInfo = new(this);
+
+            PostProcessInfo = new()
+            {
+                DefaultState = context.DefaultPostProcessState,
+            };
         }
 
         /// <summary>

@@ -2,6 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Threading;
 using Microsoft.Extensions.Logging;
 using ValveResourceFormat.IO;
+using ValveResourceFormat.Renderer.SceneEnvironment;
 
 namespace ValveResourceFormat.Renderer;
 
@@ -75,6 +76,11 @@ public class RendererContext : IDisposable
     public bool ParallelSimulation { get; set; } = true;
 
     /// <summary>
+    /// Gets the post-processing state scenes start from before any volume or controller applies.
+    /// </summary>
+    public PostProcessState DefaultPostProcessState { get; }
+
+    /// <summary>
     /// Initializes a new renderer context.
     /// </summary>
     /// <param name="fileLoader">Game file loader for resource access.</param>
@@ -90,6 +96,10 @@ public class RendererContext : IDisposable
         ShaderLoader = new ShaderLoader(this);
         MeshBufferCache = new GPUMeshBufferCache(this);
         MorphAtlas = new MorphCompositeAtlas(this);
+
+        DefaultPostProcessState = fileLoader.GetGameInfoValue("Engine2/RenderingPipeline/Tonemapping_DefaultFilmicLinear")?.ToBoolean() == true
+            ? PostProcessState.Default with { TonemapSettings = TonemapSettings.Linear() }
+            : PostProcessState.Default;
     }
 
     /// <inheritdoc/>

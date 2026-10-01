@@ -70,19 +70,19 @@ namespace ValveResourceFormat.Renderer.SceneEnvironment
             WhitePoint = 4.0f;
         }
 
-        /// <summary>Returns a <see cref="TonemapSettings"/> intended for linear (non-filmic) tonemapping. Note: <see cref="ApplyTonemapping"/> returns a constant 0 with these values, so they are not a true passthrough curve.</summary>
+        /// <summary>Returns the near-linear curve games default to when gameinfo sets Engine2/RenderingPipeline/Tonemapping_DefaultFilmicLinear.</summary>
         public static TonemapSettings Linear()
         {
             return new TonemapSettings()
             {
                 ExposureBias = 0.0f,
                 ShoulderStrength = 0.0f,
-                LinearStrength = 0.0f,
-                LinearAngle = 0.0f,
+                LinearStrength = 0.001f,
+                LinearAngle = 0.001f,
                 ToeStrength = 1.0f,
                 ToeNum = 1.0f,
                 ToeDenom = 1.0f,
-                WhitePoint = 2.83f,
+                WhitePoint = 1.5f,
             };
         }
         /// <summary>Initializes a new <see cref="TonemapSettings"/> by reading values from a KV object.</summary>
