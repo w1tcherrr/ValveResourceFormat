@@ -37,16 +37,16 @@ namespace ValveResourceFormat.Renderer.SceneEnvironment
         /// <summary>Gets the toe denominator of the tonemapping curve.</summary>
         public float ToeDenom { get; init; }
 
-        /// <summary>Gets the white point value; passed through the tonemapper before GPU upload.</summary>
-        public float WhitePoint { get; init; } // This is run through the tonemapper before being given to the shader
+        /// <summary>Gets the white point in stops, like <see cref="ExposureBias"/>; kept in stops for blending.</summary>
+        public float WhitePoint { get; init; }
 
         /// <summary>
         /// The scale the shader applies to the exposed scene before the curve.
         /// </summary>
         public const float PreTonemapScale = 2.8f;
 
-        /// <summary>Gets the white point the curve is actually normalized against: <see cref="WhitePoint"/> scaled by <see cref="PreTonemapScale"/>.</summary>
-        public readonly float EffectiveWhitePoint => WhitePoint * PreTonemapScale;
+        /// <summary>Gets the linear white point the curve input is clamped to and normalized against, exp2 of <see cref="WhitePoint"/>.</summary>
+        public readonly float EffectiveWhitePoint => MathF.Pow(2f, WhitePoint);
         // The following params aren't used, I think?
         /*float LuminanceSource; // CS2
         float ExposureBiasShadows; // CS2
