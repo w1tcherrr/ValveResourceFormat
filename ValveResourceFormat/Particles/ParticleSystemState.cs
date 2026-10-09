@@ -150,15 +150,15 @@ namespace ValveResourceFormat.Particles
         }
 
         /// <summary>
-        /// Ends the system after <paramref name="duration"/>: emission stops, and with
+        /// Ends the system once its age passes <paramref name="stopTime"/>: emission stops, and with
         /// <paramref name="destroyInstantly"/> the particles still alive are dropped instead of being
         /// left to finish their lifetimes. With <paramref name="playEndCap"/> the stop also starts the
         /// endcap.
         /// </summary>
-        public void SetStopTime(float duration, bool destroyInstantly, bool playEndCap)
+        public void SetStopTime(float stopTime, bool destroyInstantly, bool playEndCap)
         {
             EndEarly = true;
-            EndTime = Age + duration;
+            EndTime = stopTime;
             DestroyInstantlyOnEnd = destroyInstantly;
             RestartOnEnd = false;
             PlayEndCapOnEnd = playEndCap;

@@ -1,8 +1,9 @@
 namespace ValveResourceFormat.Particles.PreEmissionOperators
 {
     /// <summary>
-    /// Stops the particle system after a specified duration, optionally destroying all
-    /// remaining particles immediately or playing the endcap.
+    /// Stops the particle system once its age passes the duration, optionally destroying all
+    /// remaining particles immediately or playing the endcap. The age is compared each time the
+    /// operator runs, so a run-once instance only stops a system that is already past it.
     /// </summary>
     /// <seealso href="https://s2v.app/SchemaExplorer/cs2/particles/C_OP_StopAfterCPDuration">C_OP_StopAfterCPDuration</seealso>
     class StopAfterDuration : ParticleFunctionPreEmissionOperator
@@ -25,7 +26,12 @@ namespace ValveResourceFormat.Particles.PreEmissionOperators
 
         public override void Operate(ref ParticleSystemState particleSystemState, float frameTime)
         {
-            particleSystemState.SetStopTime(duration.NextNumber(particleSystemState), destroy, playEndCap);
+            var stopTime = duration.NextNumber(particleSystemState);
+
+            if (particleSystemState.Age > stopTime)
+            {
+                particleSystemState.SetStopTime(stopTime, destroy, playEndCap);
+            }
         }
     }
 }
