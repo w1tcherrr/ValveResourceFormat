@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.Logging;
+using ValveResourceFormat.Particles.Utils;
 
 namespace ValveResourceFormat.Particles
 {
@@ -12,11 +13,11 @@ namespace ValveResourceFormat.Particles
         public readonly float OpStartFadeOutTime; // operator start fadeout
         public readonly float OpEndFadeOutTime; // operator end fadeout
         public readonly float OpFadeOscillatePeriod; // operator fade oscillate
-        //bool NormalizeToStopTime; // normalize fade times to endcap
+        private readonly bool normalizeToStopTime;
         private readonly float opTimeOffsetMin;
         private readonly float opTimeOffsetMax;
-        //int OpTimeOffsetSeed; // operator fade time offset seed
-        //int OpTimeScaleSeed; // operator fade time scale seed
+        private readonly int opTimeOffsetSeed;
+        private readonly int opTimeScaleSeed;
         private readonly float opTimeScaleMin = 1f;
         private readonly float opTimeScaleMax = 1f;
 
@@ -37,8 +38,11 @@ namespace ValveResourceFormat.Particles
             OpStartFadeOutTime = parse.Float("m_flOpStartFadeOutTime");
             OpEndFadeOutTime = parse.Float("m_flOpEndFadeOutTime");
             OpFadeOscillatePeriod = parse.Float("m_flOpFadeOscillatePeriod");
+            normalizeToStopTime = parse.Boolean("m_bNormalizeToStopTime");
             opTimeOffsetMin = parse.Float("m_flOpTimeOffsetMin", opTimeOffsetMin);
             opTimeOffsetMax = parse.Float("m_flOpTimeOffsetMax", opTimeOffsetMax);
+            opTimeOffsetSeed = parse.Int32("m_nOpTimeOffsetSeed");
+            opTimeScaleSeed = parse.Int32("m_nOpTimeScaleSeed");
             opTimeScaleMin = parse.Float("m_flOpTimeScaleMin", opTimeScaleMin);
             opTimeScaleMax = parse.Float("m_flOpTimeScaleMax", opTimeScaleMax);
 
@@ -84,32 +88,43 @@ namespace ValveResourceFormat.Particles
                 return opStrength;
             }
 
-            var time = systemState.Age;
-
-            /* TODO
-            if (OpTimeOffsetSeed) // allow per-instance-of-particle-system random phase control for operator strength.
-            {
-                float flOffset = RandomFloat(OpTimeOffsetSeed, opTimeOffsetMin, opTimeOffsetMax);
-                time += flOffset;
-                time = MathF.Max(0f, time);
-            }
-
-            if (OpTimeScaleSeed && time > OpStartFadeInTime)
-            {
-                float timeScalar = 1.0 / MathF.Max(0.0001f, RandomFloat(OpTimeScaleSeed, opTimeScaleMin, opTimeScaleMax));
-                time = OpStartFadeInTime + timeScalar * (time - OpStartFadeInTime);
-            }
-            */
-
-            if (OpFadeOscillatePeriod > 0.0)
-            {
-                time *= 1f / OpFadeOscillatePeriod;
-                time %= 1f;
-            }
-
-            var strength = FadeInOut(OpStartFadeInTime, OpEndFadeInTime, OpStartFadeOutTime, OpEndFadeOutTime, time);
+            var strength = FadeInOut(OpStartFadeInTime, OpEndFadeInTime, OpStartFadeOutTime, OpEndFadeOutTime, GetFunctionTime(systemState));
 
             return MathF.Max(0f, opStrength) * strength;
+        }
+
+        /// <summary>
+        /// The time the fade window is measured against: seconds since the system last restarted, or
+        /// since the endcap began for an endcap function with <c>m_bNormalizeToStopTime</c>, then offset
+        /// and stretched per system instance when the time offset and scale seeds are set. An
+        /// oscillating fade instead takes the phase of the system age within the period, in [0, 1).
+        /// </summary>
+        public float GetFunctionTime(ParticleSystemState systemState)
+        {
+            if (OpFadeOscillatePeriod > 0f)
+            {
+                return systemState.Age / OpFadeOscillatePeriod % 1f;
+            }
+
+            var time = MathF.Max(0f, systemState.Age - systemState.RestartAge);
+
+            if (normalizeToStopTime && opEndCapState == ParticleEndCapMode.PARTICLE_ENDCAP_ENDCAP_ON)
+            {
+                time = MathF.Max(0f, time - systemState.EndCapStartAge);
+            }
+
+            if (opTimeOffsetSeed != 0)
+            {
+                time = MathF.Max(0f, time + ParticleRandom.ForSampleBetween(systemState.Random.Seed + opTimeOffsetSeed, opTimeOffsetMin, opTimeOffsetMax));
+            }
+
+            if (opTimeScaleSeed != 0 && time > OpStartFadeInTime)
+            {
+                var timeScale = MathF.Max(0.0001f, ParticleRandom.ForSampleBetween(systemState.Random.Seed + opTimeScaleSeed, opTimeScaleMin, opTimeScaleMax));
+                time = OpStartFadeInTime + ((time - OpStartFadeInTime) / timeScale);
+            }
+
+            return time;
         }
 
         private static float FadeInOut(float fadeInStart, float fadeInEnd, float fadeOutStart, float fadeOutEnd, float time)
