@@ -1061,7 +1061,7 @@ namespace CLI
 
             try
             {
-                resource.Read(stream, parsing: OutputFile == null && !CollectStats ? BlockParsing.Deferred : BlockParsing.Runtime);
+                resource.Read(stream, loading: OutputFile == null && !CollectStats ? BlockLoading.Deferred : BlockLoading.Runtime);
 
                 if (HasShaderOptions && resource.DataBlock is Material material)
                 {

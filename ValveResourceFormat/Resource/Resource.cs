@@ -65,7 +65,7 @@ namespace ValveResourceFormat
         public IReadOnlyList<Block> Blocks => blocks;
 
         /// <summary>
-        /// Gets the blocks without parsing the ones a <see cref="BlockParsing.Deferred"/> read left unparsed.
+        /// Gets the blocks without parsing the ones still unparsed.
         /// </summary>
         internal List<Block> UnparsedBlocks => blocks.Items;
 
@@ -178,13 +178,13 @@ namespace ValveResourceFormat
         /// The file is held open until the object is disposed.
         /// </summary>
         /// <param name="filename">The file to open and read.</param>
-        /// <param name="parsing">When the blocks are parsed.</param>
-        public void Read(string filename, BlockParsing parsing = BlockParsing.Runtime)
+        /// <param name="loading">Which blocks are parsed before this returns.</param>
+        public void Read(string filename, BlockLoading loading = BlockLoading.Runtime)
         {
             FileName = filename;
             FileStream = new FileStream(filename, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
 
-            Read(FileStream, parsing: parsing);
+            Read(FileStream, loading: loading);
         }
 
         /// <summary>
@@ -192,12 +192,12 @@ namespace ValveResourceFormat
         /// </summary>
         /// <param name="input">The input <see cref="Stream"/> to read from.</param>
         /// <param name="leaveOpen">Whether to leave the stream open after the object is disposed.</param>
-        /// <param name="parsing">When the blocks are parsed.</param>
+        /// <param name="loading">Which blocks are parsed before this returns.</param>
         /// <remarks>
         /// The input stream must remain open while accessing data from this resource,
         /// as some operations may perform reads lazily from the stream at call time.
         /// </remarks>
-        public void Read(Stream input, bool leaveOpen = false, BlockParsing parsing = BlockParsing.Runtime)
+        public void Read(Stream input, bool leaveOpen = false, BlockLoading loading = BlockLoading.Runtime)
         {
             Reader = new BinaryReader(input, Encoding.UTF8, leaveOpen);
 
@@ -271,15 +271,7 @@ namespace ValveResourceFormat
                 block.Size = size;
 
                 blocks.Items.Add(block);
-
-                if (block is ResourceEditInfo && ResourceType != ResourceType.Unknown && !IsParsedInRead(block.Type, parsing))
-                {
-                    block.MarkDeferred();
-                }
-                else if (IsReadEagerly(block.Type))
-                {
-                    block.Read(Reader);
-                }
+                block.MarkDeferred();
 
                 if (block is ResourceEditInfo blockEditInfo)
                 {
@@ -290,6 +282,8 @@ namespace ValveResourceFormat
                     // will depend on knowing the resource type to construct the correct block in ConstructResourceType()
                     if (ResourceType == ResourceType.Unknown)
                     {
+                        editInfo.EnsureRead();
+
                         foreach (var specialDep in editInfo.SpecialDependencies)
                         {
                             ResourceType = DetermineResourceTypeByCompilerIdentifier(specialDep);
@@ -311,24 +305,30 @@ namespace ValveResourceFormat
                 Reader.BaseStream.Position = position + 8;
             }
 
-            foreach (var block in blocks.Items)
+            if (loading == BlockLoading.Deferred)
             {
-                if (!IsReadEagerly(block.Type))
-                {
-                    if (IsParsedInRead(block.Type, parsing))
-                    {
-                        block.Read(Reader);
-                    }
-                    else
-                    {
-                        block.MarkDeferred();
-                    }
-                }
+                return;
             }
 
-            // Specialize the generic VData KV3 DATA block into a typed block based on generic_data_type
+            for (var i = 0; i < blocks.Items.Count; i++)
+            {
+                var block = blocks.Items[i];
+
+                if (IsUsedAtRuntime(block.Type))
+                {
+                    block.EnsureRead();
+                }
+            }
+        }
+
+        /// <summary>
+        /// Specializes the generic VData KV3 DATA block into a typed block based on generic_data_type.
+        /// Called while <see cref="ReaderLock"/> is held, right after a block is parsed.
+        /// </summary>
+        internal void OnBlockRead(Block block)
+        {
             if (ResourceType == ResourceType.VData
-                && DataBlock is BinaryKV3 vdataBlock
+                && block is BinaryKV3 { Type: BlockType.DATA } vdataBlock
                 && GenericData.Construct(vdataBlock) is { } specializedData)
             {
                 blocks.Items[blocks.Items.IndexOf(vdataBlock)] = specializedData;
@@ -447,7 +447,7 @@ namespace ValveResourceFormat
             ArgumentOutOfRangeException.ThrowIfNegative(index);
             ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(index, Blocks.Count);
 
-            return Blocks[index];
+            return blocks[index];
         }
 
         /// <summary>
@@ -457,12 +457,11 @@ namespace ValveResourceFormat
         /// <returns>The first block of the specified type, or null if not found.</returns>
         public Block? GetBlockByType(BlockType type)
         {
-            foreach (var block in blocks.Items)
+            for (var i = 0; i < blocks.Items.Count; i++)
             {
-                if (block.Type == type)
+                if (blocks.Items[i].Type == type)
                 {
-                    block.EnsureRead();
-                    return block;
+                    return blocks[i];
                 }
             }
 
@@ -476,9 +475,9 @@ namespace ValveResourceFormat
         /// <returns>True if a block of the specified type exists; otherwise, false.</returns>
         public bool ContainsBlockType(BlockType type)
         {
-            foreach (var block in blocks.Items)
+            for (var i = 0; i < blocks.Items.Count; i++)
             {
-                if (block.Type == type)
+                if (blocks.Items[i].Type == type)
                 {
                     return true;
                 }
@@ -555,22 +554,14 @@ namespace ValveResourceFormat
         }
 
         /// <summary>
-        /// Whether <see cref="Read(Stream, bool, BlockParsing)"/> parses a block that no other block depends on.
+        /// Whether the game parses a block of this type when it loads the resource, as opposed to only tools reading it.
         /// </summary>
-        private bool IsParsedInRead(BlockType type, BlockParsing parsing) => parsing switch
+        private bool IsUsedAtRuntime(BlockType type) => type switch
         {
-            BlockParsing.Deferred => ResourceType == ResourceType.VData && type == BlockType.DATA,
-            _ => type switch
-            {
-                BlockType.REDI or BlockType.RED2 => ResourceType is ResourceType.Material or ResourceType.Texture,
-                BlockType.STAT => false,
-                _ => true,
-            },
+            BlockType.REDI or BlockType.RED2 => ResourceType is ResourceType.Material or ResourceType.Texture,
+            BlockType.STAT => false,
+            _ => true,
         };
-
-        // Other blocks may depend on these, so they are read as soon as they are found
-        private static bool IsReadEagerly(BlockType type)
-            => type is BlockType.NTRO or BlockType.CTRL or BlockType.REDI or BlockType.RED2;
 
         private static bool IsHandledResourceType(ResourceType type)
         {
@@ -659,18 +650,16 @@ namespace ValveResourceFormat
             {
                 get
                 {
-                    var block = Items[index];
-                    block.EnsureRead();
-                    return block;
+                    Items[index].EnsureRead();
+                    return Items[index];
                 }
             }
 
             public IEnumerator<Block> GetEnumerator()
             {
-                foreach (var block in Items)
+                for (var i = 0; i < Items.Count; i++)
                 {
-                    block.EnsureRead();
-                    yield return block;
+                    yield return this[i];
                 }
             }
 

@@ -36,15 +36,15 @@ namespace ValveResourceFormat
         private ExceptionDispatchInfo? readFailure;
 
         /// <summary>
-        /// Gets whether the block data has been parsed. Only false for blocks a
-        /// <see cref="BlockParsing.Deferred"/> read left unparsed.
+        /// Gets whether the block data has been parsed. Only false for blocks of a resource that
+        /// <see cref="Resource.Read(Stream, bool, BlockLoading)"/> left unparsed.
         /// </summary>
         internal bool IsRead => !deferred;
 
         internal void MarkDeferred() => deferred = true;
 
         /// <summary>
-        /// Parses the block data if a <see cref="BlockParsing.Deferred"/> read left it unparsed.
+        /// Parses the block data if <see cref="Resource.Read(Stream, bool, BlockLoading)"/> left it unparsed.
         /// Safe to call from multiple threads and a no-op once the block is parsed.
         /// The resource's input stream must still be open. A block that fails to parse
         /// throws the same exception on every later call.
@@ -79,6 +79,7 @@ namespace ValveResourceFormat
                 try
                 {
                     Read(reader);
+                    Resource.OnBlockRead(this);
                     deferred = false;
                 }
                 catch (Exception e)

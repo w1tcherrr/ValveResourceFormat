@@ -9,10 +9,10 @@ namespace Tests
     {
         private static string TestFile(string name) => Path.Combine(TestContext.TestDirectory!, "Files", name);
 
-        private static Resource Read(string name, BlockParsing parsing = BlockParsing.Deferred)
+        private static Resource Read(string name, BlockLoading loading = BlockLoading.Deferred)
         {
             var resource = new Resource();
-            resource.Read(TestFile(name), parsing);
+            resource.Read(TestFile(name), loading);
             return resource;
         }
 
@@ -32,7 +32,7 @@ namespace Tests
         [Test]
         public async Task DeferredReadDefersAndMaterializesBlocks()
         {
-            using var fullResource = Read("alchemist.vmdl_c", BlockParsing.Runtime);
+            using var fullResource = Read("alchemist.vmdl_c", BlockLoading.Runtime);
             using var partialResource = Read("alchemist.vmdl_c");
 
             var deferredData = partialResource.UnparsedBlocks.First(block => block.Type == BlockType.DATA);
@@ -56,7 +56,7 @@ namespace Tests
         [Test]
         public async Task RuntimeReadLeavesOnlyToolsDataUnparsed()
         {
-            using var resource = Read("alchemist.vmdl_c", BlockParsing.Runtime);
+            using var resource = Read("alchemist.vmdl_c", BlockLoading.Runtime);
 
             using (Assert.Multiple())
             {
@@ -68,7 +68,7 @@ namespace Tests
         [Test]
         public async Task RuntimeReadParsesMaterialEditInfo()
         {
-            using var resource = Read("reflectivity_90b.vmat_c", BlockParsing.Runtime);
+            using var resource = Read("reflectivity_90b.vmat_c", BlockLoading.Runtime);
 
             await Assert.That(resource.UnparsedBlocks.All(static block => block.IsRead)).IsTrue();
         }
@@ -83,36 +83,53 @@ namespace Tests
         }
 
         [Test]
-        public async Task DeferredVDataIsSpecialized()
-        {
-            using var fullResource = Read("abilities_kv3_v5_zstd.vdata_c", BlockParsing.Runtime);
-            using var partialResource = Read("abilities_kv3_v5_zstd.vdata_c");
-
-            using (Assert.Multiple())
-            {
-                await Assert.That(partialResource.UnparsedBlocks.First(static block => block.Type == BlockType.DATA).IsRead).IsTrue();
-                await Assert.That(partialResource.DataBlock!.GetType()).IsEqualTo(fullResource.DataBlock!.GetType());
-            }
-        }
-
-        [Test]
-        public async Task DependencyBlocksAlwaysParse()
+        public async Task DeferredReadParsesNoBlocks()
         {
             using var resource = Read("alchemist.vmdl_c");
 
             using (Assert.Multiple())
             {
                 await Assert.That(resource.ResourceType).IsEqualTo(ResourceType.Model);
-                await Assert.That(resource.UnparsedBlocks
-                    .Where(static block => block.Type is BlockType.NTRO or BlockType.CTRL)
-                    .All(static block => block.IsRead)).IsTrue();
+                await Assert.That(resource.UnparsedBlocks.Any(static block => block.Type == BlockType.NTRO)).IsTrue();
+                await Assert.That(resource.UnparsedBlocks.All(static block => !block.IsRead)).IsTrue();
+            }
+        }
+
+        [Test]
+        public async Task DeferredBlockParsesItsDependencies()
+        {
+            using var fullResource = Read("alchemist.vmdl_c", BlockLoading.Runtime);
+            using var partialResource = Read("alchemist.vmdl_c");
+            var introspection = partialResource.UnparsedBlocks.First(static block => block.Type == BlockType.NTRO);
+
+            var data = partialResource.DataBlock!.ToString();
+
+            using (Assert.Multiple())
+            {
+                await Assert.That(introspection.IsRead).IsTrue();
+                await Assert.That(data).IsEqualTo(fullResource.DataBlock!.ToString());
+            }
+        }
+
+        [Test]
+        public async Task DeferredVDataMatchesRuntimeRead()
+        {
+            using var fullResource = Read("deadlock_tracked_stats_player_staging_kv3_v5.vdata_c", BlockLoading.Runtime);
+            using var partialResource = Read("deadlock_tracked_stats_player_staging_kv3_v5.vdata_c");
+
+            await Assert.That(partialResource.UnparsedBlocks.First(static block => block.Type == BlockType.DATA).IsRead).IsFalse();
+
+            using (Assert.Multiple())
+            {
+                await Assert.That(partialResource.DataBlock!.GetType()).IsEqualTo(fullResource.DataBlock!.GetType());
+                await Assert.That(partialResource.DataBlock!.ToString()).IsEqualTo(fullResource.DataBlock!.ToString());
             }
         }
 
         [Test]
         public async Task DeferredEditInfoParsesOnFirstUse()
         {
-            using var fullResource = Read("reflectivity_90b.vmat_c", BlockParsing.Runtime);
+            using var fullResource = Read("reflectivity_90b.vmat_c", BlockLoading.Runtime);
             using var partialResource = Read("reflectivity_90b.vmat_c");
             var editInfoBlock = partialResource.UnparsedBlocks.First(static block => block.Type is BlockType.REDI or BlockType.RED2);
 
@@ -132,16 +149,17 @@ namespace Tests
         {
             using var fullStream = File.OpenRead(TestFile("reflectivity_90b.vmat_c"));
             using var fullResource = new Resource();
-            fullResource.Read(fullStream, leaveOpen: true, BlockParsing.Runtime);
+            fullResource.Read(fullStream, leaveOpen: true, BlockLoading.Runtime);
 
             using var partialStream = File.OpenRead(TestFile("reflectivity_90b.vmat_c"));
             using var partialResource = new Resource();
-            partialResource.Read(partialStream, leaveOpen: true);
+            partialResource.Read(partialStream, leaveOpen: true, BlockLoading.Deferred);
 
             using (Assert.Multiple())
             {
                 await Assert.That(fullResource.ResourceType).IsEqualTo(ResourceType.Material);
                 await Assert.That(partialResource.ResourceType).IsEqualTo(ResourceType.Material);
+                await Assert.That(partialResource.UnparsedBlocks.Single(static block => block.IsRead).Type).IsEqualTo(partialResource.EditInfo!.Type);
                 await Assert.That(partialResource.DataBlock!.ToString()).IsEqualTo(fullResource.DataBlock!.ToString());
             }
         }
@@ -149,7 +167,7 @@ namespace Tests
         [Test]
         public async Task ConcurrentMaterializationMatchesFullRead()
         {
-            using var fullResource = Read("export_test.vmdl_c", BlockParsing.Runtime);
+            using var fullResource = Read("export_test.vmdl_c", BlockLoading.Runtime);
             var expected = fullResource.Blocks.Select(static block => block.ToString()).ToList();
 
             using var partialResource = Read("export_test.vmdl_c");
@@ -181,7 +199,7 @@ namespace Tests
             var bytes = ReadWithCorruptData("alchemist.vmdl_c");
 
             using var resource = new Resource { FileName = "alchemist.vmdl_c" };
-            resource.Read(new MemoryStream(bytes), parsing: BlockParsing.Deferred);
+            resource.Read(new MemoryStream(bytes), loading: BlockLoading.Deferred);
 
             using (Assert.Multiple())
             {
@@ -198,7 +216,7 @@ namespace Tests
 
             using var resource = new Resource { FileName = "alchemist.vmdl_c" };
 
-            await Assert.That(() => resource.Read(new MemoryStream(bytes), parsing: BlockParsing.Runtime)).ThrowsException();
+            await Assert.That(() => resource.Read(new MemoryStream(bytes), loading: BlockLoading.Runtime)).ThrowsException();
         }
     }
 }

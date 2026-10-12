@@ -229,7 +229,7 @@ namespace GUI.Types.PackageViewer
                     using var entryStream = new MemoryStream(output);
 
                     using var resource = new ValveResourceFormat.Resource();
-                    resource.Read(entryStream, parsing: BlockParsing.Deferred);
+                    resource.Read(entryStream, loading: BlockLoading.Deferred);
 
                     if (resource.ExternalReferences is null)
                     {
@@ -433,7 +433,7 @@ namespace GUI.Types.PackageViewer
                             package.ReadEntry(newEntry, bytes, validateCrc: false);
                             using var stream = new MemoryStream(bytes, 0, (int)newEntry.TotalLength);
                             using var resource = new ValveResourceFormat.Resource();
-                            resource.Read(stream, parsing: BlockParsing.Deferred);
+                            resource.Read(stream, loading: BlockLoading.Deferred);
 
                             var fileSize = resource.FullFileSize;
 
