@@ -421,7 +421,7 @@ namespace GUI.Types.PackageViewer
 
             foreach (var (entry, newPath) in files)
             {
-                package.RenameFile(entry, newPath);
+                RenameEntry(package, entry, newPath);
                 TreeView.AddFileNode(entry);
             }
 
@@ -434,6 +434,24 @@ namespace GUI.Types.PackageViewer
             }
 
             return true;
+        }
+
+        /// <summary>
+        /// Moves an entry to a new path without reading its data, keeping the same entry object.
+        /// </summary>
+        // TODO: Replace with Package.RenameFile once https://github.com/ValveResourceFormat/ValvePak/pull/38 is released
+        private static void RenameEntry(Package package, PackageEntry entry, string newPath)
+        {
+            package.RemoveFile(entry);
+
+            // AddFile splits the path and inserts at the sorted position, then the original entry takes the placeholder's place
+            var placeholder = package.AddFile(newPath, []);
+            var typeEntries = package.Entries![placeholder.TypeName];
+            typeEntries[typeEntries.IndexOf(placeholder)] = entry;
+
+            entry.DirectoryName = placeholder.DirectoryName;
+            entry.FileName = placeholder.FileName;
+            entry.TypeName = placeholder.TypeName;
         }
 
         /// <summary>
