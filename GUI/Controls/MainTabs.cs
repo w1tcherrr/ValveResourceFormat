@@ -157,7 +157,7 @@ internal class MainTabs : ThemedTabControl
         var tabIndex = GetTabIndex(tab);
 
         //The console cannot be closed!
-        if (tabIndex == 0)
+        if (tabIndex < 1)
         {
             return;
         }

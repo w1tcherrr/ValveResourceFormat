@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -263,7 +264,13 @@ namespace GUI.Types.PackageViewer
 
             if (failedFiles.Count > 0)
             {
-                _ = AppMessageDialogs.ShowMessageAsync($"Failed to read {failedFiles.Count} files:\n{string.Join('\n', failedFiles.Take(10))}", "Failed to add files", MessageIcon.Error);
+                const int MaxListedFailures = 10;
+                var listedFailures = string.Join('\n', failedFiles.Take(MaxListedFailures));
+                var message = failedFiles.Count > MaxListedFailures
+                    ? string.Create(CultureInfo.InvariantCulture, $"Failed to read {failedFiles.Count} files:\n{listedFailures}\nand {failedFiles.Count - MaxListedFailures} more")
+                    : string.Create(CultureInfo.InvariantCulture, $"Failed to read {failedFiles.Count} files:\n{listedFailures}");
+
+                _ = AppMessageDialogs.ShowMessageAsync(message, "Failed to add files", MessageIcon.Error);
             }
         }
 
@@ -347,20 +354,44 @@ namespace GUI.Types.PackageViewer
             var files = TreeViewWithSearchResults.EnumerateFiles(folder)
                 .Select(file => (file, string.Concat(newFolderPath, file.GetFullPath().AsSpan(oldFolderPath.Length))))
                 .ToList();
+            var emptyFolders = EnumerateEmptyFolders(folder)
+                .Select(emptyFolder => string.Concat(newFolderPath, GetFolderPath(emptyFolder).AsSpan(oldFolderPath.Length)))
+                .ToList();
 
-            RenameFiles(files, folder);
-
-            if (files.Count == 0)
+            if (!RenameFiles(files, folder) || emptyFolders.Count == 0)
             {
-                TreeView.AddFolderNode(newFolderPath);
-                TreeView.RefreshListView();
+                return;
+            }
+
+            foreach (var emptyFolder in emptyFolders)
+            {
+                TreeView.AddFolderNode(emptyFolder);
+            }
+
+            TreeView.RefreshListView();
+        }
+
+        private static IEnumerable<VirtualPackageNode> EnumerateEmptyFolders(VirtualPackageNode folder)
+        {
+            if (folder.Files.Count == 0 && folder.Folders.Count == 0)
+            {
+                yield return folder;
+            }
+
+            foreach (var subFolder in folder.Folders.Values)
+            {
+                foreach (var emptyFolder in EnumerateEmptyFolders(subFolder))
+                {
+                    yield return emptyFolder;
+                }
             }
         }
 
         /// <summary>
         /// Moves files to new paths, after removing the nodes of the folder they are moved out of, or of the files themselves.
         /// </summary>
-        private void RenameFiles(List<(PackageEntry Entry, string NewPath)> files, VirtualPackageNode? movedFolder)
+        /// <returns>Whether the files were moved, they are not when another file already has one of the new paths.</returns>
+        private bool RenameFiles(List<(PackageEntry Entry, string NewPath)> files, VirtualPackageNode? movedFolder)
         {
             var package = vrfGuiContext.CurrentPackage!;
             var renamedEntries = files.Select(static file => file.Entry).ToHashSet();
@@ -370,7 +401,7 @@ namespace GUI.Types.PackageViewer
                 if (package.FindEntry(newPath) is { } existingEntry && !renamedEntries.Contains(existingEntry))
                 {
                     _ = AppMessageDialogs.ShowMessageAsync($"\"{existingEntry.GetFullPath()}\" already exists.", "Failed to rename", MessageIcon.Warning);
-                    return;
+                    return false;
                 }
             }
 
@@ -401,6 +432,8 @@ namespace GUI.Types.PackageViewer
             {
                 HasUnsavedChanges = true;
             }
+
+            return true;
         }
 
         /// <summary>

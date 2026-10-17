@@ -33,12 +33,6 @@ namespace GUI
             => Path.IsPathRooted(fileName) && Path.GetFullPath(fileName).Equals(path, StringComparison.OrdinalIgnoreCase);
 
         /// <summary>
-        /// Whether a package with this file name would be read as one split into chunk files.
-        /// </summary>
-        private static bool IsMultiChunkPackageName(string path)
-            => PackageFileNames.IsArchiveChunk(path) || Path.GetFileNameWithoutExtension(path).EndsWith("_dir", StringComparison.OrdinalIgnoreCase);
-
-        /// <summary>
         /// Closes the tabs of files opened from the package file at <paramref name="path"/>, and of files opened from
         /// <paramref name="context"/>, without asking to save changes.
         /// </summary>
@@ -103,7 +97,7 @@ namespace GUI
         {
             path = Path.GetFullPath(path);
 
-            if (IsMultiChunkPackageName(path))
+            if (PackageFileNames.IsSplitPackageFile(path))
             {
                 await AppMessageDialogs.ShowMessageAsync("Only VPKs that are a single file can be edited, not ones split into chunk files.", "Can not edit VPK", MessageIcon.Warning).ConfigureAwait(true);
                 return;
@@ -253,10 +247,19 @@ namespace GUI
                 target = Path.GetFullPath(target);
             }
 
-            if (IsMultiChunkPackageName(target))
+            if (PackageFileNames.IsSplitPackageFile(target))
             {
                 await AppMessageDialogs.ShowMessageAsync("The file name must not end in \"_dir\" or a chunk number, it would be read as a VPK split into chunk files.", "Failed to save VPK", MessageIcon.Warning).ConfigureAwait(true);
                 return false;
+            }
+
+            foreach (TabPage otherTab in mainTabs.TabPages)
+            {
+                if (GetPackageViewer(otherTab) is { HasUnsavedChanges: true } otherViewer && otherViewer != viewer && otherViewer.FileOnDisk is { } otherFile && otherFile.Equals(target, StringComparison.OrdinalIgnoreCase))
+                {
+                    await AppMessageDialogs.ShowMessageAsync($"\"{Path.GetFileName(target)}\" has unsaved changes in another tab, save or close it first.", "Failed to save VPK", MessageIcon.Warning).ConfigureAwait(true);
+                    return false;
+                }
             }
 
             var tempPath = string.Concat(target, ".tmp");
@@ -267,10 +270,19 @@ namespace GUI
             {
                 viewer.WritePackage(tempPath);
             }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException)
+            catch (Exception e)
             {
-                File.Delete(tempPath);
-                await AppMessageDialogs.ShowMessageAsync(e.Message, "Failed to save VPK", MessageIcon.Error).ConfigureAwait(true);
+                DeleteTemporaryFile(tempPath);
+
+                if (e is IOException or UnauthorizedAccessException or InvalidOperationException)
+                {
+                    await AppMessageDialogs.ShowMessageAsync(e.Message, "Failed to save VPK", MessageIcon.Error).ConfigureAwait(true);
+                }
+                else
+                {
+                    ErrorReport.ShowError(e, VrfGuiContext.GetDisplayPath(target));
+                }
+
                 return false;
             }
 
@@ -282,6 +294,7 @@ namespace GUI
             if (await Task.WhenAny(released, Task.Delay(PackageReleaseTimeout)).ConfigureAwait(true) != released)
             {
                 await AppMessageDialogs.ShowMessageAsync($"\"{target}\" is still open, the VPK was saved to \"{tempPath}\" instead.", "Failed to save VPK", MessageIcon.Error).ConfigureAwait(true);
+                await ReopenOriginalFileAsync().ConfigureAwait(true);
                 return false;
             }
 
@@ -292,12 +305,7 @@ namespace GUI
             catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {
                 await AppMessageDialogs.ShowMessageAsync($"Failed to replace \"{target}\": {e.Message}\n\nThe VPK was saved to \"{tempPath}\" instead.", "Failed to save VPK", MessageIcon.Error).ConfigureAwait(true);
-
-                if (reopen && originalFile != null && File.Exists(originalFile))
-                {
-                    await OpenPackageEditorAsync(originalFile, index).ConfigureAwait(true);
-                }
-
+                await ReopenOriginalFileAsync().ConfigureAwait(true);
                 return false;
             }
 
@@ -309,6 +317,26 @@ namespace GUI
             }
 
             return true;
+
+            async Task ReopenOriginalFileAsync()
+            {
+                if (reopen && originalFile != null && File.Exists(originalFile))
+                {
+                    await OpenPackageEditorAsync(originalFile, index).ConfigureAwait(true);
+                }
+            }
+        }
+
+        private static void DeleteTemporaryFile(string path)
+        {
+            try
+            {
+                File.Delete(path);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                Log.Warn(nameof(MainForm), $"Failed to delete \"{path}\": {e.Message}");
+            }
         }
 
         /// <summary>
@@ -349,11 +377,14 @@ namespace GUI
         /// Asks to save the changes of every package being edited before the app closes.
         /// </summary>
         /// <returns>Whether the app can close now.</returns>
-        private bool ConfirmCloseApp()
+        private bool ConfirmCloseApp() => ConfirmCloseApp([]);
+
+        /// <param name="discarded">Packages whose changes the user chose not to save, they are not asked about again.</param>
+        private bool ConfirmCloseApp(HashSet<PackageViewer> discarded)
         {
             foreach (TabPage tab in mainTabs.TabPages)
             {
-                if (GetPackageViewer(tab) is not { HasUnsavedChanges: true } viewer)
+                if (GetPackageViewer(tab) is not { HasUnsavedChanges: true } viewer || discarded.Contains(viewer))
                 {
                     continue;
                 }
@@ -363,11 +394,11 @@ namespace GUI
                 switch (AskToSavePackage(viewer))
                 {
                     case SaveChangesChoice.DontSave:
-                        viewer.DiscardChanges();
+                        discarded.Add(viewer);
                         continue;
 
                     case SaveChangesChoice.Save:
-                        _ = SaveAndCloseAppAsync(viewer, tab);
+                        _ = SaveAndCloseAppAsync(viewer, tab, discarded);
                         return false;
 
                     default:
@@ -378,12 +409,19 @@ namespace GUI
             return true;
         }
 
-        private async Task SaveAndCloseAppAsync(PackageViewer viewer, TabPage tab)
+        private async Task SaveAndCloseAppAsync(PackageViewer viewer, TabPage tab, HashSet<PackageViewer> discarded)
         {
-            if (await SavePackageAsync(viewer, tab, saveAs: false, reopen: false).ConfigureAwait(true))
+            if (!await SavePackageAsync(viewer, tab, saveAs: false, reopen: false).ConfigureAwait(true) || !ConfirmCloseApp(discarded))
             {
-                Close();
+                return;
             }
+
+            foreach (var discardedViewer in discarded)
+            {
+                discardedViewer.DiscardChanges();
+            }
+
+            Close();
         }
     }
 }

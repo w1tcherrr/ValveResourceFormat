@@ -28,6 +28,17 @@ namespace ValveResourceFormat.IO
         }
 
         /// <summary>
+        /// Whether a package with this path would be read as one split into chunks, because it names a <c>_dir.vpk</c>
+        /// directory file or an archive chunk.
+        /// </summary>
+        public static bool IsSplitPackageFile(string path)
+        {
+            ArgumentNullException.ThrowIfNull(path);
+
+            return IsArchiveChunk(path) || Path.GetFileNameWithoutExtension(path).EndsWith(DirectorySuffix, StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
         /// Gets the name of a package without the <c>.vpk</c> extension and the <c>_dir</c> or archive chunk suffix, such as
         /// <c>pak01</c> for <c>pak01_dir.vpk</c> and <c>pak01_003.vpk</c>. A package read from a <c>_dir.vpk</c> file has
         /// this as its file name.

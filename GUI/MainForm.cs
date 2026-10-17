@@ -522,46 +522,32 @@ namespace GUI
         {
             mainTabs.SelectedIndex = 0;
 
-            //Close all tabs currently open (excluding console)
-            var tabCount = mainTabs.TabPages.Count;
-            for (var i = 1; i < tabCount; i++)
-            {
-                mainTabs.CloseTab(mainTabs.TabPages[tabCount - i]);
-            }
+            CloseTabs(mainTabs.TabPages.Cast<TabPage>().Skip(1));
         }
 
         private void CloseOtherTabs(TabPage basePage)
         {
-            for (var i = mainTabs.TabPages.Count - 1; i > 0; i--)
-            {
-                if (mainTabs.TabPages[i] != basePage)
-                {
-                    mainTabs.CloseTab(mainTabs.TabPages[i]);
-                }
-            }
+            CloseTabs(mainTabs.TabPages.Cast<TabPage>().Skip(1).Where(tab => tab != basePage));
         }
 
         private void CloseTabsToLeft(TabPage basePage)
         {
-            //Close all tabs to the left of the base (excluding console)
-            for (var i = mainTabs.GetTabIndex(basePage) - 1; i > 0; i--)
-            {
-                mainTabs.CloseTab(mainTabs.TabPages[i]);
-            }
+            CloseTabs(mainTabs.TabPages.Cast<TabPage>().Take(mainTabs.GetTabIndex(basePage)).Skip(1));
         }
 
         private void CloseTabsToRight(TabPage basePage)
         {
-            //Close all tabs to the right of the base one
-            var tabCount = mainTabs.TabPages.Count;
-            for (var i = 1; i < tabCount; i++)
-            {
-                if (mainTabs.TabPages[tabCount - i] == basePage)
-                {
-                    break;
-                }
+            CloseTabs(mainTabs.TabPages.Cast<TabPage>().Skip(mainTabs.GetTabIndex(basePage) + 1));
+        }
 
-                mainTabs.CloseTab(mainTabs.TabPages[tabCount - i]);
+        /// <summary>
+        /// Closes the tabs from the last one, skipping tabs that closing an earlier one already closed.
+        /// </summary>
+        private void CloseTabs(IEnumerable<TabPage> tabs)
+        {
+            foreach (var tab in tabs.Reverse().ToList())
+            {
+                mainTabs.CloseTab(tab);
             }
         }
 
