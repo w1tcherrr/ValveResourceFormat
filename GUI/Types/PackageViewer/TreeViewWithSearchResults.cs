@@ -92,6 +92,11 @@ namespace GUI.Types.PackageViewer
         private bool suppressHistoryRecording;
 
         /// <summary>
+        /// Folder shown in the list view, or <see langword="null"/> while it shows search results.
+        /// </summary>
+        private VirtualPackageNode? DisplayedFolder;
+
+        /// <summary>
         /// Initializes a new instance of the <see cref="TreeViewWithSearchResults"/> class.
         /// </summary>
         public TreeViewWithSearchResults(PackageViewer viewer)
@@ -321,6 +326,8 @@ namespace GUI.Types.PackageViewer
 
             ListViewItems.Clear();
 
+            DisplayedFolder = pkgNode.Parent != null || pkgNode == mainTreeView.Root ? pkgNode : null;
+
             if (pkgNode.Parent != null)
             {
                 AddParentNavigationItemToListView(pkgNode.Parent);
@@ -463,10 +470,157 @@ namespace GUI.Types.PackageViewer
             forwardButton.Enabled = navigationHistory.CanGoForward;
         }
 
-        public void PruneNavigationHistory(VirtualPackageNode removedRoot)
+        /// <summary>
+        /// Finds the folder for a directory name of a package entry.
+        /// </summary>
+        internal VirtualPackageNode? FindFolderNode(string directoryName)
         {
-            navigationHistory.RemoveSubtree(removedRoot);
+            var node = mainTreeView.Root;
+
+            if (node == null || string.IsNullOrWhiteSpace(directoryName))
+            {
+                return node;
+            }
+
+            var directory = directoryName.AsSpan();
+
+            foreach (var subPathRange in directory.Split([Package.DirectorySeparatorChar]))
+            {
+                if (!node.Folders.GetAlternateLookup<ReadOnlySpan<char>>().TryGetValue(directory[subPathRange], out var subNode))
+                {
+                    return null;
+                }
+
+                node = subNode;
+            }
+
+            return node;
+        }
+
+        /// <summary>
+        /// Returns all of the files in a folder and its subfolders.
+        /// </summary>
+        internal static IEnumerable<PackageEntry> EnumerateFiles(VirtualPackageNode folder)
+        {
+            foreach (var file in folder.Files)
+            {
+                yield return file;
+            }
+
+            foreach (var subFolder in folder.Folders.Values)
+            {
+                foreach (var file in EnumerateFiles(subFolder))
+                {
+                    yield return file;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Removes the node of a file that was removed from the package.
+        /// </summary>
+        internal void RemoveFileNode(PackageEntry entry)
+        {
+            var folder = FindFolderNode(entry.DirectoryName);
+
+            if (folder == null || !folder.Files.Remove(entry))
+            {
+                return;
+            }
+
+            SubtractFolderSize(folder, entry.TotalLength);
+            BigIconImageCache.TryRemove(entry.GetFullPath(), out _);
+
+            if (folder.CreatedNode == null)
+            {
+                return;
+            }
+
+            foreach (BetterTreeNode node in folder.CreatedNode.Nodes)
+            {
+                if (node.PackageEntry == entry)
+                {
+                    node.Remove();
+                    break;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Removes the node of a folder whose files were removed from the package.
+        /// </summary>
+        internal void RemoveFolderNode(VirtualPackageNode folder)
+        {
+            if (folder.Parent == null || !folder.Parent.Folders.Remove(folder.Name))
+            {
+                return;
+            }
+
+            SubtractFolderSize(folder.Parent, folder.TotalSize);
+
+            foreach (var file in EnumerateFiles(folder))
+            {
+                BigIconImageCache.TryRemove(file.GetFullPath(), out _);
+            }
+
+            folder.Parent.CreatedNode?.Nodes[folder.Name]?.Remove();
+
+            navigationHistory.RemoveSubtree(folder);
             UpdateNavigationButtons();
+        }
+
+        private static bool IsInPackage(VirtualPackageNode folder)
+        {
+            for (var node = folder; node.Parent != null; node = node.Parent)
+            {
+                if (!node.Parent.Folders.TryGetValue(node.Name, out var current) || current != node)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static void SubtractFolderSize(VirtualPackageNode folder, long size)
+        {
+            for (var node = folder; node != null; node = node.Parent)
+            {
+                node.TotalSize -= size;
+            }
+        }
+
+        /// <summary>
+        /// Shows the current contents of the folder in the list view after files were added or removed,
+        /// or its closest remaining parent when it was removed. Search results only lose the removed files.
+        /// </summary>
+        internal void RefreshListView(IReadOnlySet<PackageEntry> removedFiles)
+        {
+            if (DisplayedFolder == null)
+            {
+                ListViewItems.RemoveAll(item => item is BetterListViewItem { PackageEntry: { } entry } && removedFiles.Contains(entry));
+                mainListView.VirtualListSize = ListViewItems.Count;
+                mainListView.Invalidate();
+                return;
+            }
+
+            var folder = DisplayedFolder;
+
+            while (folder.Parent != null && !IsInPackage(folder))
+            {
+                folder = folder.Parent;
+            }
+
+            suppressHistoryRecording = true;
+
+            try
+            {
+                MainListView_DisplayNodes(folder);
+            }
+            finally
+            {
+                suppressHistoryRecording = false;
+            }
         }
 
         private void AssignIcons()
@@ -1036,7 +1190,10 @@ namespace GUI.Types.PackageViewer
                 return;
             }
 
+            mainTreeView.GenerateIconList([file.TypeName]);
+
             var node = BetterTreeView.AddFileNode(root, file);
+            root.TotalSize += file.TotalLength;
 
             // Realizing a folder in CreateTreeNodes already creates nodes for all of its files,
             // so only add the file node when the folder was realized before this call.

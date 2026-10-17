@@ -324,7 +324,7 @@ namespace GUI.Types.PackageViewer
                     continue;
                 }
 
-                ExtensionIconList.Add(originalExtension, image);
+                ExtensionIconList.TryAdd(originalExtension, image);
             }
 
             FolderImage = AppIcons.Icons["Folder"];

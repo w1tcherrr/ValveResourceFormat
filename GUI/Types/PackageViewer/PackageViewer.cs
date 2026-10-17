@@ -1,6 +1,5 @@
 using System.Buffers;
 using System.IO;
-using System.IO.Enumeration;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
@@ -119,114 +118,143 @@ namespace GUI.Types.PackageViewer
 
         public void AddFolder(string directory)
         {
-            var prefix = GetCurrentPrefix();
-
-            if (prefix.Length > 0)
-            {
-                directory = Path.Join(prefix, directory);
-            }
-
-            directory = directory.Replace('\\', ValvePak.Package.DirectorySeparatorChar);
-
-            TreeView?.AddFolderNode(directory);
-        }
-
-        public void AddFilesFromFolder(string inputDirectory)
-        {
-            var files = new FileSystemEnumerable<string>(
-                inputDirectory,
-                (ref entry) => entry.ToSpecifiedFullPath(),
-                new EnumerationOptions
-                {
-                    RecurseSubdirectories = true,
-                }
-            );
-
-            AddFiles(files, inputDirectory);
-        }
-
-        public void AddFiles(IEnumerable<string> files, string? inputDirectory = null)
-        {
             if (TreeView == null)
             {
                 return;
             }
 
-            var prefix = GetCurrentPrefix();
+            directory = PackageInputFiles.GetEntryPath(directory).Trim(Package.DirectorySeparatorChar);
+
+            TreeView.AddFolderNode(JoinPath(GetFolderPath(GetContextFolder()), directory));
+        }
+
+        public void AddFilesFromFolder(string inputDirectory)
+        {
+            List<PackageInputFile> files;
+
+            try
+            {
+                files = PackageInputFiles.CollectFromFolder(inputDirectory, GetFileOnDisk());
+            }
+            catch (Exception e) when (e is InvalidDataException or IOException or UnauthorizedAccessException)
+            {
+                _ = AppMessageDialogs.ShowMessageAsync(e.Message, "Failed to add folder", MessageIcon.Error);
+                return;
+            }
+
+            AddFiles(files.Select(static file => (file.PathOnDisk, file.EntryPath)));
+        }
+
+        public void AddFiles(IEnumerable<string> files)
+        {
+            var fileOnDisk = GetFileOnDisk();
+
+            AddFiles(files
+                .Where(file => fileOnDisk == null || !Path.GetFullPath(file).Equals(fileOnDisk, StringComparison.OrdinalIgnoreCase))
+                .Select(static file => (file, PackageInputFiles.GetEntryPath(Path.GetFileName(file)))));
+        }
+
+        /// <summary>
+        /// Adds files on disk to the folder the context menu was opened on, replacing files that already exist.
+        /// </summary>
+        private void AddFiles(IEnumerable<(string PathOnDisk, string EntryPath)> files)
+        {
+            if (TreeView == null || vrfGuiContext.CurrentPackage is not { } package)
+            {
+                return;
+            }
+
+            var folder = GetContextFolder();
+            var folderPath = GetFolderPath(folder);
+            var replacedFiles = new HashSet<PackageEntry>();
+            var failedFiles = new List<string>();
 
             Cursor.Current = Cursors.WaitCursor;
-
             TreeView.BeginUpdate();
 
-            // TODO: This is not adding to the selected folder, but to root
-            foreach (var file in files)
+            foreach (var (pathOnDisk, entryPath) in files)
             {
-                if (!File.Exists(file))
+                byte[] data;
+
+                try
                 {
+                    data = File.ReadAllBytes(pathOnDisk);
+                }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                {
+                    failedFiles.Add($"{pathOnDisk}: {e.Message}");
                     continue;
                 }
 
-                var name = inputDirectory == null ? Path.GetFileName(file) : file[(inputDirectory.Length + 1)..];
-                var data = File.ReadAllBytes(file);
+                var fullPath = JoinPath(folderPath, entryPath);
 
-                if (prefix.Length > 0)
+                if (package.FindEntry(fullPath) is { } existingEntry)
                 {
-                    name = Path.Join(prefix, name);
+                    package.RemoveFile(existingEntry);
+                    TreeView.RemoveFileNode(existingEntry);
+                    replacedFiles.Add(existingEntry);
                 }
 
-                if (vrfGuiContext.CurrentPackage == null)
-                {
-                    continue;
-                }
-
-                var entry = vrfGuiContext.CurrentPackage.AddFile(name, data);
-                TreeView.AddFileNode(entry);
+                TreeView.AddFileNode(package.AddFile(fullPath, data));
             }
 
             TreeView.EndUpdate();
-
-            // Reveal the added entries under the folder the context menu was opened on
-            LastContextTreeNode?.Expand();
-
+            folder.CreatedNode?.Expand();
+            TreeView.RefreshListView(replacedFiles);
             Cursor.Current = Cursors.Default;
+
+            if (failedFiles.Count > 0)
+            {
+                _ = AppMessageDialogs.ShowMessageAsync($"Failed to read {failedFiles.Count} files:\n{string.Join('\n', failedFiles.Take(10))}", "Failed to add files", MessageIcon.Error);
+            }
         }
 
         public void RemoveCurrentFiles()
         {
             if (LastContextTreeNode != null)
             {
-                var removedRoot = LastContextTreeNode.PkgNode;
-                RemoveRecursiveFiles(LastContextTreeNode);
-
-                if (removedRoot != null)
-                {
-                    TreeView?.PruneNavigationHistory(removedRoot);
-                }
+                RemoveItems([LastContextTreeNode]);
             }
         }
 
-        public void RemoveRecursiveFiles(BetterTreeNode node)
+        /// <summary>
+        /// Removes files, and folders with all of the files in them, from the package.
+        /// </summary>
+        public void RemoveItems(IEnumerable<IBetterBaseItem> items)
         {
-            if (node.PkgNode != null && node.Parent is BetterTreeNode parentNode)
+            if (TreeView == null || vrfGuiContext.CurrentPackage is not { } package)
             {
-                parentNode.PkgNode?.Folders.Remove(node.PkgNode.Name);
+                return;
             }
 
-            for (var i = node.Nodes.Count - 1; i >= 0; i--)
+            var removedFiles = new HashSet<PackageEntry>();
+
+            TreeView.BeginUpdate();
+
+            foreach (var item in items)
             {
-                RemoveRecursiveFiles((BetterTreeNode)node.Nodes[i]);
+                if (item.PackageEntry is { } entry)
+                {
+                    if (package.RemoveFile(entry))
+                    {
+                        removedFiles.Add(entry);
+                        TreeView.RemoveFileNode(entry);
+                    }
+                }
+                else if (item.PkgNode is { Parent: not null } folder)
+                {
+                    foreach (var file in TreeViewWithSearchResults.EnumerateFiles(folder))
+                    {
+                        package.RemoveFile(file);
+                        removedFiles.Add(file);
+                    }
+
+                    TreeView.RemoveFolderNode(folder);
+                }
             }
 
-            if (node.PackageEntry != null && node.Parent is BetterTreeNode parentNode2)
-            {
-                parentNode2.PkgNode?.Files.Remove(node.PackageEntry);
-                vrfGuiContext.CurrentPackage?.RemoveFile(node.PackageEntry);
-            }
-
-            if (node.Level > 0)
-            {
-                node.Remove();
-            }
+            TreeView.EndUpdate();
+            TreeView.RefreshListView(removedFiles);
         }
 
         public void SaveToFile(string fileName)
@@ -571,19 +599,27 @@ namespace GUI.Types.PackageViewer
             Program.MainForm.OpenFile(newVrfGuiContext, entry, TreeView);
         }
 
-        private string GetCurrentPrefix()
-        {
-            var prefix = string.Empty;
-            TreeNode? parent = LastContextTreeNode;
+        /// <summary>
+        /// Folder the context menu was opened on, files are added into it.
+        /// </summary>
+        private VirtualPackageNode GetContextFolder() => LastContextTreeNode?.PkgNode ?? VirtualRoot!;
 
-            while (parent != null && parent.Level > 0)
+        private string? GetFileOnDisk() => Path.IsPathRooted(vrfGuiContext.FileName) ? Path.GetFullPath(vrfGuiContext.FileName) : null;
+
+        private static string GetFolderPath(VirtualPackageNode folder)
+        {
+            var names = new Stack<string>();
+
+            for (var node = folder; node.Parent != null; node = node.Parent)
             {
-                prefix = Path.Join(parent.Name, prefix);
-                parent = parent.Parent;
+                names.Push(node.Name);
             }
 
-            return prefix;
+            return string.Join(Package.DirectorySeparatorChar, names);
         }
+
+        private static string JoinPath(string folderPath, string path)
+            => folderPath.Length > 0 ? string.Join(Package.DirectorySeparatorChar, folderPath, path) : path;
 
         /// <summary>
         /// Opens a context menu where the user right-clicked in the TreeView or ListView.
