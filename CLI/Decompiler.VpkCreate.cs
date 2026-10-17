@@ -1,5 +1,4 @@
 using System.IO;
-using System.IO.Enumeration;
 using ValvePak;
 using ValveResourceFormat.IO;
 
@@ -15,67 +14,36 @@ namespace CLI
             var outputPath = Path.GetFullPath(VpkCreatePath!);
             var multiChunk = VpkCreateChunkSize > 0;
 
-            // Skip dot files and folders such as .git, which are not game files
-            var enumeration = new FileSystemEnumerable<(string Path, long Length)>(
-                InputFile,
-                (ref entry) => (entry.ToFullPath(), entry.Length),
-                new EnumerationOptions { RecurseSubdirectories = true })
-            {
-                ShouldIncludePredicate = (ref entry) => !entry.IsDirectory && !entry.FileName.StartsWith('.'),
-                ShouldRecursePredicate = (ref entry) => !entry.FileName.StartsWith('.'),
-            };
+            List<PackageInputFile> files;
 
-            var files = new SortedDictionary<string, string>(StringComparer.Ordinal);
+            try
+            {
+                files = PackageInputFiles.CollectFromFolder(InputFile, outputPath,
+                    entryPath => !IsExcludedVpkFilePath(FixPathSlashes(entryPath)) && MatchesExtensionFilter(Path.GetExtension(entryPath).TrimStart('.')));
+            }
+            catch (InvalidDataException e)
+            {
+                Console.Error.WriteLine(e.Message);
+                return 1;
+            }
+
             var lowercasedPaths = 0;
             long totalSize = 0;
 
-            foreach (var (path, length) in enumeration)
+            foreach (var file in files)
             {
-                // The output may be written into the input folder, so it must not pack itself or its old chunk files
-                if (path.Equals(outputPath, StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-
-                if (PackageFileNames.IsArchiveChunk(path) && PackageFileNames.GetDirectoryFile(path).Equals(outputPath, StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-
-                var relativePath = Path.GetRelativePath(InputFile, path);
-
-                if (IsExcludedVpkFilePath(relativePath))
-                {
-                    continue;
-                }
-
-                // Paths in packages always use forward slashes and are lowercase
-                var slashedPath = relativePath.Replace('\\', '/');
-                var entryPath = slashedPath.ToLowerInvariant();
-
-                if (!MatchesExtensionFilter(Path.GetExtension(entryPath).TrimStart('.')))
-                {
-                    continue;
-                }
-
-                if (!files.TryAdd(entryPath, path))
-                {
-                    Console.Error.WriteLine($"\"{files[entryPath]}\" and \"{path}\" would both be packed as \"{entryPath}\", paths in VPKs are case-insensitive.");
-                    return 1;
-                }
-
-                if (entryPath != slashedPath)
+                if (file.WasLowercased)
                 {
                     lowercasedPaths++;
                 }
 
-                if (length > int.MaxValue)
+                if (file.Length > int.MaxValue)
                 {
-                    Console.Error.WriteLine($"\"{path}\" is larger than 2 GiB, which is not supported.");
+                    Console.Error.WriteLine($"\"{file.PathOnDisk}\" is larger than 2 GiB, which is not supported.");
                     return 1;
                 }
 
-                totalSize += length;
+                totalSize += file.Length;
             }
 
             if (files.Count == 0)
@@ -104,15 +72,15 @@ namespace CLI
 
             try
             {
-                foreach (var (entryPath, path) in files)
+                foreach (var file in files)
                 {
                     if (!Quiet)
                     {
-                        Console.WriteLine(entryPath);
+                        Console.WriteLine(file.EntryPath);
                     }
 
-                    using var stream = File.OpenRead(path);
-                    package.AddFile(entryPath, stream, multiChunk);
+                    using var stream = File.OpenRead(file.PathOnDisk);
+                    package.AddFile(file.EntryPath, stream, multiChunk);
                 }
 
                 package.Write(outputPath);

@@ -158,8 +158,6 @@ namespace GUI.Types.PackageViewer
 
             TreeView.BeginUpdate();
 
-            var resourceEntries = new Queue<(string PathOnDisk, PackageEntry Entry)>();
-
             // TODO: This is not adding to the selected folder, but to root
             foreach (var file in files)
             {
@@ -183,16 +181,6 @@ namespace GUI.Types.PackageViewer
 
                 var entry = vrfGuiContext.CurrentPackage.AddFile(name, data);
                 TreeView.AddFileNode(entry);
-
-                if (data.Length >= 6)
-                {
-                    var magicResourceVersion = BitConverter.ToUInt16(data, 4);
-
-                    if (Viewers.Resource.IsAccepted(magicResourceVersion) && name.EndsWith(GameFileLoader.CompiledFileSuffix, StringComparison.Ordinal))
-                    {
-                        resourceEntries.Enqueue((file, entry));
-                    }
-                }
             }
 
             TreeView.EndUpdate();
@@ -201,74 +189,6 @@ namespace GUI.Types.PackageViewer
             LastContextTreeNode?.Expand();
 
             Cursor.Current = Cursors.Default;
-
-#if DEBUG
-            ScanForResourceDependencies();
-
-            // Fire-and-forget: this dev-only prompt need not hold up AddFiles.
-            async void ScanForResourceDependencies()
-            {
-                if (resourceEntries.Count == 0 || !await AppMessageDialogs.ConfirmAsync(
-                    "Would you like to scan for all dependencies of the compiled file (ending in \"_c\") you just added?",
-                    "Detected a compiled resource",
-                    buttons: ConfirmButtons.YesNo).ConfigureAwait(true))
-                {
-                    return;
-                }
-
-                await AppMessageDialogs.ShowMessageAsync("This is not yet implemented.", "Not implemented").ConfigureAwait(true);
-
-                while (resourceEntries.TryDequeue(out var entry))
-                {
-                    if (vrfGuiContext.CurrentPackage == null)
-                    {
-                        break;
-                    }
-
-                    vrfGuiContext.CurrentPackage.ReadEntry(entry.Entry, out var output, false);
-                    using var entryStream = new MemoryStream(output);
-
-                    using var resource = new ValveResourceFormat.Resource();
-                    resource.Read(entryStream, mode: ReadMode.Deferred);
-
-                    if (resource.ExternalReferences is null)
-                    {
-                        continue;
-                    }
-
-                    // TODO: This doesn't work properly
-                    var folderDepth = entry.Entry.DirectoryName.Count(static c => c == Package.DirectorySeparatorChar);
-                    var folder = Path.GetDirectoryName(entry.PathOnDisk.AsSpan());
-
-                    while (folderDepth-- > 0)
-                    {
-                        folder = Path.GetDirectoryName(folder);
-                    }
-
-                    foreach (var reference in resource.ExternalReferences.ResourceRefInfoList)
-                    {
-                        if (reference.Name.StartsWith("_bakeresourcecache", StringComparison.Ordinal))
-                        {
-                            continue;
-                        }
-
-                        // Do not recurse maps (skyboxes)
-                        if (reference.Name.EndsWith(".vmap", StringComparison.Ordinal))
-                        {
-                            continue;
-                        }
-
-                        var file = Path.Combine(folder.ToString(), reference.Name);
-
-                        if (!File.Exists(file))
-                        {
-                            Log.Warn(nameof(PackageViewer), $"Failed to find file: {reference.Name}");
-                            continue;
-                        }
-                    }
-                }
-            }
-#endif
         }
 
         public void RemoveCurrentFiles()
