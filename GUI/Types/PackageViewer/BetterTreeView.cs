@@ -150,13 +150,27 @@ namespace GUI.Types.PackageViewer
             {
                 Log.Info(nameof(BetterTreeView), "Pattern search");
 
+                var package = VrfGuiContext.CurrentPackage;
                 var maxArchiveIndex = -1;
                 var sortedEntriesPerArchive = new Dictionary<int, List<PackageEntry>>();
 
-                foreach (var extensions in VrfGuiContext.CurrentPackage.Entries.Values)
+                foreach (var extensions in package.Entries.Values)
                 {
                     foreach (var entry in extensions)
                     {
+                        // Preload data is not next to the rest of the file, and files added in the GUI only have preload data
+                        if (entry.SmallData.Length > 0)
+                        {
+                            package.ReadEntry(entry, out var entryData, validateCrc: false);
+
+                            if (entryData.AsSpan().IndexOf(pattern) >= 0)
+                            {
+                                results.Add(entry);
+                            }
+
+                            continue;
+                        }
+
                         if (entry.ArchiveIndex != 0x7FFF && entry.ArchiveIndex > maxArchiveIndex)
                         {
                             maxArchiveIndex = entry.ArchiveIndex;
@@ -184,11 +198,13 @@ namespace GUI.Types.PackageViewer
 
                 if (sortedEntriesPerArchive.TryGetValue(0x7FFF, out var sortedEntriesInDirVpk))
                 {
-                    var fileName = $"{VrfGuiContext.CurrentPackage.FileName}{(VrfGuiContext.CurrentPackage.IsDirVPK ? "_dir" : "")}.vpk";
+                    var fileName = $"{package.FileName}{(package.IsDirVPK ? "_dir" : "")}.vpk";
 
                     progressDialog.SetProgress($"Searching '{Path.GetFileName(fileName)}'");
 
-                    var archiveMatches = SearchForContentsInFile(fileName, pattern, sortedEntriesInDirVpk);
+                    // Offsets of files in the directory file start after the directory tree
+                    var dataOffset = (int)(package.HeaderSize + package.TreeSize);
+                    var archiveMatches = SearchForContentsInFile(fileName, dataOffset, pattern, sortedEntriesInDirVpk);
                     results.AddRange(archiveMatches);
                 }
 
@@ -213,9 +229,9 @@ namespace GUI.Types.PackageViewer
                                 return;
                             }
 
-                            var fileName = PackageFileNames.GetArchiveChunkFile(VrfGuiContext.CurrentPackage.FileName!, archiveIndex);
+                            var fileName = PackageFileNames.GetArchiveChunkFile(package.FileName!, archiveIndex);
 
-                            var archiveMatches = SearchForContentsInFile(fileName, pattern, archiveEntries);
+                            var archiveMatches = SearchForContentsInFile(fileName, 0, pattern, archiveEntries);
 
                             if (archiveMatches.Count > 0)
                             {
@@ -246,12 +262,12 @@ namespace GUI.Types.PackageViewer
             progressDialog.ShowDialog();
         }
 
-        private static HashSet<PackageEntry> SearchForContentsInFile(string fileName, byte[] pattern, List<PackageEntry> archiveEntries)
+        private static HashSet<PackageEntry> SearchForContentsInFile(string fileName, int dataOffset, byte[] pattern, List<PackageEntry> archiveEntries)
         {
             var matches = new HashSet<PackageEntry>();
 
             //using var fs = new FileStream(fileName, FileMode.Open, FileAccess.Read);
-            var data = File.ReadAllBytes(fileName).AsSpan(); // TODO: stream it
+            var data = File.ReadAllBytes(fileName).AsSpan(dataOffset); // TODO: stream it
 
             var match = -1;
             var offset = 0;
