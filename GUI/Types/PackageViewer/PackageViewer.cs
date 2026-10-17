@@ -36,7 +36,7 @@ namespace GUI.Types.PackageViewer
             IsEditingPackage = true;
 
             var package = new Package();
-            package.AddFile("README.txt", []); // TODO: Otherwise package.Entries is null
+            package.OptimizeEntriesForBinarySearch(StringComparison.OrdinalIgnoreCase);
 
             vrfGuiContext.CurrentPackage = package;
 
@@ -427,13 +427,6 @@ namespace GUI.Types.PackageViewer
                             ArrayPool<byte>.Shared.Return(bytes);
                         }
 
-                        if (!package.Entries.TryGetValue(newEntry.TypeName, out var typeEntries))
-                        {
-                            typeEntries = [];
-                            package.Entries.Add(newEntry.TypeName, typeEntries);
-                        }
-
-                        typeEntries.Add(newEntry);
                         hiddenFiles.Add(newEntry);
 
                         progress.SetProgress($"Found {hiddenFiles.Count} files ({HumanReadableByteSizeFormatter.Format(totalSlackSize)}) so far…");
