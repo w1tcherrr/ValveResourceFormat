@@ -51,6 +51,8 @@ namespace GUI
             InitializeComponent();
             LoadIcons();
 
+            mainTabs.ConfirmClose = ConfirmCloseTab;
+
             // Let the explorer start scanning games before the window even spawns
             if (args.Length == 0 && (Settings.IsFirstStartup || Settings.Config.OpenExplorerOnStart != 0))
             {
@@ -377,6 +379,12 @@ namespace GUI
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
+            if (!ConfirmCloseApp())
+            {
+                e.Cancel = true;
+                return;
+            }
+
 #if !SCREENSHOT_MODE
             var placement = new WINDOWPLACEMENT
             {

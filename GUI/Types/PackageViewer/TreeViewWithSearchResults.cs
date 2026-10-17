@@ -594,11 +594,11 @@ namespace GUI.Types.PackageViewer
         /// Shows the current contents of the folder in the list view after files were added or removed,
         /// or its closest remaining parent when it was removed. Search results only lose the removed files.
         /// </summary>
-        internal void RefreshListView(IReadOnlySet<PackageEntry> removedFiles)
+        internal void RefreshListView(IReadOnlySet<PackageEntry>? removedFiles = null)
         {
             if (DisplayedFolder == null)
             {
-                ListViewItems.RemoveAll(item => item is BetterListViewItem { PackageEntry: { } entry } && removedFiles.Contains(entry));
+                ListViewItems.RemoveAll(item => item is BetterListViewItem { PackageEntry: { } entry } && removedFiles?.Contains(entry) == true);
                 mainListView.VirtualListSize = ListViewItems.Count;
                 mainListView.Invalidate();
                 return;
@@ -1437,6 +1437,17 @@ namespace GUI.Types.PackageViewer
             if (info.Item is not IBetterBaseItem item)
             {
                 mainListView.SelectedIndices.Clear();
+
+                if (e.Button == MouseButtons.Right && Viewer.IsEditingPackage && DisplayedFolder != null)
+                {
+                    OpenContextMenu?.Invoke(sender, new PackageContextMenuEventArgs
+                    {
+                        Location = e.Location,
+                        PkgNode = DisplayedFolder,
+                        IsBackground = true,
+                    });
+                }
+
                 return;
             }
 

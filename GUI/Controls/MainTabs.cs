@@ -145,16 +145,36 @@ internal class MainTabs : ThemedTabControl
         return -1;
     }
 
-    public void CloseTab(TabPage tab)
+    /// <summary>
+    /// Asked before a tab is closed, returns whether to close it now.
+    /// </summary>
+    public Func<TabPage, bool>? ConfirmClose { get; set; }
+
+    /// <param name="tab">The tab to close.</param>
+    /// <param name="skipConfirmation">Close without asking <see cref="ConfirmClose"/>, such as to save unsaved changes.</param>
+    public void CloseTab(TabPage tab, bool skipConfirmation = false)
     {
         var tabIndex = GetTabIndex(tab);
-        var isClosingCurrentTab = tabIndex == SelectedIndex;
 
         //The console cannot be closed!
         if (tabIndex == 0)
         {
             return;
         }
+
+        if (!skipConfirmation && ConfirmClose?.Invoke(tab) == false)
+        {
+            return;
+        }
+
+        tabIndex = GetTabIndex(tab);
+
+        if (tabIndex < 1)
+        {
+            return;
+        }
+
+        var isClosingCurrentTab = tabIndex == SelectedIndex;
 
         Log.Info(nameof(MainForm), $"Closing {tab.Text}");
 

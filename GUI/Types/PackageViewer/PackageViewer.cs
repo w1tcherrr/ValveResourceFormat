@@ -22,8 +22,34 @@ namespace GUI.Types.PackageViewer
         private TreeViewWithSearchResults? TreeView;
 #pragma warning restore CA2213
         private VirtualPackageNode? VirtualRoot;
-        private BetterTreeNode? LastContextTreeNode;
-        private bool IsEditingPackage; // TODO: Allow editing existing vpks (but not chunked ones)
+        private VirtualPackageNode? ContextFolder;
+
+        /// <summary>
+        /// Whether this package is opened for editing, with the editing context menu.
+        /// </summary>
+        public bool IsEditingPackage { get; private set; }
+
+        /// <summary>
+        /// Whether files were added to or removed from the package since it was opened for editing.
+        /// </summary>
+        public bool HasUnsavedChanges { get; private set; }
+
+        public VrfGuiContext GuiContext => vrfGuiContext;
+
+        /// <summary>
+        /// Full path of the package file, or <see langword="null"/> for a new package that was never saved.
+        /// </summary>
+        public string? FileOnDisk => Path.IsPathRooted(vrfGuiContext.FileName) ? Path.GetFullPath(vrfGuiContext.FileName) : null;
+
+        /// <summary>
+        /// Whether this package can be opened for editing: a single file package on disk, not one inside of another package.
+        /// </summary>
+        public bool CanEdit => !IsEditingPackage
+            && vrfGuiContext.ParentGuiContext == null
+            && FileOnDisk != null
+            && vrfGuiContext.CurrentPackage is { IsDirVPK: false };
+
+        public bool IsSigned => vrfGuiContext.CurrentPackage?.SignatureSectionSize > 0;
 
         public static bool IsAccepted(uint magic)
         {
@@ -32,22 +58,47 @@ namespace GUI.Types.PackageViewer
 
         public Control CreateEmpty()
         {
-            IsEditingPackage = true;
-
             var package = new Package();
             package.OptimizeEntriesForBinarySearch(StringComparison.OrdinalIgnoreCase);
 
-            vrfGuiContext.CurrentPackage = package;
+            return CreateEditor(package);
+        }
 
-            VirtualRoot = new VirtualPackageNode("root", 0, null);
+        /// <summary>
+        /// Opens the package file of the context for editing.
+        /// </summary>
+        public Control CreateEditor()
+        {
+            var package = new Package();
+
+            try
+            {
+                package.OptimizeEntriesForBinarySearch(StringComparison.OrdinalIgnoreCase);
+                package.Read(vrfGuiContext.FileName);
+
+                if (package.IsDirVPK)
+                {
+                    throw new InvalidDataException("Only VPKs that are a single file can be edited, not ones split into chunk files.");
+                }
+
+                return CreateEditor(package);
+            }
+            catch
+            {
+                package.Dispose();
+                throw;
+            }
+        }
+
+        private TreeViewWithSearchResults CreateEditor(Package package)
+        {
+            IsEditingPackage = true;
+
+            vrfGuiContext.CurrentPackage = package;
+            BuildVirtualRoot(package);
             CreateTreeViewWithSearchResults();
 
-            if (TreeView == null)
-            {
-                throw new InvalidOperationException("TreeView was not created");
-            }
-
-            return TreeView;
+            return TreeView ?? throw new InvalidOperationException("TreeView was not created");
         }
 
         public async Task LoadAsync(Stream? stream)
@@ -67,11 +118,16 @@ namespace GUI.Types.PackageViewer
 
             vrfGuiContext.CurrentPackage = package;
 
+            BuildVirtualRoot(package);
+        }
+
+        private void BuildVirtualRoot(Package package)
+        {
             VirtualRoot = new VirtualPackageNode("root", 0, null);
 
-            if (vrfGuiContext.CurrentPackage.Entries != null)
+            if (package.Entries != null)
             {
-                foreach (var fileType in vrfGuiContext.CurrentPackage.Entries)
+                foreach (var fileType in package.Entries)
                 {
                     foreach (var file in fileType.Value)
                     {
@@ -126,6 +182,7 @@ namespace GUI.Types.PackageViewer
             directory = PackageInputFiles.GetEntryPath(directory).Trim(Package.DirectorySeparatorChar);
 
             TreeView.AddFolderNode(JoinPath(GetFolderPath(GetContextFolder()), directory));
+            TreeView.RefreshListView();
         }
 
         public void AddFilesFromFolder(string inputDirectory)
@@ -134,7 +191,7 @@ namespace GUI.Types.PackageViewer
 
             try
             {
-                files = PackageInputFiles.CollectFromFolder(inputDirectory, GetFileOnDisk());
+                files = PackageInputFiles.CollectFromFolder(inputDirectory, FileOnDisk);
             }
             catch (Exception e) when (e is InvalidDataException or IOException or UnauthorizedAccessException)
             {
@@ -147,7 +204,7 @@ namespace GUI.Types.PackageViewer
 
         public void AddFiles(IEnumerable<string> files)
         {
-            var fileOnDisk = GetFileOnDisk();
+            var fileOnDisk = FileOnDisk;
 
             AddFiles(files
                 .Where(file => fileOnDisk == null || !Path.GetFullPath(file).Equals(fileOnDisk, StringComparison.OrdinalIgnoreCase))
@@ -196,6 +253,7 @@ namespace GUI.Types.PackageViewer
                 }
 
                 TreeView.AddFileNode(package.AddFile(fullPath, data));
+                HasUnsavedChanges = true;
             }
 
             TreeView.EndUpdate();
@@ -206,14 +264,6 @@ namespace GUI.Types.PackageViewer
             if (failedFiles.Count > 0)
             {
                 _ = AppMessageDialogs.ShowMessageAsync($"Failed to read {failedFiles.Count} files:\n{string.Join('\n', failedFiles.Take(10))}", "Failed to add files", MessageIcon.Error);
-            }
-        }
-
-        public void RemoveCurrentFiles()
-        {
-            if (LastContextTreeNode != null)
-            {
-                RemoveItems([LastContextTreeNode]);
             }
         }
 
@@ -255,45 +305,124 @@ namespace GUI.Types.PackageViewer
 
             TreeView.EndUpdate();
             TreeView.RefreshListView(removedFiles);
+
+            if (removedFiles.Count > 0)
+            {
+                HasUnsavedChanges = true;
+            }
         }
 
-        public void SaveToFile(string fileName)
+        /// <summary>
+        /// Renames a file or a folder, keeping it in the same folder. Refuses names that other files already have.
+        /// </summary>
+        public void RenameItem(IBetterBaseItem item, string newName)
         {
-            if (vrfGuiContext.CurrentPackage == null)
+            if (TreeView == null)
             {
                 return;
             }
 
-            try
+            newName = PackageInputFiles.GetEntryPath(newName.Trim());
+
+            if (newName.Length == 0 || newName.Contains(Package.DirectorySeparatorChar, StringComparison.Ordinal) || newName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
             {
-                vrfGuiContext.CurrentPackage.Write(fileName);
-            }
-            catch (Exception e)
-            {
-                ErrorReport.ShowError(e, fileName);
+                _ = AppMessageDialogs.ShowMessageAsync($"\"{newName}\" is not a valid name.", "Failed to rename", MessageIcon.Warning);
                 return;
             }
 
-            var fileCount = 0;
-            var fileSize = 0u;
-
-            if (vrfGuiContext.CurrentPackage.Entries != null)
+            if (item.PackageEntry is { } entry)
             {
-                foreach (var fileType in vrfGuiContext.CurrentPackage.Entries)
+                var directory = entry.DirectoryName == " " ? string.Empty : entry.DirectoryName;
+                RenameFiles([(entry, JoinPath(directory, newName))], null);
+                return;
+            }
+
+            if (item.PkgNode is not { Parent: not null } folder)
+            {
+                return;
+            }
+
+            var oldFolderPath = GetFolderPath(folder);
+            var newFolderPath = JoinPath(GetFolderPath(folder.Parent), newName);
+            var files = TreeViewWithSearchResults.EnumerateFiles(folder)
+                .Select(file => (file, string.Concat(newFolderPath, file.GetFullPath().AsSpan(oldFolderPath.Length))))
+                .ToList();
+
+            RenameFiles(files, folder);
+
+            if (files.Count == 0)
+            {
+                TreeView.AddFolderNode(newFolderPath);
+                TreeView.RefreshListView();
+            }
+        }
+
+        /// <summary>
+        /// Moves files to new paths, after removing the nodes of the folder they are moved out of, or of the files themselves.
+        /// </summary>
+        private void RenameFiles(List<(PackageEntry Entry, string NewPath)> files, VirtualPackageNode? movedFolder)
+        {
+            var package = vrfGuiContext.CurrentPackage!;
+            var renamedEntries = files.Select(static file => file.Entry).ToHashSet();
+
+            foreach (var (_, newPath) in files)
+            {
+                if (package.FindEntry(newPath) is { } existingEntry && !renamedEntries.Contains(existingEntry))
                 {
-                    foreach (var file in fileType.Value)
-                    {
-                        fileCount++;
-                        fileSize += file.TotalLength;
-                    }
+                    _ = AppMessageDialogs.ShowMessageAsync($"\"{existingEntry.GetFullPath()}\" already exists.", "Failed to rename", MessageIcon.Warning);
+                    return;
                 }
             }
 
-            var result = $"Created {Path.GetFileName(fileName)} with {fileCount} files of size {HumanReadableByteSizeFormatter.Format(fileSize)}.";
+            TreeView!.BeginUpdate();
 
-            Log.Info(nameof(PackageViewer), result);
+            if (movedFolder != null)
+            {
+                TreeView.RemoveFolderNode(movedFolder);
+            }
+            else
+            {
+                foreach (var (entry, _) in files)
+                {
+                    TreeView.RemoveFileNode(entry);
+                }
+            }
 
-            _ = AppMessageDialogs.ShowMessageAsync(result, "VPK created");
+            foreach (var (entry, newPath) in files)
+            {
+                package.RenameFile(entry, newPath);
+                TreeView.AddFileNode(entry);
+            }
+
+            TreeView.EndUpdate();
+            TreeView.RefreshListView();
+
+            if (files.Count > 0)
+            {
+                HasUnsavedChanges = true;
+            }
+        }
+
+        /// <summary>
+        /// Forgets the changes, so closing the package does not ask to save them.
+        /// </summary>
+        public void DiscardChanges() => HasUnsavedChanges = false;
+
+        /// <summary>
+        /// Writes the package to a file.
+        /// </summary>
+        /// <exception cref="InvalidOperationException">The files add up to more than a single file package can hold.</exception>
+        public void WritePackage(string path)
+        {
+            var package = vrfGuiContext.CurrentPackage ?? throw new InvalidOperationException("There is no package to write.");
+            var totalSize = package.Entries?.Values.Sum(static entries => entries.Sum(static entry => (long)entry.TotalLength)) ?? 0;
+
+            if (totalSize > int.MaxValue)
+            {
+                throw new InvalidOperationException("The files add up to more than 2 GiB, which does not fit into a single VPK. Use the CLI with --vpk_create_chunk_size to split it into chunk files.");
+            }
+
+            package.Write(path);
         }
 
         internal static List<PackageEntry> RecoverDeletedFiles(Package package, GenericProgressForm progress)
@@ -552,7 +681,7 @@ namespace GUI.Types.PackageViewer
                 treeViewWithSearch.PreviewBlurred -= VPK_PreviewBlurred;
                 treeViewWithSearch.Disposed -= VPK_Disposed;
                 TreeView = null;
-                LastContextTreeNode = null;
+                ContextFolder = null;
             }
         }
 
@@ -602,9 +731,7 @@ namespace GUI.Types.PackageViewer
         /// <summary>
         /// Folder the context menu was opened on, files are added into it.
         /// </summary>
-        private VirtualPackageNode GetContextFolder() => LastContextTreeNode?.PkgNode ?? VirtualRoot!;
-
-        private string? GetFileOnDisk() => Path.IsPathRooted(vrfGuiContext.FileName) ? Path.GetFullPath(vrfGuiContext.FileName) : null;
+        private VirtualPackageNode GetContextFolder() => ContextFolder ?? VirtualRoot!;
 
         private static string GetFolderPath(VirtualPackageNode folder)
         {
@@ -641,25 +768,22 @@ namespace GUI.Types.PackageViewer
                 isFolder = e.TreeNode.IsFolder;
             }
 
-            if (IsEditingPackage)
+            if (sender is not Control control)
             {
-                if (e.TreeNode != null)
-                {
-                    LastContextTreeNode = e.TreeNode;
-
-                    if (sender is Control control)
-                    {
-                        Program.MainForm.ShowVpkEditingContextMenu(control, e.Location, isRoot, isFolder);
-                    }
-                }
-
                 return;
             }
 
-            if (sender is Control senderControl)
+            if (IsEditingPackage)
             {
-                Program.MainForm.ShowVpkContextMenu(senderControl, e.Location, isRoot, isFolder, TreeView.DeletedFilesRecovered);
+                ContextFolder = e.PkgNode
+                    ?? (e.TreeNode?.Parent as BetterTreeNode)?.PkgNode
+                    ?? (e.PackageEntry != null ? TreeView.FindFolderNode(e.PackageEntry.DirectoryName) : null);
+
+                Program.MainForm.ShowVpkEditingContextMenu(control, e.Location, isRoot, isFolder, hasItem: !e.IsBackground);
+                return;
             }
+
+            Program.MainForm.ShowVpkContextMenu(control, e.Location, isRoot, isFolder, TreeView.DeletedFilesRecovered, CanEdit);
         }
 
         public void Dispose()

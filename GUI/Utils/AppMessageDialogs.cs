@@ -19,6 +19,13 @@ public enum ConfirmButtons
     YesNo
 }
 
+public enum SaveChangesChoice
+{
+    Save,
+    DontSave,
+    Cancel
+}
+
 public static class AppMessageDialogs
 {
     public static Task ShowMessageAsync(string message, string title, MessageIcon icon = MessageIcon.Info)
@@ -32,6 +39,18 @@ public static class AppMessageDialogs
         var winButtons = buttons == ConfirmButtons.YesNo ? MessageBoxButtons.YesNo : MessageBoxButtons.OKCancel;
         var result = MessageBox.Show(message, title, winButtons, ToWinForms(icon));
         return Task.FromResult(result is DialogResult.OK or DialogResult.Yes);
+    }
+
+    public static SaveChangesChoice AskToSaveChanges(string message, string title)
+    {
+        var result = MessageBox.Show(message, title, MessageBoxButtons.YesNoCancel, MessageBoxIcon.Warning);
+
+        return result switch
+        {
+            DialogResult.Yes => SaveChangesChoice.Save,
+            DialogResult.No => SaveChangesChoice.DontSave,
+            _ => SaveChangesChoice.Cancel,
+        };
     }
 
     private static MessageBoxIcon ToWinForms(MessageIcon icon) => icon switch

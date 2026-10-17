@@ -140,6 +140,13 @@ namespace GUI.Utils
         private bool Disposed;
         private readonly ConcurrentDictionary<string, Resource> CachedResources = [];
         private readonly ConcurrentQueue<RendererContext> rendererContexts = [];
+        private readonly TaskCompletionSource disposalCompleted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>
+        /// Completes once this context is disposed and has closed its package and the resources loaded through it.
+        /// Disposing is deferred while contexts opened from this one are still open.
+        /// </summary>
+        public Task DisposalCompleted => disposalCompleted.Task;
 
 #if DEBUG
         private int TotalChildren;
@@ -306,25 +313,32 @@ namespace GUI.Utils
             // The wait cannot happen on the thread that closed the tab, so the teardown follows it here
             Task.Run(() =>
             {
-                foreach (var context in rendererContexts)
+                try
                 {
-                    context.WaitForLoadingToStop();
-                }
+                    foreach (var context in rendererContexts)
+                    {
+                        context.WaitForLoadingToStop();
+                    }
 
-                if (base.CurrentPackage != null)
+                    if (base.CurrentPackage != null)
+                    {
+                        base.CurrentPackage.Dispose();
+                        base.CurrentPackage = null;
+                    }
+
+                    foreach (var resource in CachedResources.Values)
+                    {
+                        resource.Dispose();
+                    }
+
+                    CachedResources.Clear();
+
+                    base.Dispose(disposing);
+                }
+                finally
                 {
-                    base.CurrentPackage.Dispose();
-                    base.CurrentPackage = null;
+                    disposalCompleted.TrySetResult();
                 }
-
-                foreach (var resource in CachedResources.Values)
-                {
-                    resource.Dispose();
-                }
-
-                CachedResources.Clear();
-
-                base.Dispose(disposing);
             });
         }
 
