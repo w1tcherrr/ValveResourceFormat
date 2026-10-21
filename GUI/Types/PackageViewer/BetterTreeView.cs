@@ -106,6 +106,7 @@ namespace GUI.Types.PackageViewer
         private List<PackageEntry> SearchFileContents(List<PackageEntry> candidates, SearchRequest request)
         {
             byte[] pattern = [];
+            SearchValues<byte>? firstByte = null;
             Regex? regex = null;
 
             if (request.HexBytes)
@@ -115,6 +116,11 @@ namespace GUI.Types.PackageViewer
             else if (request.MatchCase && !request.WholeWord && !request.UseRegex)
             {
                 pattern = Encoding.UTF8.GetBytes(request.Text);
+            }
+            else if (!request.WholeWord && !request.UseRegex && Ascii.IsValid(request.Text))
+            {
+                pattern = Encoding.ASCII.GetBytes(request.Text);
+                firstByte = SearchValues.Create([(byte)char.ToLowerInvariant(request.Text[0]), (byte)char.ToUpperInvariant(request.Text[0])]);
             }
             else
             {
@@ -169,7 +175,7 @@ namespace GUI.Types.PackageViewer
 
                         package.ReadEntry(entry, out var entryData, validateCrc: false);
 
-                        if (regex != null ? IsLatin1Match(regex, entryData) : entryData.AsSpan().IndexOf(pattern) >= 0)
+                        if (regex != null ? IsLatin1Match(regex, entryData) : IndexOf(entryData, pattern, firstByte) >= 0)
                         {
                             results.Add(entry);
                         }
@@ -231,7 +237,7 @@ namespace GUI.Types.PackageViewer
                             using var archive = package.OpenArchiveStream((ushort)archiveIndex);
                             var archiveMatches = regex != null
                                 ? SearchEntriesInArchive(archive, regex, archiveEntries, cancellationToken)
-                                : SearchForContentsInArchive(archive, pattern, archiveEntries, cancellationToken);
+                                : SearchForContentsInArchive(archive, pattern, firstByte, archiveEntries, cancellationToken);
 
                             if (archiveMatches.Count > 0)
                             {
@@ -310,7 +316,44 @@ namespace GUI.Types.PackageViewer
             }
         }
 
-        private static HashSet<PackageEntry> SearchForContentsInArchive(Stream archive, byte[] pattern, List<PackageEntry> archiveEntries, CancellationToken cancellationToken)
+        /// <summary>
+        /// Finds a pattern in data, ignoring ASCII case when <paramref name="firstByte"/> holds both cases of its first byte.
+        /// </summary>
+        private static int IndexOf(ReadOnlySpan<byte> data, byte[] pattern, SearchValues<byte>? firstByte)
+        {
+            if (firstByte == null)
+            {
+                return data.IndexOf(pattern);
+            }
+
+            var offset = 0;
+
+            while (true)
+            {
+                var index = data[offset..].IndexOfAny(firstByte);
+
+                if (index < 0)
+                {
+                    return -1;
+                }
+
+                index += offset;
+
+                if (data.Length - index < pattern.Length)
+                {
+                    return -1;
+                }
+
+                if (Ascii.EqualsIgnoreCase(data.Slice(index, pattern.Length), pattern))
+                {
+                    return index;
+                }
+
+                offset = index + 1;
+            }
+        }
+
+        private static HashSet<PackageEntry> SearchForContentsInArchive(Stream archive, byte[] pattern, SearchValues<byte>? firstByte, List<PackageEntry> archiveEntries, CancellationToken cancellationToken)
         {
             const int BufferSize = 4 * 1024 * 1024;
 
@@ -343,7 +386,7 @@ namespace GUI.Types.PackageViewer
                         }
                     }
 
-                    var match = buffer.AsSpan((int)bufferOffset, bufferLength - (int)bufferOffset).IndexOf(pattern);
+                    var match = IndexOf(buffer.AsSpan((int)bufferOffset, bufferLength - (int)bufferOffset), pattern, firstByte);
 
                     if (match < 0)
                     {

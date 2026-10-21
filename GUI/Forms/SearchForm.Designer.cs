@@ -88,7 +88,7 @@ namespace GUI.Forms
             regexToggle.Size = new System.Drawing.Size(34, 25);
             regexToggle.TabIndex = 3;
             regexToggle.Text = ".*";
-            toolTip.SetToolTip(regexToggle, "Use regular expression");
+            toolTip.SetToolTip(regexToggle, "Use regular expression, ^name$ matches a whole name exactly");
             //
             // hexBytesToggle
             //

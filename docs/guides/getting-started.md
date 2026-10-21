@@ -55,11 +55,12 @@ vpk:steam:730/game/csgo/maps/de_dust2.vpk:maps/de_dust2.vmap_c
 Press <kbd>Ctrl</kbd>+<kbd>F</kbd> to open the search dialog, or right-click a folder and choose **Search in folder**.
 
 - **Search in** picks what the text is matched against: the file name, the full path, or the file contents. Text with a `/` in it always matches the full path.
-- The buttons next to the text box toggle **Match case**, **Match whole word** and **Use regular expression**. They apply to contents too, which are matched byte by byte with the text encoded as UTF-8.
+- The buttons next to the text box toggle **Match case**, **Match whole word** and **Use regular expression**. They apply to contents too, which are matched byte by byte with the text encoded as UTF-8. With a regular expression, `^name$` matches a whole name exactly.
 - **0x** searches the contents for hex bytes such as `56 42 4B 56` instead of text.
 - **Only in** limits the search to the folder selected in the tree and its subfolders.
 - **Extension** limits the search to one file type, listing how many files of each type the package has.
 - **Asset info** limits the search to files with a given searchable user data key, and optionally a value, from the package's tools asset info.
+- Input that can not be searched, such as an invalid regular expression or odd hex digits, is shown in red with the reason below, and **Find** stays disabled until it is fixed.
 
 The text can be left empty to list every file that the filters allow. Results are shown in a list with file name, size, and type columns. The dialog keeps its options until Source 2 Viewer is closed.
 

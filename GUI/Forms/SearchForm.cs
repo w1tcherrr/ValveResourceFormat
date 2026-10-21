@@ -82,6 +82,7 @@ namespace GUI.Forms
             };
 
             var error = GetInputError(request);
+            findTextBox.ForeColor = error == null ? Themer.CurrentThemeColors.Contrast : Themer.CurrentThemeColors.Attention;
             errorLabel.Text = error;
             toolTip.SetToolTip(errorLabel, error);
             findButton.Enabled = error == null;
@@ -120,7 +121,7 @@ namespace GUI.Forms
                 return null;
             }
 
-            if (request is { Target: SearchTarget.Contents, MatchCase: true, WholeWord: false } && Encoding.UTF8.GetByteCount(request.Text) < 3)
+            if (request.Target == SearchTarget.Contents && Encoding.UTF8.GetByteCount(request.Text) < 3)
             {
                 return "Enter at least 3 characters to search file contents.";
             }
