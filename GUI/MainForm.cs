@@ -1069,22 +1069,32 @@ namespace GUI
             var package = mainTabs.SelectedTab.Controls.OfType<TreeViewWithSearchResults>().FirstOrDefault();
             if (package != null)
             {
-                searchForm ??= new();
-                searchForm.SetSearchableUserDataKeys(package.GetSearchDataKeysAsync());
-                var result = searchForm.ShowDialog();
-                if (result == DialogResult.OK)
-                {
-                    var searchText = searchForm.SearchText;
-                    var filterKey = searchForm.SelectedFilterKey;
-                    if (!string.IsNullOrEmpty(searchText) || filterKey != null)
-                    {
-                        package.SearchAndFillResults(searchText, searchForm.SelectedSearchType, filterKey, searchForm.SelectedFilterValue);
-                    }
-                }
+                var folder = package.mainTreeView.SelectedNode is BetterTreeNode { PkgNode: { Parent: not null } node } ? node : null;
+                ShowPackageSearch(package, folder, onlyInFolder: false);
                 return;
             }
 
             mainTabs.SelectedTab.Controls.OfType<ExplorerControl>().FirstOrDefault()?.FocusFilter();
+        }
+
+        private void ShowPackageSearch(TreeViewWithSearchResults package, VirtualPackageNode? folder, bool onlyInFolder)
+        {
+            searchForm ??= new();
+            searchForm.SetSearchableUserDataKeys(package.GetSearchDataKeysAsync());
+            searchForm.SetExtensions(package.mainTreeView.VrfGuiContext?.CurrentPackage?.Entries);
+            searchForm.SetFolder(folder, onlyInFolder);
+
+            if (searchForm.ShowDialog() != DialogResult.OK)
+            {
+                return;
+            }
+
+            var request = searchForm.Request;
+
+            if (request is not { Text: "", Folder: null, Extension: null, FilterKey: null })
+            {
+                package.SearchAndFillResults(request);
+            }
         }
 
         private static CodeTextBox? FindCodeTextBoxInControl(Control container)

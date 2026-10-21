@@ -1,7 +1,9 @@
 using System.Globalization;
 using System.Linq;
 using System.Threading.Tasks;
+using GUI.Types.PackageViewer;
 using GUI.Utils;
+using ValvePak;
 
 namespace GUI.Forms
 {
@@ -15,50 +17,98 @@ namespace GUI.Forms
             public override string ToString() => Key;
         }
 
+        private record ExtensionEntry(string Extension, int Count)
+        {
+            public override string ToString() => string.Create(CultureInfo.InvariantCulture, $"{(Extension == " " ? "(no extension)" : Extension)} ({Count})");
+        }
+
         private readonly TaskScheduler uiTaskScheduler;
         private int filterLoadVersion;
         private int lastPopulatedKeysHash;
+        private VirtualPackageNode? folder;
+
+        private SearchTarget SelectedTarget => contentsRadioButton.Checked ? SearchTarget.Contents : pathRadioButton.Checked ? SearchTarget.Path : SearchTarget.Name;
 
         /// <summary>
-        /// Gets whatever text was entered by the user in the search textbox.
+        /// Gets the search as entered in the dialog.
         /// </summary>
-        public string SearchText
-        {
-            get => findTextBox.Text;
-            set => findTextBox.Text = value;
-        }
-
-        /// <summary>
-        /// Gets whatever option was selected by the user in the search type combobox.
-        /// </summary>
-        public SearchType SelectedSearchType => searchTypeComboBox.SelectedItem is SearchTypeItem item ? item.Type : SearchType.FileNamePartialMatch;
-
-        /// <summary>
-        /// Gets the selected SearchableUserData filter key, or null if no filter is selected.
-        /// </summary>
-        public string? SelectedFilterKey => filterKeyComboBox.SelectedItem is FilterKeyEntry entry ? entry.Key : null;
-
-        /// <summary>
-        /// Gets the selected SearchableUserData filter value, or null if any value is accepted.
-        /// </summary>
-        public string? SelectedFilterValue => filterValueComboBox.SelectedIndex > 0 ? filterValueComboBox.Items[filterValueComboBox.SelectedIndex] as string : null;
+        public SearchRequest Request => new(
+            findTextBox.Text,
+            SelectedTarget,
+            matchCaseToggle.Checked,
+            wholeWordToggle.Checked,
+            regexToggle.Checked,
+            hexBytesToggle.Checked && SelectedTarget == SearchTarget.Contents,
+            onlyInFolderCheckBox.Checked ? folder : null,
+            (extensionComboBox.SelectedItem as ExtensionEntry)?.Extension,
+            (filterKeyComboBox.SelectedItem as FilterKeyEntry)?.Key,
+            filterValueComboBox.SelectedIndex > 0 ? filterValueComboBox.SelectedItem as string : null);
 
         public SearchForm()
         {
             InitializeComponent();
             uiTaskScheduler = TaskScheduler.FromCurrentSynchronizationContext();
 
-            searchTypeComboBox.ValueMember = "Id";
-            searchTypeComboBox.DisplayMember = "Name";
-            searchTypeComboBox.Items.Add(new SearchTypeItem("File Name (Partial Match)", SearchType.FileNamePartialMatch));
-            searchTypeComboBox.Items.Add(new SearchTypeItem("File Name (Exact Match)", SearchType.FileNameExactMatch));
-            searchTypeComboBox.Items.Add(new SearchTypeItem("File Full Path", SearchType.FullPath));
-            searchTypeComboBox.Items.Add(new SearchTypeItem("Regex", SearchType.Regex));
-            searchTypeComboBox.Items.Add(new SearchTypeItem("File Contents (Case Sensitive)", SearchType.FileContents));
-            searchTypeComboBox.Items.Add(new SearchTypeItem("File Contents Hex Bytes", SearchType.FileContentsHex));
-            searchTypeComboBox.SelectedIndex = 0;
-
             filterKeyComboBox.SelectedIndexChanged += FilterKeyComboBox_SelectedIndexChanged;
+            contentsRadioButton.CheckedChanged += (_, _) => UpdateTextOptions();
+            hexBytesToggle.Toggled += _ => UpdateTextOptions();
+
+            UpdateTextOptions();
+        }
+
+        private void UpdateTextOptions()
+        {
+            hexBytesToggle.Enabled = contentsRadioButton.Checked;
+
+            var isText = !(hexBytesToggle.Enabled && hexBytesToggle.Checked);
+            matchCaseToggle.Enabled = isText;
+            wholeWordToggle.Enabled = isText;
+            regexToggle.Enabled = isText;
+        }
+
+        /// <summary>
+        /// Lists the extensions of the files in the package, keeping the selected one if the package has it.
+        /// </summary>
+        public void SetExtensions(Dictionary<string, List<PackageEntry>>? entries)
+        {
+            var selected = (extensionComboBox.SelectedItem as ExtensionEntry)?.Extension;
+
+            extensionComboBox.BeginUpdate();
+            extensionComboBox.Items.Clear();
+            extensionComboBox.Items.Add("(All)");
+            extensionComboBox.SelectedIndex = 0;
+
+            if (entries != null)
+            {
+                foreach (var (extension, files) in entries.OrderBy(static entry => entry.Key, NumericComparer))
+                {
+                    var index = extensionComboBox.Items.Add(new ExtensionEntry(extension, files.Count));
+
+                    if (extension == selected)
+                    {
+                        extensionComboBox.SelectedIndex = index;
+                    }
+                }
+            }
+
+            extensionComboBox.EndUpdate();
+        }
+
+        /// <summary>
+        /// Sets the folder that "Only in" limits the search to, or <see langword="null"/> when no folder is selected.
+        /// </summary>
+        /// <param name="searchFolder">The folder.</param>
+        /// <param name="onlyInFolder">Whether to tick "Only in", otherwise it stays as it was last used.</param>
+        public void SetFolder(VirtualPackageNode? searchFolder, bool onlyInFolder)
+        {
+            folder = searchFolder;
+            onlyInFolderCheckBox.Enabled = folder != null;
+            onlyInFolderCheckBox.Text = folder != null ? $"Only in {PackageViewer.GetFolderPath(folder)}" : "Only in selected folder";
+
+            if (onlyInFolder)
+            {
+                onlyInFolderCheckBox.Checked = true;
+            }
         }
 
         /// <summary>
@@ -174,6 +224,7 @@ namespace GUI.Forms
         private void SearchForm_Load(object sender, EventArgs e)
         {
             ActiveControl = findTextBox;
+            findTextBox.SelectAll();
         }
     }
 }

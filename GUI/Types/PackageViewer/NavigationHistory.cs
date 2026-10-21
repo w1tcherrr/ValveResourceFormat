@@ -1,8 +1,30 @@
-using GUI.Forms;
-
 namespace GUI.Types.PackageViewer
 {
-    internal readonly record struct SearchRequest(string Text, SearchType Type, string? FilterKey, string? FilterValue);
+    internal enum SearchTarget
+    {
+        Name,
+        Path,
+        Contents,
+    }
+
+    /// <summary>
+    /// A package search: what to match, how to match it, and which files to look at.
+    /// </summary>
+    /// <param name="Folder">Folder whose subtree is searched, or <see langword="null"/> for the whole package.</param>
+    /// <param name="Extension">File extension that matching files must have, or <see langword="null"/> for any.</param>
+    /// <param name="FilterKey">Searchable user data key that matching files must contain.</param>
+    /// <param name="FilterValue">Value the filter key must equal; when <see langword="null"/>, any value for the key matches.</param>
+    internal readonly record struct SearchRequest(
+        string Text,
+        SearchTarget Target,
+        bool MatchCase,
+        bool WholeWord,
+        bool UseRegex,
+        bool HexBytes,
+        VirtualPackageNode? Folder,
+        string? Extension,
+        string? FilterKey,
+        string? FilterValue);
 
     /// <summary>
     /// A single back/forward history location: either a folder node or a search.

@@ -32,105 +32,107 @@ namespace GUI.Types.PackageViewer
         }
 
         /// <summary>
-        /// Performs a depth-first search on the tree's nodes in search of the passed value. The matching conditions are based on the passed search type parameter.
+        /// Finds the files in the searched folder and its subfolders that match a search.
         /// </summary>
-        /// <param name="value">Value to search for in the TreeView. Matching on this value is based on the search type.</param>
-        /// <param name="searchType">Determines the matching of the value. For example, full/partial text search or full path search.</param>
-        /// <returns>A collection of package entries that match the conditions based on the search type.</returns>
-        public List<PackageEntry> Search(string value, SearchType searchType)
+        public List<PackageEntry> Search(SearchRequest request)
         {
-            var results = new List<PackageEntry>();
+            var candidates = new List<PackageEntry>();
 
-            if (Root == null)
+            if ((request.Folder ?? Root) is { } folder)
             {
-                return results;
-            }
-
-            if (searchType == SearchType.FileNamePartialMatch || searchType == SearchType.FullPath)
-            {
-                value = value.Replace('\\', Package.DirectorySeparatorChar);
+                CollectFiles(folder, request.Extension, candidates);
             }
 
-            // If only file name search is selected, but entered text contains a slash, search full path
-            if (searchType == SearchType.FileNamePartialMatch && value.Contains(Package.DirectorySeparatorChar, StringComparison.Ordinal))
+            if (request.Text.Length == 0)
             {
-                searchType = SearchType.FullPath;
+                return candidates;
             }
 
-            if (searchType == SearchType.FileNameExactMatch)
+            if (request.Target == SearchTarget.Contents)
             {
-                bool MatchFunction(PackageEntry entry) => entry.GetFileName().Equals(value, StringComparison.OrdinalIgnoreCase);
-                Search(Root, results, MatchFunction);
-            }
-            else if (searchType == SearchType.FileNamePartialMatch)
-            {
-                bool MatchFunction(PackageEntry entry) => entry.GetFileName().Contains(value, StringComparison.OrdinalIgnoreCase);
-                Search(Root, results, MatchFunction);
-            }
-            else if (searchType == SearchType.FullPath)
-            {
-                bool MatchFunction(PackageEntry entry) => entry.GetFullPath().Contains(value, StringComparison.OrdinalIgnoreCase);
-                Search(Root, results, MatchFunction);
-            }
-            else if (searchType == SearchType.Regex)
-            {
-                var regex = new Regex(value, RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
-
-                bool MatchFunction(PackageEntry entry) => regex.IsMatch(entry.GetFileName());
-                Search(Root, results, MatchFunction);
-            }
-            else if (searchType == SearchType.FileContents)
-            {
-                SearchFileContents(results, Encoding.UTF8.GetBytes(value));
-            }
-            else if (searchType == SearchType.FileContentsHex)
-            {
-                // TODO: Optimize this
-                value = value.Replace(" ", "", StringComparison.Ordinal);
-
-                var bytes = Enumerable.Range(0, value.Length)
-                     .Where(x => x % 2 == 0)
-                     .Select(x => Convert.ToByte(value.Substring(x, 2), 16))
-                     .ToArray();
-
-                SearchFileContents(results, bytes);
+                return SearchFileContents(candidates, request);
             }
 
-            return results;
+            var text = request.UseRegex ? request.Text : request.Text.Replace('\\', Package.DirectorySeparatorChar);
+
+            // A file name can not contain a slash, so such text is matched against the full path
+            var matchPath = request.Target == SearchTarget.Path || (!request.UseRegex && text.Contains(Package.DirectorySeparatorChar, StringComparison.Ordinal));
+
+            Func<string, bool> isMatch;
+
+            if (request.UseRegex || request.WholeWord)
+            {
+                isMatch = CreateRegex(request.UseRegex ? text : Regex.Escape(text), request).IsMatch;
+            }
+            else
+            {
+                var comparison = request.MatchCase ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+                isMatch = value => value.Contains(text, comparison);
+            }
+
+            candidates.RemoveAll(entry => !isMatch(matchPath ? entry.GetFullPath() : entry.GetFileName()));
+
+            return candidates;
         }
 
-        /// <summary>
-        /// Performs a depth-first search on the virtual package node tree, adding entries for which the match function returns true. The matching conditions are based on the passed function.
-        /// </summary>
-        /// <param name="node">Node whose subtree is searched.</param>
-        /// <param name="results">List that receives the matching entries.</param>
-        /// <param name="matchFunction">Function which performs matching on each PackageEntry. Returns true if there's a match.</param>
-        private static void Search(VirtualPackageNode node, List<PackageEntry> results, Func<PackageEntry, bool> matchFunction)
+        private static Regex CreateRegex(string pattern, SearchRequest request)
+        {
+            if (request.WholeWord)
+            {
+                pattern = string.Concat(@"(?<!\w)(?:", pattern, @")(?!\w)");
+            }
+
+            var options = request.MatchCase ? RegexOptions.CultureInvariant : RegexOptions.CultureInvariant | RegexOptions.IgnoreCase;
+
+            return new Regex(pattern, options);
+        }
+
+        private static void CollectFiles(VirtualPackageNode node, string? extension, List<PackageEntry> files)
         {
             foreach (var entry in node.Files)
             {
-                if (matchFunction(entry))
+                if (extension == null || entry.TypeName == extension)
                 {
-                    results.Add(entry);
+                    files.Add(entry);
                 }
             }
 
-            foreach (var folder in node.Folders)
+            foreach (var folder in node.Folders.Values)
             {
-                Search(folder.Value, results, matchFunction);
+                CollectFiles(folder, extension, files);
             }
         }
 
-        private void SearchFileContents(List<PackageEntry> results, byte[] pattern)
+        private List<PackageEntry> SearchFileContents(List<PackageEntry> candidates, SearchRequest request)
         {
-            if (pattern.Length < 3)
+            byte[] pattern = [];
+            Regex? regex = null;
+
+            if (request.HexBytes)
             {
-                throw new ArgumentException("Search input is too short.", nameof(pattern));
+                pattern = Convert.FromHexString(request.Text.Replace(" ", "", StringComparison.Ordinal));
             }
+            else if (request.MatchCase && !request.WholeWord && !request.UseRegex)
+            {
+                pattern = Encoding.UTF8.GetBytes(request.Text);
+            }
+            else
+            {
+                // Contents are matched as Latin1, one character per byte, so the text becomes the characters of its UTF-8 bytes
+                var text = Encoding.Latin1.GetString(Encoding.UTF8.GetBytes(request.Text));
+                regex = CreateRegex(request.UseRegex ? text : Regex.Escape(text), request);
+            }
+
+            if (regex == null && pattern.Length < 3)
+            {
+                throw new ArgumentException("Search input is too short.", nameof(request));
+            }
+
+            var results = new List<PackageEntry>();
 
             if (VrfGuiContext?.CurrentPackage is not { } package)
             {
-                return;
+                return results;
             }
 
             using var progressDialog = new GenericProgressForm
@@ -146,7 +148,7 @@ namespace GUI.Types.PackageViewer
                 var sortedEntriesPerArchive = new Dictionary<int, List<PackageEntry>>();
                 var unreadableEntries = 0;
 
-                foreach (var entry in package.Entries?.Values.SelectMany(static entries => entries) ?? [])
+                foreach (var entry in candidates)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
 
@@ -167,7 +169,7 @@ namespace GUI.Types.PackageViewer
 
                         package.ReadEntry(entry, out var entryData, validateCrc: false);
 
-                        if (entryData.AsSpan().IndexOf(pattern) >= 0)
+                        if (regex != null ? IsLatin1Match(regex, entryData) : entryData.AsSpan().IndexOf(pattern) >= 0)
                         {
                             results.Add(entry);
                         }
@@ -227,7 +229,9 @@ namespace GUI.Types.PackageViewer
                             }
 
                             using var archive = package.OpenArchiveStream((ushort)archiveIndex);
-                            var archiveMatches = SearchForContentsInArchive(archive, pattern, archiveEntries, cancellationToken);
+                            var archiveMatches = regex != null
+                                ? SearchEntriesInArchive(archive, regex, archiveEntries, cancellationToken)
+                                : SearchForContentsInArchive(archive, pattern, archiveEntries, cancellationToken);
 
                             if (archiveMatches.Count > 0)
                             {
@@ -256,6 +260,54 @@ namespace GUI.Types.PackageViewer
                 return Task.CompletedTask;
             };
             progressDialog.ShowDialog();
+
+            return results;
+        }
+
+        private static HashSet<PackageEntry> SearchEntriesInArchive(Stream archive, Regex regex, List<PackageEntry> archiveEntries, CancellationToken cancellationToken)
+        {
+            var matches = new HashSet<PackageEntry>();
+
+            foreach (var entry in archiveEntries)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var length = (int)entry.Length;
+                var buffer = ArrayPool<byte>.Shared.Rent(length);
+
+                try
+                {
+                    archive.Position = entry.Offset;
+                    archive.ReadExactly(buffer, 0, length);
+
+                    if (IsLatin1Match(regex, buffer.AsSpan(0, length)))
+                    {
+                        matches.Add(entry);
+                    }
+                }
+                finally
+                {
+                    ArrayPool<byte>.Shared.Return(buffer);
+                }
+            }
+
+            return matches;
+        }
+
+        private static bool IsLatin1Match(Regex regex, ReadOnlySpan<byte> data)
+        {
+            var chars = ArrayPool<char>.Shared.Rent(data.Length);
+
+            try
+            {
+                var length = Encoding.Latin1.GetChars(data, chars);
+
+                return regex.IsMatch(chars.AsSpan(0, length));
+            }
+            finally
+            {
+                ArrayPool<char>.Shared.Return(chars);
+            }
         }
 
         private static HashSet<PackageEntry> SearchForContentsInArchive(Stream archive, byte[] pattern, List<PackageEntry> archiveEntries, CancellationToken cancellationToken)

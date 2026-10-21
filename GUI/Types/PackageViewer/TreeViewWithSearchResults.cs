@@ -1412,17 +1412,10 @@ namespace GUI.Types.PackageViewer
         }
 
         /// <summary>
-        /// Performs a search for the entered text and search types. Before a search is performed, the contents of the ListView (previous search results) are cleared.
-        /// Results of whatever search function is used are displayed in the ListView with name, file size, and file type.
+        /// Performs a search and displays the matching files in the ListView with name, file size, and file type, replacing what it showed before.
         /// </summary>
-        /// <param name="searchText">Value to search for in the TreeView. Matching on this value is based on the search type.</param>
-        /// <param name="selectedSearchType">Determines the matching of the value. For example, full/partial text search or full path search.</param>
-        /// <param name="filterKey">Optional <see cref="ValveResourceFormat.ToolsAssetInfo.ToolsAssetInfo.File.SearchableUserData"/> key that matching files must contain.</param>
-        /// <param name="filterValue">Optional value the filter key must equal; when <see langword="null"/>, any value for the key matches.</param>
-        internal void SearchAndFillResults(string searchText, SearchType selectedSearchType, string? filterKey = null, string? filterValue = null)
+        internal void SearchAndFillResults(SearchRequest request)
         {
-            var request = new SearchRequest(searchText, selectedSearchType, filterKey, filterValue);
-
             suppressHistoryRecording = true;
 
             try
@@ -1439,7 +1432,7 @@ namespace GUI.Types.PackageViewer
 
         private void PerformSearch(SearchRequest request)
         {
-            var results = mainTreeView.Search(request.Text, request.Type);
+            var results = mainTreeView.Search(request);
 
             if (request.FilterKey != null && AssetSearchData != null)
             {
