@@ -55,6 +55,8 @@ namespace GUI
             InitializeComponent();
             LoadIcons();
 
+            mainTabs.ConfirmClose = ConfirmCloseTab;
+
             // Let the explorer start scanning games before the window even spawns
             if (args.Length == 0 && (Settings.IsFirstStartup || Settings.Config.OpenExplorerOnStart != 0))
             {
@@ -392,6 +394,12 @@ namespace GUI
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
+            if (!ConfirmCloseApp())
+            {
+                e.Cancel = true;
+                return;
+            }
+
 #if !SCREENSHOT_MODE
             var placement = new WINDOWPLACEMENT
             {
@@ -448,8 +456,23 @@ namespace GUI
                 CloseAndReOpenActiveTab();
             }
 
+            if (keyData == (Keys.Control | Keys.S) && mainTabs.SelectedTab is { } selectedTab && PackageViewer.FromTab(selectedTab) is { IsEditingPackage: true } editor)
+            {
+                if (!IsKeyRepeat(msg) && (editor.HasUnsavedChanges || editor.FileOnDisk == null))
+                {
+                    OnSaveVPKToDiskToolStripMenuItem_Click(this, EventArgs.Empty);
+                }
+
+                return true;
+            }
+
             return base.ProcessCmdKey(ref msg, keyData);
         }
+
+        /// <summary>
+        /// Whether a key down message comes from holding the key, rather than from pressing it.
+        /// </summary>
+        private static bool IsKeyRepeat(Message msg) => ((long)msg.LParam & (1 << 30)) != 0;
 
         private void OnMainSelectedTabChanged(object? sender, EventArgs e)
         {
@@ -535,46 +558,36 @@ namespace GUI
         {
             mainTabs.SelectedIndex = 0;
 
-            //Close all tabs currently open (excluding console)
-            var tabCount = mainTabs.TabPages.Count;
-            for (var i = 1; i < tabCount; i++)
-            {
-                mainTabs.CloseTab(mainTabs.TabPages[tabCount - i]);
-            }
+            CloseTabs(mainTabs.TabPages.Cast<TabPage>().Skip(1));
         }
 
         private void CloseOtherTabs(TabPage basePage)
         {
-            for (var i = mainTabs.TabPages.Count - 1; i > 0; i--)
-            {
-                if (mainTabs.TabPages[i] != basePage)
-                {
-                    mainTabs.CloseTab(mainTabs.TabPages[i]);
-                }
-            }
+            CloseTabs(mainTabs.TabPages.Cast<TabPage>().Skip(1).Where(tab => tab != basePage));
         }
 
         private void CloseTabsToLeft(TabPage basePage)
         {
-            //Close all tabs to the left of the base (excluding console)
-            for (var i = mainTabs.GetTabIndex(basePage) - 1; i > 0; i--)
-            {
-                mainTabs.CloseTab(mainTabs.TabPages[i]);
-            }
+            CloseTabs(mainTabs.TabPages.Cast<TabPage>().Take(mainTabs.GetTabIndex(basePage)).Skip(1));
         }
 
         private void CloseTabsToRight(TabPage basePage)
         {
-            //Close all tabs to the right of the base one
-            var tabCount = mainTabs.TabPages.Count;
-            for (var i = 1; i < tabCount; i++)
+            CloseTabs(mainTabs.TabPages.Cast<TabPage>().Skip(mainTabs.GetTabIndex(basePage) + 1));
+        }
+
+        /// <summary>
+        /// Closes the tabs from the last one, skipping tabs that closing an earlier one already closed.
+        /// Stops at the first tab whose closing is cancelled.
+        /// </summary>
+        private void CloseTabs(IEnumerable<TabPage> tabs)
+        {
+            foreach (var tab in tabs.Reverse().ToList())
             {
-                if (mainTabs.TabPages[tabCount - i] == basePage)
+                if (!mainTabs.CloseTab(tab))
                 {
                     break;
                 }
-
-                mainTabs.CloseTab(mainTabs.TabPages[tabCount - i]);
             }
         }
 
@@ -836,6 +849,8 @@ namespace GUI
 
                 return Types.Viewers.ViewerFactory.CreateAndLoadAsync(vrfGuiContext, file, viewMode);
             });
+
+            vrfGuiContext.DisposeAfter(taskLoad.ContinueWith(static _ => { }, TaskScheduler.Default));
 
             taskLoad.ContinueWith(t =>
             {
