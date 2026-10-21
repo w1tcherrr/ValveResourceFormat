@@ -1,5 +1,7 @@
 using System.Globalization;
 using System.Linq;
+using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using GUI.Types.PackageViewer;
 using GUI.Utils;
@@ -50,20 +52,80 @@ namespace GUI.Forms
             uiTaskScheduler = TaskScheduler.FromCurrentSynchronizationContext();
 
             filterKeyComboBox.SelectedIndexChanged += FilterKeyComboBox_SelectedIndexChanged;
-            contentsRadioButton.CheckedChanged += (_, _) => UpdateTextOptions();
-            hexBytesToggle.Toggled += _ => UpdateTextOptions();
+            findTextBox.TextChanged += (_, _) => UpdateState();
+            nameRadioButton.CheckedChanged += (_, _) => UpdateState();
+            pathRadioButton.CheckedChanged += (_, _) => UpdateState();
+            contentsRadioButton.CheckedChanged += (_, _) => UpdateState();
+            matchCaseToggle.Toggled += _ => UpdateState();
+            wholeWordToggle.Toggled += _ => UpdateState();
+            regexToggle.Toggled += _ => UpdateState();
+            hexBytesToggle.Toggled += _ => UpdateState();
 
-            UpdateTextOptions();
+            UpdateState();
         }
 
-        private void UpdateTextOptions()
+        private void UpdateState()
         {
             hexBytesToggle.Enabled = contentsRadioButton.Checked;
 
-            var isText = !(hexBytesToggle.Enabled && hexBytesToggle.Checked);
-            matchCaseToggle.Enabled = isText;
-            wholeWordToggle.Enabled = isText;
-            regexToggle.Enabled = isText;
+            var request = Request;
+            matchCaseToggle.Enabled = !request.HexBytes;
+            wholeWordToggle.Enabled = !request.HexBytes;
+            regexToggle.Enabled = !request.HexBytes;
+
+            findTextBox.PlaceholderText = request switch
+            {
+                { HexBytes: true } => "Hex bytes, such as 56 42 4B 56",
+                { Target: SearchTarget.Contents } => "Text in file contents",
+                { Target: SearchTarget.Path } => "Path, such as materials/dev",
+                _ => "File name",
+            };
+
+            var error = GetInputError(request);
+            errorLabel.Text = error;
+            toolTip.SetToolTip(errorLabel, error);
+            findButton.Enabled = error == null;
+        }
+
+        private static string? GetInputError(SearchRequest request)
+        {
+            if (request.Text.Length == 0)
+            {
+                return null;
+            }
+
+            if (request.HexBytes)
+            {
+                try
+                {
+                    return Convert.FromHexString(request.Text.Replace(" ", "", StringComparison.Ordinal)).Length < 3 ? "Enter at least 3 bytes." : null;
+                }
+                catch (FormatException)
+                {
+                    return "Enter pairs of hex digits, such as 56 42 4B 56.";
+                }
+            }
+
+            if (request.UseRegex)
+            {
+                try
+                {
+                    _ = new Regex(request.Text);
+                }
+                catch (ArgumentException e)
+                {
+                    return e.Message;
+                }
+
+                return null;
+            }
+
+            if (request is { Target: SearchTarget.Contents, MatchCase: true, WholeWord: false } && Encoding.UTF8.GetByteCount(request.Text) < 3)
+            {
+                return "Enter at least 3 characters to search file contents.";
+            }
+
+            return null;
         }
 
         /// <summary>
@@ -214,6 +276,7 @@ namespace GUI.Forms
             base.OnCreateControl();
 
             findTextBox.BackColor = Themer.CurrentThemeColors.AppMiddle;
+            errorLabel.ForeColor = Themer.CurrentThemeColors.Attention;
         }
 
         /// <summary>

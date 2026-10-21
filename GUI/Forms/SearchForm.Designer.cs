@@ -46,6 +46,7 @@ namespace GUI.Forms
             filterKeyLabel = new System.Windows.Forms.Label();
             filterKeyComboBox = new ThemedComboBox();
             filterValueComboBox = new ThemedComboBox();
+            errorLabel = new System.Windows.Forms.Label();
             findButton = new ThemedButton();
             cancelButton = new ThemedButton();
             toolTip = new System.Windows.Forms.ToolTip(components);
@@ -192,6 +193,14 @@ namespace GUI.Forms
             filterValueComboBox.TabIndex = 14;
             filterValueComboBox.Visible = false;
             //
+            // errorLabel
+            //
+            errorLabel.AutoEllipsis = true;
+            errorLabel.Location = new System.Drawing.Point(13, 222);
+            errorLabel.Name = "errorLabel";
+            errorLabel.Size = new System.Drawing.Size(272, 38);
+            errorLabel.TabIndex = 15;
+            //
             // findButton
             //
             findButton.DialogResult = System.Windows.Forms.DialogResult.OK;
@@ -199,7 +208,7 @@ namespace GUI.Forms
             findButton.Margin = new System.Windows.Forms.Padding(4, 3, 4, 3);
             findButton.Name = "findButton";
             findButton.Size = new System.Drawing.Size(88, 31);
-            findButton.TabIndex = 15;
+            findButton.TabIndex = 16;
             findButton.Text = "Find";
             //
             // cancelButton
@@ -209,7 +218,7 @@ namespace GUI.Forms
             cancelButton.Margin = new System.Windows.Forms.Padding(4, 3, 4, 3);
             cancelButton.Name = "cancelButton";
             cancelButton.Size = new System.Drawing.Size(88, 31);
-            cancelButton.TabIndex = 16;
+            cancelButton.TabIndex = 17;
             cancelButton.Text = "Cancel";
             //
             // SearchForm
@@ -234,6 +243,7 @@ namespace GUI.Forms
             Controls.Add(filterKeyLabel);
             Controls.Add(filterKeyComboBox);
             Controls.Add(filterValueComboBox);
+            Controls.Add(errorLabel);
             Controls.Add(findButton);
             Controls.Add(cancelButton);
             Font = new System.Drawing.Font("Segoe UI", 10F);
@@ -267,6 +277,7 @@ namespace GUI.Forms
         private System.Windows.Forms.Label filterKeyLabel;
         private ThemedComboBox filterKeyComboBox;
         private ThemedComboBox filterValueComboBox;
+        private System.Windows.Forms.Label errorLabel;
         private ThemedButton findButton;
         private ThemedButton cancelButton;
         private System.Windows.Forms.ToolTip toolTip;
