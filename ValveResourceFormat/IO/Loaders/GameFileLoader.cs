@@ -345,16 +345,49 @@ namespace ValveResourceFormat.IO
         {
             LoadPendingAddonDependencies();
 
-            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var diskOptions = new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true };
-            IEnumerable<(Package? Package, string? Folder)> locations =
+            return EnumerateFiles(
             [
                 (CurrentPackage, null),
                 .. CurrentMapPackages.Select(static mapPackage => ((Package?)mapPackage.Package, (string?)null)),
                 .. CurrentAddonSearchPaths.Select(static searchPath => (searchPath.Package, searchPath.Folder)),
                 .. CurrentGamePackages.Select(static package => ((Package?)package, (string?)null)),
                 .. CurrentGameSearchPaths.Select(static folder => ((Package?)null, (string?)folder)),
-            ];
+            ], extensions);
+        }
+
+        /// <summary>
+        /// Lists the paths of the files with the given extensions in the game's own packages and folders on disk, which
+        /// <see cref="LoadGameFile"/> loads. A path that is in several locations is listed once.
+        /// </summary>
+        /// <param name="extensions">The extensions without the leading dot, such as <c>vsndevts_c</c>.</param>
+        public IEnumerable<string> EnumerateGameFiles(params string[] extensions) => EnumerateFiles(
+        [
+            .. EnumerateGamePackages().Select(static package => ((Package?)package, (string?)null)),
+            .. CurrentGameSearchPaths.Select(static folder => ((Package?)null, (string?)folder)),
+        ], extensions);
+
+        /// <summary>
+        /// The game packages, with the current package first when it is one of them, as opening a game package does not
+        /// mount it a second time.
+        /// </summary>
+        private IEnumerable<Package> EnumerateGamePackages()
+        {
+            if (CurrentPackage?.FilePath is { } currentPath && Path.GetDirectoryName(Path.GetFullPath(currentPath)) is { } currentFolder
+                && CurrentGameSearchPaths.Any(folder => Path.GetFullPath(folder).TrimEnd(Path.DirectorySeparatorChar).Equals(currentFolder, StringComparison.OrdinalIgnoreCase)))
+            {
+                yield return CurrentPackage;
+            }
+
+            foreach (var package in CurrentGamePackages)
+            {
+                yield return package;
+            }
+        }
+
+        private static IEnumerable<string> EnumerateFiles(IEnumerable<(Package? Package, string? Folder)> locations, string[] extensions)
+        {
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var diskOptions = new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true };
 
             foreach (var (package, folder) in locations)
             {
@@ -503,7 +536,42 @@ namespace ValveResourceFormat.IO
         public virtual Resource? LoadFileCompiled(string file) => LoadFile(string.Concat(file, CompiledFileSuffix));
 
         /// <inheritdoc/>
-        public virtual Resource? LoadFile(string file)
+        public virtual Resource? LoadFile(string file) => ReadFoundFile(file, FindFile(file));
+
+        /// <summary>
+        /// Loads a resource from the game's own packages and folders on disk only, leaving out the current package unless it
+        /// is one of the game's packages, map packages and addons.
+        /// </summary>
+        /// <param name="file">The path of the file.</param>
+        public Resource? LoadGameFile(string file)
+        {
+            foreach (var package in EnumerateGamePackages())
+            {
+                if (package.FindEntry(file) is { } entry)
+                {
+                    return ReadFoundFile(file, (null, package, entry));
+                }
+            }
+
+            return FindFileOnDisk(file) is { } path ? ReadFoundFile(file, (path, null, null)) : null;
+        }
+
+        /// <summary>
+        /// Gets whether a location that <see cref="FindFile"/> returned is one of the game's own packages or folders on disk,
+        /// which <see cref="LoadGameFile"/> loads from.
+        /// </summary>
+        public bool IsGameLocation(Package? package, string? pathOnDisk)
+        {
+            if (package != null)
+            {
+                return EnumerateGamePackages().Contains(package);
+            }
+
+            return pathOnDisk != null && CurrentGameSearchPaths.Any(folder =>
+                Path.GetFullPath(pathOnDisk).StartsWith(Path.GetFullPath(folder).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static Resource? ReadFoundFile(string file, (string? PathOnDisk, Package? Package, PackageEntry? PackageEntry) foundFile)
         {
             var resource = new Resource
             {
@@ -513,8 +581,6 @@ namespace ValveResourceFormat.IO
 
             try
             {
-                var foundFile = FindFile(file);
-
                 if (foundFile.PathOnDisk != null)
                 {
                     resource.Read(foundFile.PathOnDisk);

@@ -321,7 +321,7 @@ public sealed class SoundEventPlayer : IDisposable
     {
         var stopwatch = Stopwatch.StartNew();
 
-        foreach (var soundEventsFile in SoundEventIndex.GetEventFilesInLoadOrder(fileLoader, []))
+        foreach (var soundEventsFile in SoundEventIndex.GetEventFilesInLoadOrder(fileLoader.LoadFile, []))
         {
             cancellationToken.ThrowIfCancellationRequested();
 

@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -68,13 +69,13 @@ namespace ValveResourceFormat.ResourceTypes
         /// Loads sound event files and sound stack files into a new index. The files are loaded in parallel and added in order.
         /// A file that fails to load is logged and left out.
         /// </summary>
-        /// <param name="fileLoader">Loads each file by its path.</param>
+        /// <param name="loadFile">Loads a file by its path, or returns null when it is not found.</param>
         /// <param name="eventFiles">Paths of the <c>vsndevts_c</c> files in the order the engine loads them, see
         /// <see cref="GetEventFilesInLoadOrder"/>. A later file wins.</param>
         /// <param name="stackFiles">Paths of the <c>vsndstck_c</c> files.</param>
         /// <param name="logger">Logs the files that fail to load.</param>
         /// <param name="cancellationToken">Cancels the load.</param>
-        public static SoundEventIndex Build(IFileLoader fileLoader, IReadOnlyList<string> eventFiles, IReadOnlyList<string> stackFiles,
+        public static SoundEventIndex Build(Func<string, Resource?> loadFile, IReadOnlyList<string> eventFiles, IReadOnlyList<string> stackFiles,
             ILogger? logger = null, CancellationToken cancellationToken = default)
         {
             var events = new IReadOnlyList<(string Name, KVObject Data)>?[eventFiles.Count];
@@ -84,7 +85,7 @@ namespace ValveResourceFormat.ResourceTypes
             {
                 try
                 {
-                    using var resource = fileLoader.LoadFile(eventFiles[i]);
+                    using var resource = loadFile(eventFiles[i]);
                     events[i] = (resource?.DataBlock as SoundEventScript)?.Events;
                 }
                 catch (Exception e)
@@ -109,7 +110,7 @@ namespace ValveResourceFormat.ResourceTypes
 
                 try
                 {
-                    using var resource = fileLoader.LoadFile(stackFile);
+                    using var resource = loadFile(stackFile);
 
                     if (resource != null)
                     {
@@ -125,6 +126,41 @@ namespace ValveResourceFormat.ResourceTypes
             index.IndexReferences();
 
             return index;
+        }
+
+        /// <summary>
+        /// Initializes a new empty instance of the <see cref="SoundEventIndex"/> class.
+        /// </summary>
+        public SoundEventIndex()
+        {
+        }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="SoundEventIndex"/> class with the files, events and stacks of another
+        /// index, so files can be added to it without changing the other.
+        /// </summary>
+        /// <param name="other">The index to copy.</param>
+        /// <param name="shadowedFiles">Files of the other index to leave out, such as the ones that files of the same path
+        /// added later replace.</param>
+        public SoundEventIndex(SoundEventIndex other, IReadOnlySet<string>? shadowedFiles = null)
+        {
+            files.AddRange(shadowedFiles == null ? other.files : other.files.Where(file => !shadowedFiles.Contains(file)));
+            MaxBaseVisits = other.MaxBaseVisits;
+
+            foreach (var (name, list) in other.definitions)
+            {
+                List<(string File, KVObject Data)> kept = shadowedFiles == null ? [.. list] : [.. list.Where(definition => !shadowedFiles.Contains(definition.File))];
+
+                if (kept.Count > 0)
+                {
+                    definitions.Add(name, kept);
+                }
+            }
+
+            foreach (var (name, stack) in other.stacks)
+            {
+                stacks.Add(name, stack);
+            }
         }
 
         /// <summary>
@@ -219,10 +255,10 @@ namespace ValveResourceFormat.ResourceTypes
         /// Lists sound event files in the order the engine loads them: the files of the sound event manifest, including
         /// the manifests it lists, then <see cref="AddonEventsFile"/>, then <paramref name="otherFiles"/> that are not listed yet.
         /// </summary>
-        /// <param name="fileLoader">Loads the manifests.</param>
+        /// <param name="loadFile">Loads a manifest by its compiled path, or returns null when it is not found.</param>
         /// <param name="otherFiles">Further files to load last, such as every sound event file the loader can find.</param>
         /// <returns>The paths, without the compiled <c>_c</c> suffix. The files may not exist.</returns>
-        public static List<string> GetEventFilesInLoadOrder(IFileLoader fileLoader, IEnumerable<string> otherFiles)
+        public static List<string> GetEventFilesInLoadOrder(Func<string, Resource?> loadFile, IEnumerable<string> otherFiles)
         {
             var files = new List<string>();
             var listed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -253,7 +289,7 @@ namespace ValveResourceFormat.ResourceTypes
                     return;
                 }
 
-                using var resource = fileLoader.LoadFileCompiled(manifest);
+                using var resource = loadFile(manifest + GameFileLoader.CompiledFileSuffix);
 
                 if (resource?.DataBlock is not ResourceManifest resourceManifest)
                 {
