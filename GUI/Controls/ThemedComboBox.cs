@@ -1,7 +1,10 @@
 using System.Drawing;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 using GUI.Utils;
 using Windows.Win32;
+using Windows.Win32.Foundation;
+using Windows.Win32.UI.Controls;
 
 namespace GUI.Controls;
 
@@ -79,6 +82,22 @@ public class ThemedComboBox : ComboBox
         }
 
         using var graphics = Graphics.FromHwnd(Handle);
+
+        if (DropDownStyle == ComboBoxStyle.DropDown)
+        {
+            var info = new COMBOBOXINFO { cbSize = (uint)Marshal.SizeOf<COMBOBOXINFO>() };
+
+            if (PInvoke.GetComboBoxInfo((HWND)Handle, ref info))
+            {
+                using var gap = new Region(ClientRectangle);
+                gap.Exclude(Rectangle.FromLTRB(info.rcItem.left, info.rcItem.top, info.rcItem.right, info.rcItem.bottom));
+                gap.Exclude(Rectangle.FromLTRB(info.rcButton.left, info.rcButton.top, info.rcButton.right, info.rcButton.bottom));
+
+                using var gapBrush = new SolidBrush(BackColor);
+                graphics.FillRegion(gapBrush, gap);
+            }
+        }
+
         var borderColor = HasError ? Themer.CurrentThemeColors.Attention
             : ContainsFocus ? Themer.CurrentThemeColors.Accent
             : Themer.CurrentThemeColors.ControlBorder;

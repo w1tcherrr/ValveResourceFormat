@@ -92,7 +92,9 @@ namespace GUI.Forms
             {
                 folderPathLabel.Invalidate();
                 UpdateExtensions();
+                UpdateState();
             };
+            extensionComboBox.SelectedIndexChanged += (_, _) => UpdateState();
 
             UpdateState();
         }
@@ -113,7 +115,12 @@ namespace GUI.Forms
             var (hint, isError, canSearch) = filterError != null ? (filterError, true, false) : GetHint(request);
             hasInputError = isError && filterError == null;
 
-            if (!isError && SelectedFilterKey is { Values.Count: >= TreeViewWithSearchResults.MaxSearchDataValues })
+            if (request is { Text: "", Folder: null, Extension: null, FilterKey: null })
+            {
+                canSearch = false;
+            }
+
+            if (canSearch && SelectedFilterKey is { Values.Count: >= TreeViewWithSearchResults.MaxSearchDataValues } && SelectedFilterValue == null)
             {
                 hint = string.Create(CultureInfo.InvariantCulture, $"First {TreeViewWithSearchResults.MaxSearchDataValues} values listed, type others");
             }
@@ -208,7 +215,7 @@ namespace GUI.Forms
                 (SearchTarget.Contents, false) => "Text in the file contents",
                 (SearchTarget.Path, true) => "A regular expression over the full path, ^path$ matches it exactly",
                 (SearchTarget.Path, false) => "Part of the full path, such as materials/dev",
-                (SearchTarget.Name, false) when request.Text.AsSpan().IndexOfAny('/', '\\') >= 0 => "Has a /, so it matches the full path",
+                (SearchTarget.Name, false) when request.Text.AsSpan().IndexOfAny('/', '\\') >= 0 => "Has a / or \\, so it matches the full path",
                 (_, true) => "A regular expression over the file name, ^name$ matches it exactly",
                 _ => "Part of the file name",
             };

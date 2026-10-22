@@ -278,35 +278,31 @@ namespace GUI.Types.PackageViewer
                         },
                         archiveIndex =>
                         {
+                            HashSet<PackageEntry> archiveMatches = [];
+
                             // Archives that only hold empty entries are never read
-                            if (!sortedEntriesPerArchive.TryGetValue(archiveIndex, out var archiveEntries))
+                            if (sortedEntriesPerArchive.TryGetValue(archiveIndex, out var archiveEntries))
                             {
-                                Interlocked.Increment(ref archivesScanned);
-                                return;
+                                using var archive = package.OpenArchiveStream((ushort)archiveIndex);
+                                archiveMatches = regex != null
+                                    ? SearchEntriesInArchive(archive, regex, archiveEntries, ref skippedEntries, cancellationToken)
+                                    : SearchForContentsInArchive(archive, pattern, firstByte, archiveEntries, cancellationToken);
                             }
 
-                            using var archive = package.OpenArchiveStream((ushort)archiveIndex);
-                            var archiveMatches = regex != null
-                                ? SearchEntriesInArchive(archive, regex, archiveEntries, ref skippedEntries, cancellationToken)
-                                : SearchForContentsInArchive(archive, pattern, firstByte, archiveEntries, cancellationToken);
-
-                            if (archiveMatches.Count > 0)
+                            lock (matches)
                             {
-                                lock (matches)
+                                foreach (var match in archiveMatches)
                                 {
-                                    foreach (var match in archiveMatches)
+                                    if (matches.Add(match))
                                     {
-                                        if (matches.Add(match))
-                                        {
-                                            results.Add(match);
-                                        }
+                                        results.Add(match);
                                     }
                                 }
-                            }
 
-                            var scanned = Interlocked.Increment(ref archivesScanned);
-                            progressDialog.SetBarValue(scanned);
-                            progressDialog.SetProgress(string.Create(CultureInfo.InvariantCulture, $"Searched {scanned:N0} of {maxArchiveIndex + 1:N0} archives, found {results.Count:N0} matches so far"));
+                                archivesScanned++;
+                                progressDialog.SetBarValue(archivesScanned);
+                                progressDialog.SetProgress(string.Create(CultureInfo.InvariantCulture, $"Searched {archivesScanned:N0} of {maxArchiveIndex + 1:N0} archives, found {results.Count:N0} matches so far"));
+                            }
                         }
                     );
                 }

@@ -361,9 +361,15 @@ namespace GUI.Types.PackageViewer
             RestartThumbnailRendering();
             DrainThumbnailQueue();
 
-            ListViewItems.Clear();
-
             DisplayedFolder = pkgNode.Parent != null || pkgNode == mainTreeView.Root ? pkgNode : null;
+
+            if (DisplayedFolder != null)
+            {
+                displayedSearch = null;
+                ShowSearchResultsState(null);
+            }
+
+            ListViewItems.Clear();
 
             if (pkgNode.Parent != null)
             {
@@ -395,12 +401,6 @@ namespace GUI.Types.PackageViewer
             if (updatePath)
             {
                 UpdateSearchTextBoxToCurrentPath(pkgNode);
-            }
-
-            if (DisplayedFolder != null)
-            {
-                displayedSearch = null;
-                ShowSearchResultsState(null);
             }
 
             RecordNavigation(new FolderNavigationEntry(pkgNode));
