@@ -1242,6 +1242,8 @@ namespace GUI.Types.Viewers
             if (definitionFiles.Count > 1)
             {
                 notice.Append("Also defined ");
+                List<(string Text, int Definition)> others = [];
+                var otherFile = false;
 
                 for (var i = 0; i < definitionFiles.Count; i++)
                 {
@@ -1251,11 +1253,19 @@ namespace GUI.Types.Viewers
                     }
 
                     var sameFile = definitionFiles[i].Equals(row.File, StringComparison.OrdinalIgnoreCase);
-                    notice.Append(noticeLinks.Count > 0 ? ", " : string.Empty).Append(sameFile ? string.Empty : "in ");
+                    others.Add((!sameFile ? ShortFileName(definitionFiles[i]) : i < row.Definition ? "earlier in this file" : "later in this file", i));
+                    otherFile |= !sameFile;
+                }
 
-                    var text = !sameFile ? ShortFileName(definitionFiles[i]) : i < row.Definition ? "earlier in this file" : "later in this file";
-                    noticeLinks.Add((notice.Length, text.Length, i));
-                    notice.Append(text);
+                // Files read "in A, B and C", with the definitions in this file after them
+                others = [.. others.OrderBy(static o => o.Text.EndsWith(" in this file", StringComparison.Ordinal))];
+                notice.Append(otherFile ? "in " : string.Empty);
+
+                for (var i = 0; i < others.Count; i++)
+                {
+                    notice.Append(i == 0 ? string.Empty : i == others.Count - 1 ? " and " : ", ");
+                    noticeLinks.Add((notice.Length, others[i].Text.Length, others[i].Definition));
+                    notice.Append(others[i].Text);
                 }
 
                 notice.Append(row.Definition == definitionFiles.Count - 1 ? ". This definition is used, as it loads last."
@@ -2422,8 +2432,9 @@ namespace GUI.Types.Viewers
         {
             if (e.KeyCode is Keys.Down or Keys.Enter && filteredRows.Count > 0)
             {
+                var rowIndex = searchBox.TextLength == 0 && current != null ? Math.Max(0, filteredRows.IndexOf(current)) : 0;
                 eventGrid.Focus();
-                eventGrid.CurrentCell = eventGrid.Rows[0].Cells[1];
+                eventGrid.CurrentCell = eventGrid.Rows[rowIndex].Cells[1];
                 e.Handled = true;
                 e.SuppressKeyPress = true;
             }
