@@ -357,9 +357,11 @@ interpreted.
 
 The sound event viewer plays only events of the stack types the renderer implements, so
 almost no Dota 2, Artifact, Underlords, Desk Job, The Lab or SteamVR Home events play; their
-sounds still play one at a time. Legacy events stored as KeyValues1 operator stacks are shown
-mapped to the modern layout, not as stored. Closed captions are found only by the exact event
-name, so games whose caption keys differ from their event names show none.
+sounds still play one at a time. Events whose bases go past the game's
+`snd_sos_max_event_base_depth` do not play, as in the engine. Legacy events stored as
+KeyValues1 operator stacks are shown mapped to the modern layout, not as stored. Closed
+captions are found only by the exact event name, so games whose caption keys differ from
+their event names show none.
 
 ## Choreo, Captions, and UI
 

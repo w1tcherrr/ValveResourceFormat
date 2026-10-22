@@ -1,4 +1,5 @@
 using ValveKeyValue;
+using ValveResourceFormat.IO;
 using ValveResourceFormat.ResourceTypes;
 
 namespace ValveResourceFormat.Renderer.Audio;
@@ -10,6 +11,12 @@ public sealed class SoundEventBank
     private readonly Dictionary<string, KVObject> soundEvents = new(capacity: 32768, StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, SoundEventDefinition> definitions = new(capacity: 2048, StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> removed = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Gets or sets how many base events an event may visit before it does not play, the game's
+    /// <c>snd_sos_max_event_base_depth</c>, such as <see cref="GameFileLoader.SoundEventMaxBaseVisits"/>.
+    /// </summary>
+    public int MaxBaseVisits { get; set; } = SoundEventIndex.DefaultMaxBaseVisits;
 
     /// <summary>Gets the number of loaded sound event definitions.</summary>
     public int Count => soundEvents.Count;
@@ -53,8 +60,8 @@ public sealed class SoundEventBank
     }
 
     /// <summary>
-    /// Gets a sound event definition by name (case-insensitive), or null when unknown. Resolved and parsed once, then cached.
-    /// Events that visit more bases than the engine's default limit still play, as games can raise the limit.
+    /// Gets a sound event definition by name (case-insensitive), or null when unknown or when it visits more than
+    /// <see cref="MaxBaseVisits"/> bases, which the engine does not play. Resolved and parsed once, then cached.
     /// </summary>
     public SoundEventDefinition? GetSoundEvent(string name)
     {
@@ -75,7 +82,13 @@ public sealed class SoundEventBank
             return definition;
         }
 
-        var (keys, _, _) = SoundEventIndex.Resolve(soundEvent, name => soundEvents.GetValueOrDefault(name));
+        var (keys, _, rejected) = SoundEventIndex.Resolve(soundEvent, name => soundEvents.GetValueOrDefault(name), maxBaseVisits: MaxBaseVisits);
+
+        if (rejected)
+        {
+            return null;
+        }
+
         var merged = KVObject.Collection();
 
         // Keys of a sub-stack can repeat the event's own key names, which come first

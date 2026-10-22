@@ -627,6 +627,7 @@ namespace GUI.Types.GLViewers
             }
 
             // TODO: load soundevents once per game not per sub context
+            soundPlayer.MaxBaseVisits = GuiContext.RootContext.SoundEventMaxBaseVisits;
             soundPlayer.LoadAsync(Scene.RendererContext.CancellationToken);
 
             // todo: collision filter 'default' and 'blocksound'

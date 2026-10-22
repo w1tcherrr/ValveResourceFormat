@@ -5,6 +5,7 @@ using System.Text;
 using System.Threading.Tasks;
 using ValveKeyValue;
 using ValveResourceFormat;
+using ValveResourceFormat.IO;
 using ValveResourceFormat.ResourceTypes;
 using ValveResourceFormat.Serialization.KeyValues;
 
@@ -293,7 +294,7 @@ namespace Tests.Resources
             var index = new SoundEventIndex();
             var events = new List<(string Name, KVObject Data)>();
 
-            for (var i = 0; i <= SoundEventIndex.MaxBaseVisits + 1; i++)
+            for (var i = 0; i <= SoundEventIndex.DefaultMaxBaseVisits + 1; i++)
             {
                 events.Add(($"Chain.{i}", Event(("base", $"Chain.{i + 1}"), ($"key_{i}", i))));
             }
@@ -309,9 +310,55 @@ namespace Tests.Resources
             {
                 await Assert.That(withinLimit.Rejected).IsFalse();
                 await Assert.That(overLimit.Rejected).IsTrue();
-                await Assert.That(overLimit.Keys.Select(r => r.Key)).Contains($"key_{SoundEventIndex.MaxBaseVisits + 1}");
+                await Assert.That(overLimit.Keys.Select(r => r.Key)).Contains($"key_{SoundEventIndex.DefaultMaxBaseVisits + 1}");
                 await Assert.That(cycle.Rejected).IsTrue();
                 await Assert.That(cycle.Keys.Select(r => r.Key)).IsEquivalentTo(["a", "b"]);
+            }
+        }
+
+        [Test]
+        public async Task GameInfoRaisesTheBaseVisitLimit()
+        {
+            var gameFolder = Path.Combine(Path.GetTempPath(), $"vrf_sound_limit_{Environment.ProcessId}", "game", "mod");
+            Directory.CreateDirectory(gameFolder);
+            var gameInfo = Path.Combine(gameFolder, "gameinfo.gi");
+
+            try
+            {
+                await File.WriteAllTextAsync(gameInfo, """
+                    "GameInfo"
+                    {
+                        "game" "Test"
+                        "FileSystem" { "SearchPaths" { "Game" "mod" } }
+                        "ConVars" { "snd_sos_max_event_base_depth" "10" }
+                    }
+                    """);
+
+                using var loader = new GameFileLoader(null, gameInfo);
+                using var defaultLoader = new GameFileLoader(null, null);
+                loader.FindAndLoadSearchPaths(gameInfo);
+
+                var index = new SoundEventIndex { MaxBaseVisits = loader.SoundEventMaxBaseVisits };
+                var events = new List<(string Name, KVObject Data)>();
+
+                for (var i = 0; i <= 11; i++)
+                {
+                    events.Add(($"Chain.{i}", Event(("base", $"Chain.{i + 1}"), ($"key_{i}", i))));
+                }
+
+                index.AddEvents("soundevents/chain.vsndevts_c", events);
+
+                using (Assert.Multiple())
+                {
+                    await Assert.That(loader.SoundEventMaxBaseVisits).IsEqualTo(10);
+                    await Assert.That(index.Resolve(index.Find("Chain.1")!).Rejected).IsFalse();
+                    await Assert.That(index.Resolve(index.Find("Chain.0")!).Rejected).IsTrue();
+                    await Assert.That(defaultLoader.SoundEventMaxBaseVisits).IsEqualTo(SoundEventIndex.DefaultMaxBaseVisits);
+                }
+            }
+            finally
+            {
+                Directory.Delete(Path.GetDirectoryName(Path.GetDirectoryName(gameFolder))!, recursive: true);
             }
         }
 

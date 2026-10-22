@@ -27,7 +27,7 @@ namespace GUI.Types.Viewers
     {
         private const string PreviewChannel = "sound_event_viewer";
 
-        private sealed class EventRow(string name, string file, KVObject data, string type, float duration, bool duplicate, bool hasProblems, bool missingBase)
+        private sealed class EventRow(string name, string file, KVObject data, string type, float duration, bool duplicate, bool hasProblems, bool rejected, bool missingBase)
         {
             public string Name { get; } = name;
             public string File { get; } = file;
@@ -37,7 +37,8 @@ namespace GUI.Types.Viewers
             public bool Duplicate { get; } = duplicate;
             public bool HasProblems { get; } = hasProblems;
             public bool MissingBase { get; } = missingBase;
-            public bool Playable => SoundEvent.IsSupportedType(Type);
+            public bool Rejected { get; } = rejected;
+            public bool Playable => !Rejected && SoundEvent.IsSupportedType(Type);
             public bool MissingSound { get; set; }
         }
 
@@ -395,6 +396,7 @@ namespace GUI.Types.Viewers
             List<string> loadOrder = [.. SoundEventIndex.GetEventFilesInLoadOrder(context.FileLoaderNoCache, eventFiles).Select(static file => file + GameFileLoader.CompiledFileSuffix)];
             List<string> stackFiles = [.. files.Where(static file => file.EndsWith(StacksExtension, StringComparison.OrdinalIgnoreCase))];
             var index = SoundEventIndex.Build(context.FileLoaderNoCache, loadOrder, stackFiles, VrfGuiContext.Logger);
+            index.MaxBaseVisits = context.SoundEventMaxBaseVisits;
             var captions = new List<ValveResourceFormat.ClosedCaptions.ClosedCaptions>();
 
             foreach (var file in files.Where(static file => file.EndsWith("english.dat", StringComparison.OrdinalIgnoreCase)))
@@ -583,13 +585,13 @@ namespace GUI.Types.Viewers
 
         private EventRow CreateRow(SoundEventIndex loadedIndex, string name, string file, KVObject data, bool duplicate)
         {
-            var (resolved, problems, _) = loadedIndex.Resolve(data, FindEvent);
+            var (resolved, problems, rejected) = loadedIndex.Resolve(data, FindEvent);
             var duration = resolved.FirstOrDefault(static r => r.Key == "vsnd_duration").Value is { } durationValue && IsNumber(durationValue)
                 ? durationValue.ToSingle(CultureInfo.InvariantCulture)
                 : -1f;
             var missingBase = SoundEventIndex.GetBases(data).Any(b => FindEvent(b.Name) == null);
 
-            return new EventRow(name, file, data, GetString(resolved, "type"), duration, duplicate, problems.Count > 0, missingBase);
+            return new EventRow(name, file, data, GetString(resolved, "type"), duration, duplicate, problems.Count > 0, rejected, missingBase);
         }
 
         private bool SoundExists(string sound)
@@ -890,7 +892,7 @@ namespace GUI.Types.Viewers
             var (resolved, problems, _) = index.Resolve(row.Data, FindEvent);
             notices.AddRange(problems);
 
-            if (!row.Playable)
+            if (!row.Playable && !row.Rejected)
             {
                 notices.Add(row.Type.Length == 0
                     ? "Has no type, so it cannot be played as an event."
@@ -1375,7 +1377,10 @@ namespace GUI.Types.Viewers
             try
             {
 #pragma warning disable CA2000 // The player owns the device and disposes it
-                player = new SoundEventPlayer(guiContext, new NAudioDevice(), VrfGuiContext.Logger);
+                player = new SoundEventPlayer(guiContext, new NAudioDevice(), VrfGuiContext.Logger)
+                {
+                    MaxBaseVisits = index.MaxBaseVisits,
+                };
 #pragma warning restore CA2000
             }
             catch (System.Runtime.InteropServices.COMException e)

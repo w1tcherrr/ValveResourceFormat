@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Threading;
@@ -21,10 +22,10 @@ namespace ValveResourceFormat.ResourceTypes
     public sealed class SoundEventIndex
     {
         /// <summary>
-        /// How many base events the engine visits in total for one event, in all of its base chains, before it rejects
-        /// the event. This is the default of the <c>snd_sos_max_event_base_depth</c> convar.
+        /// How many base events the engine visits in total for one event, in all of its base chains, before it does not
+        /// play the event, unless the game sets the <c>snd_sos_max_event_base_depth</c> convar.
         /// </summary>
-        public const int MaxBaseVisits = 4;
+        public const int DefaultMaxBaseVisits = 4;
 
         // Bases are resolved past the engine's limit for display, this only stops cycles
         private const int MaxResolvedVisits = 64;
@@ -38,9 +39,15 @@ namespace ValveResourceFormat.ResourceTypes
 
         private readonly List<string> files = [];
         private readonly Dictionary<string, List<(string File, KVObject Data)>> definitions = new(StringComparer.OrdinalIgnoreCase);
-        private readonly Dictionary<string, (string File, KVObject Root, List<(string Name, KVObject Operator)> Operators)> stacks = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, (string File, List<(string Name, KVObject Operator)> Operators)> stacks = new(StringComparer.OrdinalIgnoreCase);
         private Dictionary<string, List<(string Event, string Key)>>? referencedBy;
         private Dictionary<string, List<string>>? soundUsers;
+
+        /// <summary>
+        /// Gets or sets how many base events an event may visit before the engine does not play it, which is the
+        /// game's <c>snd_sos_max_event_base_depth</c>, such as <see cref="GameFileLoader.SoundEventMaxBaseVisits"/>.
+        /// </summary>
+        public int MaxBaseVisits { get; set; } = DefaultMaxBaseVisits;
 
         /// <summary>
         /// Gets the sound event files in the order they were added.
@@ -205,7 +212,7 @@ namespace ValveResourceFormat.ResourceTypes
                 }
             }
 
-            stacks.TryAdd(name, (fileName, stack, operators));
+            stacks.TryAdd(name, (fileName, operators));
         }
 
         /// <summary>
@@ -295,12 +302,13 @@ namespace ValveResourceFormat.ResourceTypes
 
         /// <summary>
         /// Resolves the keys of an event with the keys it inherits through <c>base</c>, checking fragments that name a
-        /// field against the fields of the event's stack when that stack was added. See <see cref="Resolve(KVObject, Func{string, KVObject?}, Func{string, string, string?})"/>.
+        /// field against the fields of the event's stack when that stack was added, and limiting the base visits to
+        /// <see cref="MaxBaseVisits"/>. See <see cref="Resolve(KVObject, Func{string, KVObject?}, Func{string, string, string?}, int)"/>.
         /// </summary>
         /// <param name="soundEvent">The event to resolve.</param>
         /// <param name="findEvent">Finds a base event by name, in place of <see cref="Find"/>.</param>
         public (List<(string Key, KVObject Value, string? Source)> Keys, List<string> Problems, bool Rejected) Resolve(KVObject soundEvent, Func<string, KVObject?>? findEvent = null)
-            => Resolve(soundEvent, findEvent ?? Find, soundEvent.GetStringProperty("type") is { } type && ContainsStack(type) ? GetFieldDefault : null);
+            => Resolve(soundEvent, findEvent ?? Find, soundEvent.GetStringProperty("type") is { } type && ContainsStack(type) ? GetFieldDefault : null, MaxBaseVisits);
 
         /// <summary>
         /// Resolves the keys of an event with the keys it inherits through <c>base</c>, as the engine does.
@@ -315,19 +323,20 @@ namespace ValveResourceFormat.ResourceTypes
         /// that name in the event's stack defaults to, and its keys apply to that field's sub-stack.
         /// </para>
         /// <para>
-        /// The engine rejects an event whose tree visits more than <see cref="MaxBaseVisits"/> bases in total, by default.
-        /// Such an event is still resolved in full, and only reported as rejected. A base that is not loaded is skipped.
+        /// The engine does not play an event whose tree visits more than <paramref name="maxBaseVisits"/> bases in total.
+        /// Such an event is still resolved in full, and reported as rejected. A base that is not loaded is skipped.
         /// </para>
         /// </remarks>
         /// <param name="soundEvent">The event to resolve.</param>
         /// <param name="findEvent">Finds a base event by name, or returns null when it is not loaded.</param>
         /// <param name="findFieldDefault">Finds the default of a field of a stack, given the stack and the field. Without it,
         /// fragments with a <c>field_name</c> are not checked.</param>
+        /// <param name="maxBaseVisits">How many base events the event may visit, the game's <c>snd_sos_max_event_base_depth</c>.</param>
         /// <returns>Each key with its value and where it comes from: null for the event's own keys, otherwise the base event,
         /// followed by " via " and the field for keys of a sub-stack. Also the problems the engine would have with the event,
         /// and whether it rejects the event. The <c>base</c> key itself is left out.</returns>
         public static (List<(string Key, KVObject Value, string? Source)> Keys, List<string> Problems, bool Rejected) Resolve(
-            KVObject soundEvent, Func<string, KVObject?> findEvent, Func<string, string, string?>? findFieldDefault = null)
+            KVObject soundEvent, Func<string, KVObject?> findEvent, Func<string, string, string?>? findFieldDefault = null, int maxBaseVisits = DefaultMaxBaseVisits)
         {
             var resolved = new List<(string Key, KVObject Value, string? Source)>();
             var keys = new HashSet<(string? Field, string Key)>();
@@ -337,9 +346,10 @@ namespace ValveResourceFormat.ResourceTypes
 
             Merge(soundEvent, null, null, inheritType: true);
 
-            if (visits > MaxBaseVisits)
+            if (visits > maxBaseVisits)
             {
-                problems.Add($"The engine rejects this event: it visits more than {MaxBaseVisits} base events, the default of snd_sos_max_event_base_depth.");
+                problems.Add(string.Create(CultureInfo.InvariantCulture,
+                    $"The engine does not play this event: it visits {visits} base events, more than the {maxBaseVisits} that snd_sos_max_event_base_depth allows."));
                 rejected = true;
             }
 
@@ -552,7 +562,8 @@ namespace ValveResourceFormat.ResourceTypes
         /// </summary>
         /// <remarks>
         /// A later field of the same name replaces an earlier one. An imported field does not replace a field that already
-        /// exists, but gives its <c>data_type</c> to one that has none. Fields marked <c>ignore_import</c> in <c>_stack_properties.&lt;stack&gt;._field_properties</c> are not imported.
+        /// exists, but gives its <c>data_type</c> to one that has none. The fields of a sub-stack whose <c>public_opvar</c>
+        /// field sets <c>use_public_opvar_scope</c> are named after that field, such as <c>track_1.track_vsnd_files</c>.
         /// </remarks>
         /// <returns>Each field name, its definition with <c>data_type</c>, the default <c>value</c> and <c>_system_properties</c>,
         /// and the stack that declares it, which differs from <paramref name="stackName"/> for imported fields. The stack's
@@ -562,19 +573,18 @@ namespace ValveResourceFormat.ResourceTypes
             var fields = new List<(string Name, KVObject Field, string Stack)>();
             var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-            AddFields(stackName, imported: false);
+            AddFields(stackName, imported: false, prefix: string.Empty);
 
             return fields;
 
-            void AddFields(string stack, bool imported)
+            void AddFields(string stack, bool imported, string prefix)
             {
-                if (!visited.Add(stack) || !stacks.TryGetValue(stack, out var stackData))
+                if (!visited.Add(prefix + stack) || !stacks.TryGetValue(stack, out var stackData))
                 {
                     return;
                 }
 
-                var ignored = stacks.GetValueOrDefault("_stack_properties").Root?.GetSubCollection(stack)?.GetSubCollection("_field_properties");
-                var imports = new List<string>();
+                var imports = new List<(string Stack, string Prefix)>();
 
                 foreach (var (opName, op) in stackData.Operators)
                 {
@@ -583,20 +593,20 @@ namespace ValveResourceFormat.ResourceTypes
                         continue;
                     }
 
-                    foreach (var (name, field) in op.GetSubCollection("operator_variables") ?? KVObject.Collection())
+                    foreach (var (fieldName, field) in op.GetSubCollection("operator_variables") ?? KVObject.Collection())
                     {
-                        if (name == "import_public_opvars" && field.ValueType == KVValueType.String)
+                        if (fieldName == "import_public_opvars" && field.ValueType == KVValueType.String)
                         {
-                            imports.Add((string)field);
+                            imports.Add(((string)field, prefix));
                             continue;
                         }
 
-                        if (field.ValueType != KVValueType.Collection
-                            || (imported && ignored?.GetSubCollection(name)?.GetBooleanProperty("ignore_import") == true))
+                        if (field.ValueType != KVValueType.Collection)
                         {
                             continue;
                         }
 
+                        var name = prefix + fieldName;
                         var existing = fields.FindIndex(f => f.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
 
                         if (existing < 0)
@@ -622,14 +632,14 @@ namespace ValveResourceFormat.ResourceTypes
 
                         if (field.GetStringProperty("data_type") == "public_opvar" && field.GetStringProperty("value") is { Length: > 0 } subStack)
                         {
-                            imports.Add(subStack);
+                            imports.Add((subStack, field.GetBooleanProperty("use_public_opvar_scope") ? $"{name}." : prefix));
                         }
                     }
                 }
 
-                foreach (var import in imports)
+                foreach (var (import, importPrefix) in imports)
                 {
-                    AddFields(import, imported: true);
+                    AddFields(import, imported: true, importPrefix);
                 }
             }
         }

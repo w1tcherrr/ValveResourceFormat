@@ -122,6 +122,12 @@ namespace ValveResourceFormat.IO
         /// </summary>
         public bool ParticleShaderFeatureBranching { get; private set; }
 
+        /// <summary>
+        /// Gets how many base events a sound event may visit before it does not play, which the first game found sets with
+        /// the <c>snd_sos_max_event_base_depth</c> convar of its <c>gameinfo.gi</c>.
+        /// </summary>
+        public int SoundEventMaxBaseVisits { get; private set; } = SoundEventIndex.DefaultMaxBaseVisits;
+
         private bool ParticleSettingsRead;
 
         /// <summary>
@@ -579,6 +585,13 @@ namespace ValveResourceFormat.IO
                 {
                     ParticlesFoggedByDefault = particles.GetBooleanProperty("ParticlesFoggedByDefault");
                     ParticleShaderFeatureBranching = particles.GetBooleanProperty("EnableParticleShaderFeatureBranching");
+                }
+
+                if (gameInfo.GetSubCollection("ConVars")?.GetSubCollection("snd_sos_max_event_base_depth") is { } maxBaseDepth
+                    && int.TryParse((maxBaseDepth.ValueType == KVValueType.Collection ? maxBaseDepth.GetSubCollection("default") : maxBaseDepth)?.ToString(CultureInfo.InvariantCulture),
+                        NumberStyles.Integer, CultureInfo.InvariantCulture, out var maxBaseVisits))
+                {
+                    SoundEventMaxBaseVisits = maxBaseVisits;
                 }
             }
 
