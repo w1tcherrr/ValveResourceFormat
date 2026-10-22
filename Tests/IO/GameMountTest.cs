@@ -63,6 +63,60 @@ namespace Tests.IO
             }
         }
 
+        [Test]
+        public async Task SkipsSearchPathsThatAreNotFoldersAndPackagesThatDoNotRead()
+        {
+            var gameRoot = Directory.CreateTempSubdirectory("vrf_game_mount_");
+
+            try
+            {
+                var mod = gameRoot.CreateSubdirectory("mymod").FullName;
+                var csgo = gameRoot.CreateSubdirectory("csgo").FullName;
+                var core = gameRoot.CreateSubdirectory("core").FullName;
+                var gameInfo = Path.Join(mod, "GameInfo.gi");
+
+                await File.WriteAllTextAsync(gameInfo, """
+                    "GameInfo"
+                    {
+                        "filesystem"
+                        {
+                            "searchpaths"
+                            {
+                                "Game" "missing"
+                                "Game" "|gameinfo_path|."
+                                "Game" "mymod/*"
+                                "Game" "mymod/notafolder.txt"
+                                "Game" "./mymod/"
+                                "Game" "mymod"
+                                "Game" "csgo"
+                                "Game" "core"
+                            }
+                        }
+                    }
+                    """);
+                await File.WriteAllTextAsync(Path.Join(mod, "notafolder.txt"), "file");
+                await File.WriteAllBytesAsync(Path.Join(csgo, "pak01_dir.vpk"), []);
+                WritePackage(Path.Join(mod, "pak01_dir.vpk"), "scripts/mod.txt");
+                WritePackage(Path.Join(core, "pak01_dir.vpk"), "scripts/core.txt");
+
+                using var loader = new GameFileLoader(null, null);
+                loader.FindAndLoadSearchPaths(gameInfo);
+
+                using (Assert.Multiple())
+                {
+                    await Assert.That(GameFileLoader.FindModGameInfos(gameRoot.FullName)).IsEquivalentTo([gameInfo]);
+                    await Assert.That(loader.EnumerateSearchOrder().Select(source => Path.GetRelativePath(gameRoot.FullName, source.Package?.FilePath ?? source.Folder!).Replace('\\', '/')))
+                        .IsEquivalentTo(["mymod/pak01_dir.vpk", "core/pak01_dir.vpk", "mymod", "csgo", "core"], CollectionOrdering.Matching);
+                    await Assert.That(loader.EnumerateMountedFiles().Select(static file => file.Entry.GetFullPath()))
+                        .Contains("scripts/mod.txt").And.Contains("notafolder.txt").And.Contains("pak01_dir.vpk");
+                }
+            }
+            finally
+            {
+                gameRoot.Delete(recursive: true);
+            }
+        }
+
         private static void WritePackage(string path, params string[] files)
         {
             using var package = new Package();

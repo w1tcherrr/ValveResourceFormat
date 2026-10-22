@@ -326,11 +326,7 @@ namespace ValveResourceFormat.IO
         /// </summary>
         protected virtual ShaderCollection LoadShaderFromDisk(string shaderName)
         {
-            if (!ShaderPackagesScanned)
-            {
-                ShaderPackagesScanned = true;
-                FindAndLoadShaderPackages();
-            }
+            MountShaderPackages();
 
             var collection = new ShaderCollection();
 
@@ -491,7 +487,7 @@ namespace ValveResourceFormat.IO
 
         private static IEnumerable<(string Key, string Value)> EnumerateSearchPaths(KVObject gameInfo)
         {
-            if (!gameInfo.TryGetValue("FileSystem", out var fileSystem) || !fileSystem.TryGetValue("SearchPaths", out var searchPaths))
+            if (GameFolderLocator.GetChild(gameInfo, "FileSystem") is not { } fileSystem || GameFolderLocator.GetChild(fileSystem, "SearchPaths") is not { } searchPaths)
             {
                 yield break;
             }
@@ -526,7 +522,7 @@ namespace ValveResourceFormat.IO
                 }
             }
 
-            if (!gameInfo.TryGetValue("FileSystem", out var fileSystem))
+            if (GameFolderLocator.GetChild(gameInfo, "FileSystem") is not { } fileSystem)
             {
                 Logger.LogWarning("\"{GameInfo}\" has no FileSystem block", gameinfoPath);
                 return;
@@ -553,12 +549,19 @@ namespace ValveResourceFormat.IO
 
             foreach (var (key, searchPath) in EnumerateSearchPaths(gameInfo))
             {
-                var path = Path.Combine(gameRoot, searchPath);
+                var path = GetSearchPathFolder(gameRoot, searchPath);
 
                 if (key.Equals("Game", StringComparison.OrdinalIgnoreCase)
                     || (MountLowViolence && key.Equals("Game_LowViolence", StringComparison.OrdinalIgnoreCase)))
                 {
-                    folders.Add(path);
+                    if (Directory.Exists(path))
+                    {
+                        folders.Add(path);
+                    }
+                    else
+                    {
+                        Logger.LogWarning("Skipped search path \"{SearchPath}\" of \"{GameInfo}\", it is not a folder", searchPath, gameinfoPath);
+                    }
                 }
                 else if (key.Equals("OfficialAddonRoot", StringComparison.OrdinalIgnoreCase))
                 {
@@ -807,6 +810,8 @@ namespace ValveResourceFormat.IO
         /// </returns>
         public IEnumerable<(PackageEntry Entry, Package? Package, string? PathOnDisk, PackageEntry? OverriddenBy)> EnumerateMountedFiles()
         {
+            MountShaderPackages();
+
             var searched = new List<(Package? Package, Dictionary<string, PackageEntry>? LooseFiles)>();
 
             PackageEntry? FindFirst(string path)
@@ -835,7 +840,14 @@ namespace ValveResourceFormat.IO
                     continue;
                 }
 
-                var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder!));
+                var root = GetSearchPathFolder(folder!, string.Empty);
+
+                if (!Directory.Exists(root))
+                {
+                    Logger.LogWarning("Skipped search path \"{SearchPath}\", it is not a folder", folder);
+                    continue;
+                }
+
                 var archives = searched
                     .Where(source => source.Package?.FilePath != null && string.Equals(Path.GetDirectoryName(source.Package.FilePath), root, StringComparison.OrdinalIgnoreCase))
                     .Select(static source => string.Concat(Path.GetFileName(PackageFileNames.GetPackageName(source.Package!.FilePath!)), "_"))
@@ -1003,9 +1015,18 @@ namespace ValveResourceFormat.IO
 
         private void AddGamePackageToSearch(string searchPath)
         {
-            if (!IsPackageMounted(searchPath))
+            if (IsPackageMounted(searchPath))
+            {
+                return;
+            }
+
+            try
             {
                 AddPackageToSearch(searchPath);
+            }
+            catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException or NotSupportedException)
+            {
+                Logger.LogError(e, "Skipped \"{SearchPath}\", it could not be read", searchPath);
             }
         }
 
@@ -1101,7 +1122,7 @@ namespace ValveResourceFormat.IO
                 var rootFolder = Path.GetDirectoryName(modIdentifierPath);
                 var assumedGameRoot = Path.GetDirectoryName(rootFolder)!;
 
-                if (Path.GetFileName(modIdentifierPath) == GameinfoGi)
+                if (Path.GetFileName(modIdentifierPath).Equals(GameinfoGi, StringComparison.OrdinalIgnoreCase))
                 {
                     LoadGameInfo(folders, assumedGameRoot, modIdentifierPath);
                 }
@@ -1255,7 +1276,7 @@ namespace ValveResourceFormat.IO
                 {
                     var gameInfo = Path.Join(modFolder, GameinfoGi);
 
-                    if (File.Exists(gameInfo) && GameInfoMountsFolder(gameInfo, childName))
+                    if (File.Exists(gameInfo) && GameInfoMountsFolder(gameInfo, directory, Path.Join(directory, childName)))
                     {
                         return gameInfo;
                     }
@@ -1265,7 +1286,7 @@ namespace ValveResourceFormat.IO
             return null;
         }
 
-        private bool GameInfoMountsFolder(string gameinfoPath, string folderName)
+        private bool GameInfoMountsFolder(string gameinfoPath, string gameRoot, string folder)
         {
             if (ReadGameInfo(gameinfoPath) is not { } gameInfo)
             {
@@ -1274,7 +1295,7 @@ namespace ValveResourceFormat.IO
 
             foreach (var (_, searchPath) in EnumerateSearchPaths(gameInfo))
             {
-                if (string.Equals(searchPath, folderName, StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(GetSearchPathFolder(gameRoot, searchPath), folder, StringComparison.OrdinalIgnoreCase))
                 {
                     return true;
                 }
@@ -1288,7 +1309,7 @@ namespace ValveResourceFormat.IO
             foreach (var (key, searchPath) in EnumerateSearchPaths(gameInfo))
             {
                 if (key.Equals("Game", StringComparison.OrdinalIgnoreCase)
-                    && string.Equals(Path.Combine(gameRoot, searchPath), folder, StringComparison.OrdinalIgnoreCase))
+                    && string.Equals(GetSearchPathFolder(gameRoot, searchPath), GetSearchPathFolder(folder, string.Empty), StringComparison.OrdinalIgnoreCase))
                 {
                     return true;
                 }
@@ -1296,6 +1317,9 @@ namespace ValveResourceFormat.IO
 
             return false;
         }
+
+        private static string GetSearchPathFolder(string gameRoot, string searchPath)
+            => Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.Combine(gameRoot, searchPath)));
 
         private void FindAndLoadOfficialGameAddonPackage()
         {
@@ -1498,7 +1522,7 @@ namespace ValveResourceFormat.IO
                     MaxRecursionDepth = 5,
                 })
             {
-                ShouldIncludePredicate = static (ref entry) => !entry.IsDirectory && entry.FileName.Equals(GameinfoGi, StringComparison.Ordinal)
+                ShouldIncludePredicate = static (ref entry) => !entry.IsDirectory && entry.FileName.Equals(GameinfoGi, StringComparison.OrdinalIgnoreCase)
             };
 
             List<(string GameRoot, string ModFolder, string GameInfoPath, KVObject GameInfo)> mods = [];
@@ -1584,6 +1608,18 @@ namespace ValveResourceFormat.IO
             }
 
             return Path.GetFullPath(path);
+        }
+
+        private void MountShaderPackages()
+        {
+            lock (CachedShadersLock)
+            {
+                if (!ShaderPackagesScanned)
+                {
+                    ShaderPackagesScanned = true;
+                    FindAndLoadShaderPackages();
+                }
+            }
         }
 
         private void FindAndLoadShaderPackages()
