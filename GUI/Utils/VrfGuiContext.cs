@@ -485,11 +485,11 @@ namespace GUI.Utils
         }
 
         // Override to add support for parent file loaders
-        public override IEnumerable<string> EnumerateFiles(string extension)
+        public override IEnumerable<string> EnumerateFiles(params string[] extensions)
         {
-            var files = base.EnumerateFiles(extension);
+            var files = base.EnumerateFiles(extensions);
 
-            return ParentGuiContext == null ? files : files.Concat(ParentGuiContext.EnumerateFiles(extension)).Distinct(StringComparer.OrdinalIgnoreCase);
+            return ParentGuiContext == null ? files : files.Concat(ParentGuiContext.EnumerateFiles(extensions)).Distinct(StringComparer.OrdinalIgnoreCase);
         }
 
         // Override to add support for parent file loaders

@@ -3,7 +3,7 @@ using System.Drawing.Drawing2D;
 using System.Globalization;
 using System.IO;
 using System.Linq;
-using System.Runtime.CompilerServices;
+using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using GUI.Controls;
@@ -16,7 +16,6 @@ using ValveResourceFormat.Renderer;
 using ValveResourceFormat.Renderer.Audio;
 using ValveResourceFormat.ResourceTypes;
 using ValveResourceFormat.Serialization.KeyValues;
-using Captions = ValveResourceFormat.ClosedCaptions.ClosedCaptions;
 
 namespace GUI.Types.Viewers
 {
@@ -28,7 +27,19 @@ namespace GUI.Types.Viewers
     {
         private const string PreviewChannel = "sound_event_viewer";
 
-        private sealed record EventRow(string Name, string File, KVObject Data, string Type, float Duration, bool Duplicate, bool HasProblems, bool MissingBase, bool MissingSound, bool Playable);
+        private sealed class EventRow(string name, string file, KVObject data, string type, float duration, bool duplicate, bool hasProblems, bool missingBase)
+        {
+            public string Name { get; } = name;
+            public string File { get; } = file;
+            public KVObject Data { get; } = data;
+            public string Type { get; } = type;
+            public float Duration { get; } = duration;
+            public bool Duplicate { get; } = duplicate;
+            public bool HasProblems { get; } = hasProblems;
+            public bool MissingBase { get; } = missingBase;
+            public bool Playable => SoundEvent.IsSupportedType(Type);
+            public bool MissingSound { get; set; }
+        }
 
         private enum ValueSource
         {
@@ -41,27 +52,35 @@ namespace GUI.Types.Viewers
         // Read by the engine when it parses the event, outside of its stack
         private static readonly HashSet<string> EventKeys = new(["groups", "preload_vsnds", "memory_type"], StringComparer.OrdinalIgnoreCase);
 
-        private static readonly ConditionalWeakTable<VrfGuiContext, Task<(SoundEventIndex Index, List<Captions> Captions)>> Indexes = [];
+        private static readonly Dictionary<string, WeakReference<Task<(SoundEventIndex Index, List<ValveResourceFormat.ClosedCaptions.ClosedCaptions> Captions)>>> Indexes
+            = new(StringComparer.OrdinalIgnoreCase);
 
         private readonly VrfGuiContext guiContext;
         private readonly string fileName;
         private readonly IReadOnlyList<(string Name, KVObject Data)> fileEvents;
+        private readonly Task loading;
 
+        private Task<(SoundEventIndex Index, List<ValveResourceFormat.ClosedCaptions.ClosedCaptions> Captions)>? indexTask;
         private SoundEventIndex? index;
-        private List<Captions> captions = [];
+        private Dictionary<string, KVObject>? ownEvents;
+        private List<ValveResourceFormat.ClosedCaptions.ClosedCaptions> captions = [];
         private List<EventRow> rows = [];
         private List<EventRow> filteredRows = [];
-        private readonly Dictionary<string, bool> playableTypes = new(StringComparer.OrdinalIgnoreCase);
+        private bool? soundsChecked;
         private EventRow? current;
         private readonly List<(string Name, string File)> backHistory = [];
         private readonly List<(string Name, string File)> forwardHistory = [];
+        private readonly List<string?> typeFilters = [null];
         private int sortColumn;
         private bool sortDescending;
-        private bool updatingList;
+        private bool updating;
 
         private SoundEventPlayer? player;
+        private SoundEvent? playing;
         private readonly Timer playerTimer = new() { Interval = 30 };
         private readonly Camera listener = new();
+        private readonly List<(Vector3 Position, string Text)> audiblePositioned = [];
+        private readonly List<string> audibleFlat = [];
         private ValveResourceFormat.Resource? soundResource;
         private AudioPlaybackPanel? audioPanel;
 
@@ -71,7 +90,7 @@ namespace GUI.Types.Viewers
         private readonly ToolTip toolTip = new();
 
 #pragma warning disable CA2213 // Added to Controls, which disposes them
-        private readonly TextBox searchBox;
+        private readonly SearchBox searchBox;
         private readonly ThemedComboBox scopeBox;
         private readonly ThemedComboBox typeBox;
         private readonly ThemedComboBox statusBox;
@@ -91,7 +110,6 @@ namespace GUI.Types.Viewers
         private readonly Label captionLabel;
         private readonly CheckBox defaultsBox;
         private readonly Grid propertyGrid;
-        private readonly ThemedTabControl linkTabs;
         private readonly TabPage soundsPage;
         private readonly TabPage referencesPage;
         private readonly TabPage usedByPage;
@@ -105,17 +123,17 @@ namespace GUI.Types.Viewers
         {
             this.guiContext = guiContext;
             this.fileEvents = fileEvents;
-            fileName = guiContext.FileName;
+            fileName = GetIndexPath(guiContext);
 
             Dock = DockStyle.Fill;
             titleFont = new Font(Font.FontFamily, Font.Size * 1.5f, FontStyle.Bold);
             boldFont = new Font(Font, FontStyle.Bold);
             italicFont = new Font(Font, FontStyle.Italic);
 
-            searchBox = new TextBox
+            searchBox = new SearchBox
             {
                 Dock = DockStyle.Top,
-                PlaceholderText = "Search events by name or type (Ctrl+F)",
+                Hint = "Search events by name or type (Ctrl+F)",
                 AccessibleName = "Search",
             };
             searchBox.TextChanged += (_, _) => ApplyFilter();
@@ -150,8 +168,7 @@ namespace GUI.Types.Viewers
                 AccessibleName = "Count",
             };
 
-            eventGrid = new Grid("Events");
-            eventGrid.VirtualMode = true;
+            eventGrid = new Grid("Events") { VirtualMode = true, CopiesCell = false };
             eventGrid.Columns.Add(CreateColumn("Name", 55));
             eventGrid.Columns.Add(CreateColumn("Type", 30));
             eventGrid.Columns.Add(CreateColumn("Duration", 15));
@@ -167,6 +184,7 @@ namespace GUI.Types.Viewers
             eventGrid.CellValueNeeded += OnEventCellValueNeeded;
             eventGrid.SelectionChanged += OnEventSelectionChanged;
             eventGrid.ColumnHeaderMouseClick += OnEventColumnHeaderClick;
+            eventGrid.Activated += (_, _) => PlayEvent();
 
             var leftPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(4) };
             leftPanel.Controls.Add(eventGrid);
@@ -178,7 +196,7 @@ namespace GUI.Types.Viewers
             forwardButton = CreateToolButton("NavigateForward", "Forward", "Forward (Alt+Right)", (_, _) => GoForward());
             playButton = CreateToolButton("AudioPlay", "Play event", "Play event (Space)", (_, _) => PlayEvent());
             stopButton = CreateToolButton("RendererStop", "Stop", "Stop (Esc)", (_, _) => StopPlayback());
-            copyButton = CreateToolButton("CopyName", "Copy name", "Copy name (Ctrl+C)", (_, _) => CopyName());
+            copyButton = CreateToolButton("CopyName", "Copy name", "Copy name (Ctrl+C in the list)", (_, _) => CopyName());
             openButton = CreateToolButton("File", "Open file", "Open the file that defines this event", (_, _) => OpenDefiningFile());
 
             titleLabel = new Label
@@ -258,7 +276,7 @@ namespace GUI.Types.Viewers
             soundGrid.Columns.Add(CreateColumn("Sound", 60));
             soundGrid.Columns.Add(CreateColumn("Key", 25));
             soundGrid.Columns.Add(CreateColumn("Status", 15));
-            soundGrid.SelectionChanged += (_, _) => PlaySound(soundGrid.CurrentCell?.RowIndex ?? -1, autoPlay: false);
+            soundGrid.SelectionChanged += OnSoundSelectionChanged;
 
             referenceGrid = new Grid("References");
             referenceGrid.Columns.Add(CreateColumn("Event", 60));
@@ -274,13 +292,12 @@ namespace GUI.Types.Viewers
                 grid.Activated += OnGridRowActivated;
             }
 
-            eventGrid.Activated += (_, _) => PlayEvent();
-
             audioHost = new Panel
             {
                 Dock = DockStyle.Bottom,
                 Height = this.AdjustForDPI(170),
                 Visible = false,
+                AccessibleName = "Sound player",
             };
 
             soundsPage = new ThemedTabPage("Sounds");
@@ -291,7 +308,7 @@ namespace GUI.Types.Viewers
             usedByPage = new ThemedTabPage("Used by");
             usedByPage.Controls.Add(usedByGrid);
 
-            linkTabs = new ThemedTabControl { Dock = DockStyle.Fill };
+            var linkTabs = new ThemedTabControl { Dock = DockStyle.Fill };
             linkTabs.TabPages.Add(soundsPage);
             linkTabs.TabPages.Add(referencesPage);
             linkTabs.TabPages.Add(usedByPage);
@@ -335,48 +352,63 @@ namespace GUI.Types.Viewers
                 detailsSplit.SplitterDistance = detailsSplit.Height * 3 / 5;
             }
 
-            playerTimer.Tick += (_, _) => player?.Update(listener);
+            playerTimer.Tick += OnPlayerTick;
 
             ShowEmptyDetails();
-            _ = LoadAsync();
+            loading = LoadAsync();
         }
 
         /// <summary>
-        /// Gets the index of the sound events and stacks that a file's package and game search paths hold, built once per
-        /// package off the UI thread, with the English closed captions found there.
+        /// Gets the index of the sound events and stacks of a file's game, with the English closed captions found there.
+        /// It is built once per game off the UI thread, and kept while a viewer uses it.
         /// </summary>
-        public static Task<(SoundEventIndex Index, List<Captions> Captions)> GetIndexAsync(VrfGuiContext context)
+        public static Task<(SoundEventIndex Index, List<ValveResourceFormat.ClosedCaptions.ClosedCaptions> Captions)> GetIndexAsync(VrfGuiContext context)
         {
-            var owner = context.ParentGuiContext ?? context;
+            var root = context.RootContext;
+            var key = root.GameSearchPaths.Count > 0
+                ? string.Join('|', root.GameSearchPaths.Order(StringComparer.OrdinalIgnoreCase))
+                : root.FileName;
 
-            return Indexes.GetValue(owner, static owner => Task.Run(() => BuildIndex(owner)));
+            lock (Indexes)
+            {
+                if (Indexes.TryGetValue(key, out var cached) && cached.TryGetTarget(out var task) && !task.IsFaulted && !task.IsCanceled)
+                {
+                    return task;
+                }
+
+                task = Task.Run(() => BuildIndex(root));
+                root.DisposeAfter(task);
+                Indexes[key] = new(task);
+
+                return task;
+            }
         }
 
-        private static (SoundEventIndex Index, List<Captions> Captions) BuildIndex(VrfGuiContext context)
+        private static (SoundEventIndex Index, List<ValveResourceFormat.ClosedCaptions.ClosedCaptions> Captions) BuildIndex(VrfGuiContext context)
         {
-            var manifestFiles = SoundEventIndex.GetManifestFiles(context.FileLoaderNoCache, "soundevents/soundevents_manifest.vrman").Select(static file => file + GameFileLoader.CompiledFileSuffix);
-            List<string> eventFiles = [.. manifestFiles.Concat(context.EnumerateFiles("vsndevts_c")).Distinct(StringComparer.OrdinalIgnoreCase)];
-            var stackFiles = context.EnumerateFiles("vsndstck_c").ToList();
-            var index = SoundEventIndex.Build(context.FileLoaderNoCache, eventFiles, stackFiles);
-            var captions = new List<Captions>();
+            const string EventsExtension = "vsndevts_c";
+            const string StacksExtension = "vsndstck_c";
 
-            foreach (var file in context.EnumerateFiles("dat"))
+            var files = context.EnumerateFiles(EventsExtension, StacksExtension, "dat").ToList();
+            var eventFiles = files.Where(static file => file.EndsWith(EventsExtension, StringComparison.OrdinalIgnoreCase))
+                .Select(static file => file[..^GameFileLoader.CompiledFileSuffix.Length]);
+            List<string> loadOrder = [.. SoundEventIndex.GetEventFilesInLoadOrder(context.FileLoaderNoCache, eventFiles).Select(static file => file + GameFileLoader.CompiledFileSuffix)];
+            List<string> stackFiles = [.. files.Where(static file => file.EndsWith(StacksExtension, StringComparison.OrdinalIgnoreCase))];
+            var index = SoundEventIndex.Build(context.FileLoaderNoCache, loadOrder, stackFiles, VrfGuiContext.Logger);
+            var captions = new List<ValveResourceFormat.ClosedCaptions.ClosedCaptions>();
+
+            foreach (var file in files.Where(static file => file.EndsWith("english.dat", StringComparison.OrdinalIgnoreCase)))
             {
-                if (!file.EndsWith("english.dat", StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-
-                using var stream = context.GetFileStream(file);
-
-                if (stream == null)
-                {
-                    continue;
-                }
-
                 try
                 {
-                    var fileCaptions = new Captions();
+                    using var stream = context.GetFileStream(file);
+
+                    if (stream == null)
+                    {
+                        continue;
+                    }
+
+                    var fileCaptions = new ValveResourceFormat.ClosedCaptions.ClosedCaptions();
                     fileCaptions.Read(file, stream);
                     captions.Add(fileCaptions);
                 }
@@ -384,16 +416,44 @@ namespace GUI.Types.Viewers
                 {
                     // Not every .dat file is a caption file
                 }
+                catch (Exception e)
+                {
+                    Log.Error(nameof(SoundEventViewer), $"Failed to read captions from \"{file}\": {e}");
+                }
             }
 
             return (index, captions);
         }
 
         /// <summary>
+        /// The path a file has in the index: its path in its package, or for a file on disk, its path in the game folder
+        /// that holds it. A file outside every game folder keeps its full path.
+        /// </summary>
+        private static string GetIndexPath(VrfGuiContext context)
+        {
+            if (!Path.IsPathRooted(context.FileName))
+            {
+                return context.FileName;
+            }
+
+            foreach (var folder in context.RootContext.GameSearchPaths)
+            {
+                var relative = Path.GetRelativePath(folder, context.FileName);
+
+                if (!relative.StartsWith("..", StringComparison.Ordinal) && !Path.IsPathRooted(relative))
+                {
+                    return relative.Replace(Path.DirectorySeparatorChar, '/');
+                }
+            }
+
+            return context.FileName;
+        }
+
+        /// <summary>
         /// Creates a list of the sound events that play a sound, filled once the index is built. Double-clicking an event
         /// opens the file that defines it.
         /// </summary>
-        public static Control CreateSoundUsersList(VrfGuiContext context, string sound)
+        public static Control CreateSoundUsersList(VrfGuiContext context)
         {
             var grid = new Grid("Used by events")
             {
@@ -425,9 +485,9 @@ namespace GUI.Types.Viewers
                         return;
                     }
 
-                    foreach (var name in index.GetEventsUsingSound(sound))
+                    foreach (var name in index.GetEventsUsingSound(GetIndexPath(context)))
                     {
-                        var file = index.GetDefinitions(name)[0].File;
+                        var file = index.GetDefinitions(name)[^1].File;
                         var rowIndex = grid.Rows.Add(name, file);
                         grid.Rows[rowIndex].Tag = (name, file);
                     }
@@ -437,6 +497,7 @@ namespace GUI.Types.Viewers
                         grid.Rows.Add("No sound event plays this sound", string.Empty);
                     }
 
+                    grid.CurrentCell = null;
                     grid.ClearSelection();
                 }
                 catch (Exception e)
@@ -450,11 +511,17 @@ namespace GUI.Types.Viewers
         {
             try
             {
-                (index, captions) = await GetIndexAsync(guiContext).ConfigureAwait(true);
+                indexTask = GetIndexAsync(guiContext);
+                (index, captions) = await indexTask.ConfigureAwait(true);
 
                 if (!index.Files.Contains(fileName, StringComparer.OrdinalIgnoreCase))
                 {
-                    index.AddEvents(fileName, fileEvents);
+                    ownEvents = new Dictionary<string, KVObject>(StringComparer.OrdinalIgnoreCase);
+
+                    foreach (var (name, data) in fileEvents)
+                    {
+                        ownEvents[name] = data;
+                    }
                 }
 
                 var loadedIndex = index;
@@ -486,41 +553,43 @@ namespace GUI.Types.Viewers
             }
         }
 
+        private KVObject? FindEvent(string name) => ownEvents?.GetValueOrDefault(name) ?? index?.Find(name);
+
         private List<EventRow> CreateRows(SoundEventIndex loadedIndex)
         {
             var result = new List<EventRow>(loadedIndex.Count);
-            var soundExists = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var name in loadedIndex.EventNames)
             {
                 var definitions = loadedIndex.GetDefinitions(name);
+                var duplicate = definitions.Count > 1 || ownEvents?.ContainsKey(name) == true;
 
                 foreach (var (file, data) in definitions)
                 {
-                    var (resolved, problems, _) = loadedIndex.Resolve(data);
-                    var type = GetString(resolved, "type");
-                    var duration = resolved.FirstOrDefault(static r => r.Key == "vsnd_duration").Value is { } durationValue && IsNumber(durationValue)
-                        ? durationValue.ToSingle(CultureInfo.InvariantCulture)
-                        : -1f;
-                    var missingBase = SoundEventIndex.GetBases(data).Any(b => loadedIndex.Find(b.Name) == null);
-                    var missingSound = false;
+                    result.Add(CreateRow(loadedIndex, name, file, data, duplicate));
+                }
+            }
 
-                    foreach (var (_, sound) in loadedIndex.GetSoundReferences(data))
-                    {
-                        if (!soundExists.TryGetValue(sound, out var exists))
-                        {
-                            exists = SoundExists(sound);
-                            soundExists[sound] = exists;
-                        }
-
-                        missingSound |= !exists;
-                    }
-
-                    result.Add(new EventRow(name, file, data, type, duration, definitions.Count > 1, problems.Count > 0, missingBase, missingSound, IsPlayable(type)));
+            if (ownEvents != null)
+            {
+                foreach (var (name, data) in ownEvents)
+                {
+                    result.Add(CreateRow(loadedIndex, name, fileName, data, loadedIndex.Find(name) != null));
                 }
             }
 
             return result;
+        }
+
+        private EventRow CreateRow(SoundEventIndex loadedIndex, string name, string file, KVObject data, bool duplicate)
+        {
+            var (resolved, problems, _) = loadedIndex.Resolve(data, FindEvent);
+            var duration = resolved.FirstOrDefault(static r => r.Key == "vsnd_duration").Value is { } durationValue && IsNumber(durationValue)
+                ? durationValue.ToSingle(CultureInfo.InvariantCulture)
+                : -1f;
+            var missingBase = SoundEventIndex.GetBases(data).Any(b => FindEvent(b.Name) == null);
+
+            return new EventRow(name, file, data, GetString(resolved, "type"), duration, duplicate, problems.Count > 0, missingBase);
         }
 
         private bool SoundExists(string sound)
@@ -529,59 +598,64 @@ namespace GUI.Types.Viewers
             return found.PathOnDisk != null || found.PackageEntry != null;
         }
 
-        private bool IsPlayable(string type)
+        private async Task CheckSoundsAsync()
         {
-            if (type.Length == 0)
-            {
-                return false;
-            }
+            var loadedIndex = index!;
+            var checkedRows = rows;
 
-            lock (playableTypes)
+            soundsChecked = false;
+            countLabel.Text = "Checking sounds...";
+
+            await Task.Run(() =>
             {
-                if (!playableTypes.TryGetValue(type, out var playable))
+                var exists = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+
+                foreach (var row in checkedRows)
                 {
-                    var bank = new SoundEventBank();
-                    var data = KVObject.Collection();
-                    data.Add("type", type);
-                    bank.AddSoundEvent(type, data);
-                    playable = SoundEvent.Build(bank.GetSoundEvent(type)!) != null;
-                    playableTypes.Add(type, playable);
-                }
+                    foreach (var (_, sound) in loadedIndex.GetSoundReferences(row.Data))
+                    {
+                        if (!exists.TryGetValue(sound, out var soundExists))
+                        {
+                            soundExists = SoundExists(sound);
+                            exists[sound] = soundExists;
+                        }
 
-                return playable;
+                        row.MissingSound |= !soundExists;
+                    }
+                }
+            }).ConfigureAwait(true);
+
+            soundsChecked = true;
+
+            if (!IsDisposed && statusBox.SelectedIndex == 4)
+            {
+                ApplyFilter();
             }
         }
 
         private void OnScopeChanged()
         {
-            var scoped = ScopedRows();
-            var types = scoped.GroupBy(static r => r.Type, StringComparer.OrdinalIgnoreCase)
+            var selectedType = typeFilters[Math.Max(0, typeBox.SelectedIndex)];
+            var types = ScopedRows().GroupBy(static r => r.Type, StringComparer.OrdinalIgnoreCase)
                 .OrderBy(static g => g.Key, StringComparer.OrdinalIgnoreCase)
-                .Select(static g => $"{(g.Key.Length == 0 ? "(no type)" : g.Key)} ({g.Count().ToString("N0", CultureInfo.InvariantCulture)})");
-            var selectedType = TypeFilter();
+                .ToList();
 
-            updatingList = true;
+            updating = true;
             typeBox.BeginUpdate();
             typeBox.Items.Clear();
+            typeFilters.Clear();
             typeBox.Items.Add("All types");
+            typeFilters.Add(null);
 
             foreach (var type in types)
             {
-                typeBox.Items.Add(type);
+                typeBox.Items.Add(string.Create(CultureInfo.InvariantCulture, $"{(type.Key.Length == 0 ? "(no type)" : type.Key)} ({type.Count():N0})"));
+                typeFilters.Add(type.Key);
             }
 
-            typeBox.SelectedIndex = 0;
-
-            for (var i = 1; i < typeBox.Items.Count && selectedType != null; i++)
-            {
-                if (TypeOfItem(typeBox.Items[i]!.ToString()!) == selectedType)
-                {
-                    typeBox.SelectedIndex = i;
-                }
-            }
-
+            typeBox.SelectedIndex = Math.Max(0, typeFilters.IndexOf(selectedType));
             typeBox.EndUpdate();
-            updatingList = false;
+            updating = false;
 
             eventGrid.Columns[3].Visible = scopeBox.SelectedIndex == 1;
             ApplyFilter();
@@ -590,24 +664,27 @@ namespace GUI.Types.Viewers
         private IEnumerable<EventRow> ScopedRows()
             => scopeBox.SelectedIndex == 1 ? rows : rows.Where(r => r.File.Equals(fileName, StringComparison.OrdinalIgnoreCase));
 
-        private string? TypeFilter() => typeBox.SelectedIndex > 0 ? TypeOfItem(typeBox.SelectedItem!.ToString()!) : null;
-
-        private static string TypeOfItem(string item)
-        {
-            var type = item[..item.LastIndexOf(" (", StringComparison.Ordinal)];
-            return type == "(no type)" ? string.Empty : type;
-        }
-
         private void ApplyFilter()
         {
-            if (updatingList || index == null)
+            if (updating || index == null)
             {
                 return;
             }
 
-            var search = searchBox.Text.Trim();
-            var type = TypeFilter();
             var status = statusBox.SelectedIndex;
+
+            if (status == 4 && soundsChecked != true)
+            {
+                if (soundsChecked == null)
+                {
+                    _ = CheckSoundsAsync();
+                }
+
+                return;
+            }
+
+            var search = searchBox.Text.Trim();
+            var type = typeFilters[Math.Max(0, typeBox.SelectedIndex)];
 
             filteredRows = [.. ScopedRows().Where(row =>
                 (search.Length == 0 || row.Name.Contains(search, StringComparison.OrdinalIgnoreCase) || row.Type.Contains(search, StringComparison.OrdinalIgnoreCase))
@@ -626,8 +703,8 @@ namespace GUI.Types.Viewers
 
             var total = ScopedRows().Count();
             countLabel.Text = filteredRows.Count == total
-                ? $"{total.ToString("N0", CultureInfo.InvariantCulture)} events"
-                : $"{filteredRows.Count.ToString("N0", CultureInfo.InvariantCulture)} of {total.ToString("N0", CultureInfo.InvariantCulture)} events";
+                ? string.Create(CultureInfo.InvariantCulture, $"{total:N0} events")
+                : string.Create(CultureInfo.InvariantCulture, $"{filteredRows.Count:N0} of {total:N0} events");
 
             RefreshEventGrid();
         }
@@ -662,10 +739,10 @@ namespace GUI.Types.Viewers
 
         private void RefreshEventGrid()
         {
-            updatingList = true;
+            updating = true;
             eventGrid.RowCount = 0;
             eventGrid.RowCount = filteredRows.Count;
-            updatingList = false;
+            updating = false;
 
             SelectCurrentInList();
             eventGrid.Invalidate();
@@ -691,7 +768,7 @@ namespace GUI.Types.Viewers
 
         private void OnEventSelectionChanged(object? sender, EventArgs e)
         {
-            if (updatingList || eventGrid.CurrentCell == null || eventGrid.CurrentCell.RowIndex >= filteredRows.Count)
+            if (updating || eventGrid.CurrentCell == null || eventGrid.CurrentCell.RowIndex >= filteredRows.Count)
             {
                 return;
             }
@@ -700,7 +777,7 @@ namespace GUI.Types.Viewers
 
             if (row != current)
             {
-                ShowRow(row, addToHistory: current != null);
+                ShowRow(row, addToHistory: false);
             }
         }
 
@@ -712,6 +789,9 @@ namespace GUI.Types.Viewers
             RefreshEventGrid();
         }
 
+        /// <summary>Completes once the events are indexed and listed.</summary>
+        public Task Loaded => loading;
+
         /// <summary>
         /// Shows an event in the details, as following a link to it does. The definition in <paramref name="file"/> is shown
         /// when given, otherwise the one that wins.
@@ -719,15 +799,21 @@ namespace GUI.Types.Viewers
         /// <returns>Whether the event is known.</returns>
         public bool ShowEvent(string name, string? file = null)
         {
-            var row = rows.FirstOrDefault(r => r.Name.Equals(name, StringComparison.OrdinalIgnoreCase) && (file == null || r.File.Equals(file, StringComparison.OrdinalIgnoreCase)));
+            var row = file != null
+                ? rows.Find(r => r.Name.Equals(name, StringComparison.OrdinalIgnoreCase) && r.File.Equals(file, StringComparison.OrdinalIgnoreCase))
+                : rows.FindLast(r => r.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
 
             if (row == null)
             {
                 return false;
             }
 
-            ShowRow(row, addToHistory: current != null && current != row);
-            SelectCurrentInList();
+            if (row != current)
+            {
+                ShowRow(row, addToHistory: true);
+                SelectCurrentInList();
+            }
+
             return true;
         }
 
@@ -735,7 +821,7 @@ namespace GUI.Types.Viewers
         {
             var rowIndex = current == null ? -1 : filteredRows.IndexOf(current);
 
-            updatingList = true;
+            updating = true;
             eventGrid.ClearSelection();
 
             if (rowIndex >= 0)
@@ -744,7 +830,7 @@ namespace GUI.Types.Viewers
                 eventGrid.Rows[rowIndex].Selected = true;
             }
 
-            updatingList = false;
+            updating = false;
         }
 
         public void GoBack() => Navigate(backHistory, forwardHistory);
@@ -762,9 +848,7 @@ namespace GUI.Types.Viewers
             from.RemoveAt(from.Count - 1);
             to.Add((current.Name, current.File));
 
-            var row = rows.FirstOrDefault(r => r.Name == name && r.File == file);
-
-            if (row != null)
+            if (rows.Find(r => r.Name == name && r.File == file) is { } row)
             {
                 ShowRow(row, addToHistory: false);
                 SelectCurrentInList();
@@ -784,21 +868,26 @@ namespace GUI.Types.Viewers
             titleLabel.Text = row.Name;
             toolTip.SetToolTip(titleLabel, row.Name);
             typeLink.Text = row.Type.Length > 0 ? row.Type : "(no type)";
-            typeLink.Links[0].Enabled = index?.GetStackFile(row.Type) != null;
+            typeLink.Links[0].Enabled = index!.GetStackFile(row.Type) != null;
             fileLink.Text = row.File;
 
             var notices = new List<string>();
-            var definitions = index!.GetDefinitions(row.Name);
+            List<string> definitionFiles = [.. index.GetDefinitions(row.Name).Select(static d => d.File)];
 
-            if (definitions.Count > 1)
+            if (ownEvents?.ContainsKey(row.Name) == true)
             {
-                var others = string.Join(", ", definitions.Where(d => d.File != row.File).Select(static d => d.File));
-                notices.Add(definitions[^1].File == row.File
-                    ? $"Also defined in {others}. This definition is used, as it loads last."
-                    : $"Also defined in {others}. The definition in {definitions[^1].File} is used, as it loads last.");
+                definitionFiles.Add(fileName);
             }
 
-            var (resolved, problems, _) = index.Resolve(row.Data);
+            if (definitionFiles.Count > 1)
+            {
+                var others = string.Join(", ", definitionFiles.Where(f => f != row.File));
+                notices.Add(definitionFiles[^1] == row.File
+                    ? $"Also defined in {others}. This definition is used, as it loads last."
+                    : $"Also defined in {others}. The definition in {definitionFiles[^1]} is used, as it loads last.");
+            }
+
+            var (resolved, problems, _) = index.Resolve(row.Data, FindEvent);
             notices.AddRange(problems);
 
             if (!row.Playable)
@@ -860,16 +949,9 @@ namespace GUI.Types.Viewers
                 return;
             }
 
-            var resolved = index.Resolve(current.Data).Keys;
-            var values = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-
-            for (var i = 0; i < resolved.Count; i++)
-            {
-                values.TryAdd(resolved[i].Key, i);
-            }
-
+            var resolved = index.Resolve(current.Data, FindEvent).Keys;
             var fields = current.Type.Length > 0 ? index.GetStackFields(current.Type) : [];
-            var groups = new List<(string Name, List<(string Key, KVObject? Value, string Source, ValueSource Kind, bool EditorHidden)> Rows)>();
+            var groups = new List<(string Name, List<(string Key, KVObject? Value, string Source, ValueSource Kind, bool Curve)> Rows)>();
             var shown = new HashSet<int>();
 
             foreach (var (name, field, stack) in fields)
@@ -883,24 +965,24 @@ namespace GUI.Types.Viewers
                     groups.Add((groupName, group));
                 }
 
-                var editorHidden = IsEditorHidden(field, resolved, values, fields);
+                var curve = field.GetStringProperty("data_type") == "float6";
+                var found = false;
 
-                if (values.ContainsKey(name))
+                for (var i = 0; i < resolved.Count; i++)
                 {
-                    for (var i = 0; i < resolved.Count; i++)
-                    {
-                        var (key, value, source) = resolved[i];
+                    var (key, value, source) = resolved[i];
 
-                        if (key.Equals(name, StringComparison.OrdinalIgnoreCase) && shown.Add(i))
-                        {
-                            group.Add((name, value, source ?? string.Empty, source == null ? ValueSource.Own : ValueSource.Inherited, editorHidden));
-                        }
+                    if (key.Equals(name, StringComparison.OrdinalIgnoreCase) && shown.Add(i))
+                    {
+                        group.Add((name, value, source ?? string.Empty, source == null ? ValueSource.Own : ValueSource.Inherited, curve));
+                        found = true;
                     }
                 }
-                else if (defaultsBox.Checked)
+
+                if (!found && defaultsBox.Checked)
                 {
                     var origin = stack.Equals(current.Type, StringComparison.OrdinalIgnoreCase) ? stack : $"{stack}, imported";
-                    group.Add((name, field.TryGetValue("value", out var defaultValue) ? defaultValue : null, $"default ({origin})", ValueSource.Default, editorHidden));
+                    group.Add((name, field.TryGetValue("value", out var defaultValue) ? defaultValue : null, $"default ({origin})", ValueSource.Default, curve));
                 }
             }
 
@@ -930,21 +1012,19 @@ namespace GUI.Types.Viewers
                     continue;
                 }
 
-                var headerIndex = propertyGrid.Rows.Add(groupName, string.Empty, string.Empty);
-                var header = propertyGrid.Rows[headerIndex];
+                var header = propertyGrid.Rows[propertyGrid.Rows.Add(groupName, string.Empty, string.Empty)];
                 header.Tag = ValueSource.Group;
                 header.DefaultCellStyle.Font = boldFont;
                 header.DefaultCellStyle.BackColor = Themer.CurrentThemeColors.App;
                 header.DefaultCellStyle.SelectionBackColor = Themer.CurrentThemeColors.App;
                 header.DefaultCellStyle.SelectionForeColor = Themer.CurrentThemeColors.Contrast;
 
-                foreach (var (key, value, source, kind, editorHidden) in groupRows)
+                foreach (var (key, value, source, kind, isCurve) in groupRows)
                 {
-                    var rowIndex = propertyGrid.Rows.Add(key, value == null ? string.Empty : FormatValue(value), source);
-                    var gridRow = propertyGrid.Rows[rowIndex];
+                    var gridRow = propertyGrid.Rows[propertyGrid.Rows.Add(key, value == null ? string.Empty : FormatValue(value), source)];
                     gridRow.Tag = kind;
 
-                    if (value != null && ParseCurve(value) is { } curve)
+                    if (isCurve && value != null && ParseCurve(value) is { } curve)
                     {
                         gridRow.Cells[1].Tag = curve;
                         gridRow.Height = this.AdjustForDPI(44);
@@ -966,47 +1046,12 @@ namespace GUI.Types.Viewers
                             gridRow.DefaultCellStyle.ForeColor = Themer.CurrentThemeColors.ContrastSoft;
                             break;
                     }
-
-                    if (editorHidden)
-                    {
-                        gridRow.DefaultCellStyle.ForeColor = Themer.CurrentThemeColors.Border;
-                        gridRow.Cells[0].ToolTipText = "The editor hides this field while the flag that enables it is off. It has no effect on the engine.";
-                    }
                 }
             }
 
             propertyGrid.ResumeLayout();
             propertyGrid.ClearSelection();
         }
-
-        private static bool IsEditorHidden(KVObject field, List<(string Key, KVObject Value, string? Source)> resolved, Dictionary<string, int> values,
-            List<(string Name, KVObject Field, string Stack)> fields)
-        {
-            var flag = field.GetSubCollection("_system_properties")?.GetStringProperty("display_edit_flag");
-
-            if (string.IsNullOrEmpty(flag))
-            {
-                return false;
-            }
-
-            var flagName = flag.StartsWith("public.", StringComparison.Ordinal) ? flag["public.".Length..] : flag;
-
-            if (values.TryGetValue(flagName, out var valueIndex))
-            {
-                return !IsTrue(resolved[valueIndex].Value);
-            }
-
-            var flagField = fields.Find(f => f.Name == flagName).Field;
-            return flagField != null && flagField.TryGetValue("value", out var defaultValue) && !IsTrue(defaultValue);
-        }
-
-        private static bool IsTrue(KVObject value) => value.ValueType switch
-        {
-            KVValueType.Boolean => (bool)value,
-            KVValueType.String => (string)value is "true" or "1" || (float.TryParse((string)value, NumberStyles.Float, CultureInfo.InvariantCulture, out var number) && number != 0f),
-            _ when IsNumber(value) => value.ToSingle(CultureInfo.InvariantCulture) != 0f,
-            _ => true,
-        };
 
         private static bool IsNumber(KVObject value) => value.ValueType is KVValueType.FloatingPoint or KVValueType.FloatingPoint64
             or KVValueType.Int16 or KVValueType.Int32 or KVValueType.Int64 or KVValueType.UInt16 or KVValueType.UInt32 or KVValueType.UInt64;
@@ -1019,7 +1064,7 @@ namespace GUI.Types.Viewers
 
         private static string FormatValue(KVObject value, int maxLength = 300)
         {
-            var text = new System.Text.StringBuilder();
+            var text = new StringBuilder();
             Append(value);
             return text.Length > maxLength ? string.Concat(text.ToString(0, maxLength), "...") : text.ToString();
 
@@ -1079,45 +1124,54 @@ namespace GUI.Types.Viewers
             }
         }
 
+        /// <summary>
+        /// Reads a float6 curve, either compiled as an array of points or written as a stack default that holds each point
+        /// as text. Returns null for anything else.
+        /// </summary>
         private static SoundEventCurve? ParseCurve(KVObject value)
         {
-            KVObject points;
+            var points = KVObject.Array();
 
-            if (value.ValueType == KVValueType.Array && value.Count > 0 && value[0].ValueType == KVValueType.Array)
+            foreach (var point in value.ValueType is KVValueType.Array or KVValueType.Collection ? value.Values : [])
             {
-                points = value;
-            }
-            else if (value.ValueType == KVValueType.Collection && value.Count > 0 && value.Values.All(static v => v.ValueType == KVValueType.String))
-            {
-                points = KVObject.Array();
-
-                foreach (var text in value.Values)
+                var numbers = point.ValueType switch
                 {
-                    var numbers = ((string)text).Trim('[', ']', ' ').Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                    KVValueType.Array when point.Values.All(IsNumber) => point.Values.Select(static n => n.ToSingle(CultureInfo.InvariantCulture)).ToArray(),
+                    KVValueType.String => ParseNumbers((string)point),
+                    _ => null,
+                };
 
-                    if (numbers.Length < 2)
-                    {
-                        return null;
-                    }
-
-                    points.Add(KVObject.Array(numbers.Select(static n => (KVObject)float.Parse(n, CultureInfo.InvariantCulture))));
+                if (numbers is not { Length: 6 })
+                {
+                    return null;
                 }
+
+                points.Add(KVObject.Array(numbers.Select(static n => (KVObject)n)));
             }
-            else
+
+            if (points.Count == 0)
             {
                 return null;
             }
 
             var holder = KVObject.Collection();
             holder.Add("curve", points);
+            return SoundEventCurve.Parse(holder, "curve");
 
-            try
+            static float[]? ParseNumbers(string text)
             {
-                return SoundEventCurve.Parse(holder, "curve");
-            }
-            catch (FormatException)
-            {
-                return null;
+                var parts = text.Trim('[', ']', ' ').Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                var numbers = new float[parts.Length];
+
+                for (var i = 0; i < parts.Length; i++)
+                {
+                    if (!float.TryParse(parts[i], NumberStyles.Float, CultureInfo.InvariantCulture, out numbers[i]))
+                    {
+                        return null;
+                    }
+                }
+
+                return numbers;
             }
         }
 
@@ -1176,17 +1230,18 @@ namespace GUI.Types.Viewers
 
         private void ShowLinks(EventRow row)
         {
+            updating = true;
             soundGrid.Rows.Clear();
 
             foreach (var (key, sound) in index!.GetSoundReferences(row.Data))
             {
                 var exists = SoundExists(sound);
-                var rowIndex = soundGrid.Rows.Add(sound, key, exists ? string.Empty : "Not shipped");
-                soundGrid.Rows[rowIndex].Tag = exists ? sound : null;
+                var soundRow = soundGrid.Rows[soundGrid.Rows.Add(sound, key, exists ? string.Empty : "Not shipped")];
+                soundRow.Tag = exists ? sound : null;
 
                 if (!exists)
                 {
-                    soundGrid.Rows[rowIndex].DefaultCellStyle.ForeColor = Themer.CurrentThemeColors.Attention;
+                    soundRow.DefaultCellStyle.ForeColor = Themer.CurrentThemeColors.Attention;
                 }
             }
 
@@ -1194,13 +1249,13 @@ namespace GUI.Types.Viewers
 
             foreach (var (key, target) in index.GetEventReferences(row.Name, row.Data))
             {
-                var exists = index.Find(target) != null;
-                var rowIndex = referenceGrid.Rows.Add(target, key, exists ? string.Empty : "Missing");
-                referenceGrid.Rows[rowIndex].Tag = exists ? target : null;
+                var exists = FindEvent(target) != null;
+                var referenceRow = referenceGrid.Rows[referenceGrid.Rows.Add(target, key, exists ? string.Empty : "Not loaded")];
+                referenceRow.Tag = exists ? target : null;
 
                 if (!exists)
                 {
-                    referenceGrid.Rows[rowIndex].DefaultCellStyle.ForeColor = Themer.CurrentThemeColors.Attention;
+                    referenceRow.DefaultCellStyle.ForeColor = Themer.CurrentThemeColors.Attention;
                 }
             }
 
@@ -1208,13 +1263,12 @@ namespace GUI.Types.Viewers
 
             foreach (var (user, key) in index.GetReferencedBy(row.Name))
             {
-                var rowIndex = usedByGrid.Rows.Add(user, key);
-                usedByGrid.Rows[rowIndex].Tag = user;
+                usedByGrid.Rows[usedByGrid.Rows.Add(user, key)].Tag = user;
             }
 
-            soundsPage.Text = $"Sounds ({soundGrid.RowCount})";
-            referencesPage.Text = $"References ({referenceGrid.RowCount})";
-            usedByPage.Text = $"Used by ({usedByGrid.RowCount})";
+            soundsPage.Text = string.Create(CultureInfo.InvariantCulture, $"Sounds ({soundGrid.RowCount})");
+            referencesPage.Text = string.Create(CultureInfo.InvariantCulture, $"References ({referenceGrid.RowCount})");
+            usedByPage.Text = string.Create(CultureInfo.InvariantCulture, $"Used by ({usedByGrid.RowCount})");
 
             foreach (var grid in new[] { soundGrid, referenceGrid, usedByGrid })
             {
@@ -1222,7 +1276,16 @@ namespace GUI.Types.Viewers
                 grid.ClearSelection();
             }
 
+            updating = false;
             StopSound();
+        }
+
+        private void OnSoundSelectionChanged(object? sender, EventArgs e)
+        {
+            if (!updating && soundGrid.CurrentCell != null)
+            {
+                PlaySound(soundGrid.CurrentCell.RowIndex, autoPlay: false);
+            }
         }
 
         private void OnGridRowActivated(object? sender, int rowIndex)
@@ -1234,9 +1297,8 @@ namespace GUI.Types.Viewers
             }
 
             var grid = (Grid)sender!;
-            var tag = grid.Rows[rowIndex].Tag;
 
-            var target = tag switch
+            var target = grid.Rows[rowIndex].Tag switch
             {
                 string name => name,
                 ValueSource.Inherited => ((string)grid.Rows[rowIndex].Cells[2].Value!).Split(" via ")[0],
@@ -1253,12 +1315,12 @@ namespace GUI.Types.Viewers
         /// <returns>Whether the sound could be loaded.</returns>
         public bool PlaySound(int rowIndex, bool autoPlay)
         {
+            StopSound();
+
             if (rowIndex < 0 || rowIndex >= soundGrid.RowCount || soundGrid.Rows[rowIndex].Tag is not string sound)
             {
                 return false;
             }
-
-            StopSound();
 
             try
             {
@@ -1308,46 +1370,91 @@ namespace GUI.Types.Viewers
                 return;
             }
 
-            if (player == null)
+            ReleasePlayer();
+
+            try
             {
-                try
-                {
 #pragma warning disable CA2000 // The player owns the device and disposes it
-                    player = new SoundEventPlayer(guiContext, new NAudioDevice(), VrfGuiContext.Logger);
+                player = new SoundEventPlayer(guiContext, new NAudioDevice(), VrfGuiContext.Logger);
 #pragma warning restore CA2000
-                }
-                catch (System.Runtime.InteropServices.COMException e)
-                {
-                    Log.Warn(nameof(SoundEventViewer), $"No audio device available, sound playback disabled: {e.Message}");
-                    return;
-                }
+            }
+            catch (System.Runtime.InteropServices.COMException e)
+            {
+                Log.Warn(nameof(SoundEventViewer), $"No audio device available, sound playback disabled: {e.Message}");
+                return;
+            }
 
-                foreach (var name in index.EventNames)
-                {
-                    player.Bank.AddSoundEvent(name, index.Find(name)!);
-                }
+            foreach (var name in index.EventNames)
+            {
+                player.Bank.AddSoundEvent(name, index.Find(name)!);
+            }
 
-                playerTimer.Start();
+            foreach (var (name, data) in ownEvents ?? [])
+            {
+                player.Bank.AddSoundEvent(name, data);
             }
 
             // The shown definition may not be the one that wins
-            player.Bank.RemoveSoundEvent(row.Name);
             player.Bank.AddSoundEvent(row.Name, row.Data);
             player.Volume = Settings.Config.Volume;
             player.Update(listener);
+            playing = player.Play(row.Name, channel: PreviewChannel);
 
-            if (player.Play(row.Name, channel: PreviewChannel) == null)
+            if (playing == null)
             {
                 Log.Warn(nameof(SoundEventViewer), $"Sound event \"{row.Name}\" played nothing");
+                ReleasePlayer();
+                return;
             }
 
+            playerTimer.Start();
             stopButton.Enabled = true;
         }
 
+        private void OnPlayerTick(object? sender, EventArgs e)
+        {
+            if (player == null || !Visible)
+            {
+                ReleasePlayer();
+                return;
+            }
+
+            player.Update(listener);
+            audiblePositioned.Clear();
+            audibleFlat.Clear();
+            player.CollectDebugSounds(audiblePositioned, audibleFlat);
+
+            if (playing is not { Started: true } && audiblePositioned.Count == 0 && audibleFlat.Count == 0)
+            {
+                ReleasePlayer();
+            }
+        }
+
+        /// <summary>Stops the event and the sound that play.</summary>
         public void StopPlayback()
         {
-            player?.StopChannel(PreviewChannel);
+            ReleasePlayer();
             StopSound();
+        }
+
+        /// <summary>Disposes the event player with its audio device, which also gives up being the renderer's active player.</summary>
+        private void ReleasePlayer()
+        {
+            playerTimer.Stop();
+            playing = null;
+            player?.Dispose();
+            player = null;
+            stopButton.Enabled = false;
+        }
+
+        protected override void OnVisibleChanged(EventArgs e)
+        {
+            base.OnVisibleChanged(e);
+
+            if (!Visible)
+            {
+                StopPlayback();
+            }
         }
 
         private void CopyName()
@@ -1398,21 +1505,8 @@ namespace GUI.Types.Viewers
 
             if (tab.Tag is ExportData exportData && await exportData.Loaded.ConfigureAwait(true) == null && Find(tab) is { } viewer)
             {
-                await viewer.WaitForRowsAsync().ConfigureAwait(true);
+                await viewer.Loaded.ConfigureAwait(true);
                 viewer.ShowEvent(eventName, file);
-            }
-        }
-
-        private async Task WaitForRowsAsync()
-        {
-            while (index == null || rows.Count == 0)
-            {
-                if (IsDisposed)
-                {
-                    return;
-                }
-
-                await Task.Delay(50).ConfigureAwait(true);
             }
         }
 
@@ -1437,8 +1531,6 @@ namespace GUI.Types.Viewers
 
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
-            var typing = ActiveControl == searchBox || (ActiveControl as ContainerControl)?.ActiveControl is TextBox;
-
             switch (keyData)
             {
                 case Keys.Control | Keys.F:
@@ -1458,11 +1550,11 @@ namespace GUI.Types.Viewers
                     StopPlayback();
                     return true;
 
-                case Keys.Space when !typing && audioPanel?.ContainsFocus != true:
+                case Keys.Space when eventGrid.Focused:
                     PlayEvent();
                     return true;
 
-                case Keys.Control | Keys.C when !typing:
+                case Keys.Control | Keys.C when eventGrid.Focused:
                     CopyName();
                     return true;
             }
@@ -1571,8 +1663,8 @@ namespace GUI.Types.Viewers
         {
             if (disposing)
             {
+                ReleasePlayer();
                 playerTimer.Dispose();
-                player?.Dispose();
                 StopSound();
                 toolTip.Dispose();
                 titleFont.Dispose();
@@ -1583,10 +1675,35 @@ namespace GUI.Types.Viewers
             base.Dispose(disposing);
         }
 
-        /// <summary>A read only grid that selects whole rows, and raises <see cref="Activated"/> on double-click or Enter.</summary>
+        /// <summary>A text box that draws its hint in the theme's soft text colour while it is empty.</summary>
+        private sealed class SearchBox : TextBox
+        {
+            private const int WM_PAINT = 0x000F;
+
+            public string Hint { get; init; } = string.Empty;
+
+            protected override void WndProc(ref Message m)
+            {
+                base.WndProc(ref m);
+
+                if (m.Msg == WM_PAINT && TextLength == 0)
+                {
+                    using var graphics = CreateGraphics();
+                    System.Windows.Forms.TextRenderer.DrawText(graphics, Hint, Font, ClientRectangle, Themer.CurrentThemeColors.ContrastSoft,
+                        TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+                }
+            }
+        }
+
+        /// <summary>
+        /// A read only grid that selects whole rows, raises <see cref="Activated"/> on double-click or Enter, and copies the
+        /// current cell with Ctrl+C.
+        /// </summary>
         private sealed class Grid : DataGridView
         {
             public event EventHandler<int>? Activated;
+
+            public bool CopiesCell { get; init; } = true;
 
             public Grid(string name)
             {
@@ -1610,6 +1727,13 @@ namespace GUI.Types.Viewers
                 ColumnHeadersHeight = this.AdjustForDPI(26);
             }
 
+            protected override void OnCurrentCellChanged(EventArgs e)
+            {
+                base.OnCurrentCellChanged(e);
+
+                ColumnHeadersDefaultCellStyle.SelectionBackColor = ColumnHeadersDefaultCellStyle.BackColor;
+            }
+
             protected override void OnCellDoubleClick(DataGridViewCellEventArgs e)
             {
                 base.OnCellDoubleClick(e);
@@ -1618,6 +1742,17 @@ namespace GUI.Types.Viewers
                 {
                     Activated?.Invoke(this, e.RowIndex);
                 }
+            }
+
+            protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+            {
+                if (CopiesCell && keyData == (Keys.Control | Keys.C) && CurrentCell?.FormattedValue is string { Length: > 0 } text)
+                {
+                    AppClipboard.SetText(text);
+                    return true;
+                }
+
+                return base.ProcessCmdKey(ref msg, keyData);
             }
 
             protected override bool ProcessDialogKey(Keys keyData)
@@ -1629,17 +1764,6 @@ namespace GUI.Types.Viewers
                 }
 
                 return base.ProcessDialogKey(keyData);
-            }
-
-            protected override bool ProcessDataGridViewKey(KeyEventArgs e)
-            {
-                if (e.KeyData == Keys.Enter && CurrentRow != null)
-                {
-                    Activated?.Invoke(this, CurrentRow.Index);
-                    return true;
-                }
-
-                return base.ProcessDataGridViewKey(e);
             }
 
             protected override void OnMouseUp(MouseEventArgs e)

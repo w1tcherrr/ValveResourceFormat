@@ -355,11 +355,11 @@ scripts dump losslessly as KV3 text; stack scripts dump each stack's stored text
 duplicate stack names collapse to the last one. VMix DSP graphs are dumped but not
 interpreted.
 
-The sound event viewer lists the events of a file or of the whole game, with the keys each
-inherits through `base`, its stack's defaults and the events and sounds it links, and warns
-where the engine would reject an event or skip a base. Legacy events stored as KeyValues1
-operator stacks are shown mapped to the modern layout. Events play only for the stack types
-the renderer implements; the rest can only play their sounds one at a time.
+The sound event viewer plays only events of the stack types the renderer implements, so
+almost no Dota 2, Artifact, Underlords, Desk Job, The Lab or SteamVR Home events play; their
+sounds still play one at a time. Legacy events stored as KeyValues1 operator stacks are shown
+mapped to the modern layout, not as stored. Closed captions are found only by the exact event
+name, so games whose caption keys differ from their event names show none.
 
 ## Choreo, Captions, and UI
 

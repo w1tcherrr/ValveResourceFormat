@@ -1,6 +1,7 @@
 #if DEBUG
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
+using System.Globalization;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -30,7 +31,7 @@ internal sealed partial class McpTools
     {
         await WaitForSoundEvents(tab, cancellationToken).ConfigureAwait(false);
 
-        return await OnUi(() =>
+        await OnUi(() =>
         {
             var viewer = SoundEventViewerOf(tab);
 
@@ -57,7 +58,22 @@ internal sealed partial class McpTools
             {
                 Named<TextBox>(viewer, "Search").Text = search;
             }
+        }, cancellationToken).ConfigureAwait(false);
 
+        // The missing sounds filter first checks every sound in the background
+        for (var waited = TimeSpan.Zero; await OnUi(() => Named<Label>(SoundEventViewerOf(tab), "Count").Text, cancellationToken).ConfigureAwait(false) == "Checking sounds..."; waited += TimeSpan.FromMilliseconds(100))
+        {
+            if (waited > LoadTimeout)
+            {
+                throw new ToolException("The viewer is still checking which sounds are missing.");
+            }
+
+            await Task.Delay(100, cancellationToken).ConfigureAwait(false);
+        }
+
+        return await OnUi(() =>
+        {
+            var viewer = SoundEventViewerOf(tab);
             var grid = Named<DataGridView>(viewer, "Events");
             var events = new List<object>();
 
@@ -89,7 +105,7 @@ internal sealed partial class McpTools
         [Description("The file whose definition to show, when several files define the event.")] string? file = null,
         [Description("A button to press after showing the event: play_event, stop, back, forward, copy_name or open_file. play_sound plays the sound at 'sound' in the sounds list.")] string? action = null,
         [Description("Index in the sounds list for play_sound.")][Range(0, int.MaxValue)] int sound = 0,
-        [Description("Leave out properties that only show a stack default.")] bool hideDefaults = false,
+        [Description("Whether to show properties that only show a stack default, as the checkbox does. Leave it out to keep the checkbox as it is.")] bool? showDefaults = null,
         CancellationToken cancellationToken = default)
     {
         await WaitForSoundEvents(tab, cancellationToken).ConfigureAwait(false);
@@ -108,7 +124,10 @@ internal sealed partial class McpTools
                 throw new ToolException($"No event '{name}'{(file == null ? string.Empty : $" in '{file}'")} is indexed.");
             }
 
-            Named<CheckBox>(viewer, "Show stack defaults").Checked = !hideDefaults;
+            if (showDefaults != null)
+            {
+                Named<CheckBox>(viewer, "Show stack defaults").Checked = showDefaults.Value;
+            }
 
             switch (action)
             {
@@ -119,7 +138,7 @@ internal sealed partial class McpTools
 
                     if (sound >= sounds.RowCount)
                     {
-                        throw new ToolException($"The event has {sounds.RowCount} sounds.");
+                        throw new ToolException(string.Create(CultureInfo.InvariantCulture, $"The event has {sounds.RowCount} sounds."));
                     }
 
                     if (sounds.Parent is TabPage { Parent: TabControl linkTabs } soundsPage)
@@ -131,7 +150,7 @@ internal sealed partial class McpTools
 
                     if (!viewer.PlaySound(sound, autoPlay: true))
                     {
-                        throw new ToolException($"Sound {sound} cannot be played. {sounds.Rows[sound].Cells[2].Value}");
+                        throw new ToolException(string.Create(CultureInfo.InvariantCulture, $"Sound {sound} cannot be played. {sounds.Rows[sound].Cells[2].Value}"));
                     }
 
                     break;
@@ -165,7 +184,7 @@ internal sealed partial class McpTools
             var users = await OnUi(() =>
             {
                 var grid = Named<DataGridView>(tab, "Used by events");
-                return grid.RowCount == 0 ? null : GridRows(grid);
+                return grid.RowCount == 0 ? null : GridRows(grid, linksOnly: true);
             }, cancellationToken).ConfigureAwait(false);
 
             if (users != null || waited > LoadTimeout)
@@ -188,24 +207,13 @@ internal sealed partial class McpTools
             await data.Loaded.WaitAsync(LoadTimeout, cancellationToken).ConfigureAwait(false);
         }
 
-        for (var waited = TimeSpan.Zero; waited < LoadTimeout; waited += TimeSpan.FromMilliseconds(100))
+        var viewer = await OnUi(() => SoundEventViewerOf(tab), cancellationToken).ConfigureAwait(false);
+        await viewer.Loaded.WaitAsync(LoadTimeout, cancellationToken).ConfigureAwait(false);
+
+        if (await OnUi(() => Named<Label>(viewer, "Count").Text, cancellationToken).ConfigureAwait(false) is var count && count.StartsWith("Failed", StringComparison.Ordinal))
         {
-            var count = await OnUi(() => Named<Label>(SoundEventViewerOf(tab), "Count").Text, cancellationToken).ConfigureAwait(false);
-
-            if (count.StartsWith("Failed", StringComparison.Ordinal))
-            {
-                throw new ToolException(count);
-            }
-
-            if (count.EndsWith(" events", StringComparison.Ordinal))
-            {
-                return;
-            }
-
-            await Task.Delay(100, cancellationToken).ConfigureAwait(false);
+            throw new ToolException(count);
         }
-
-        throw new ToolException("The sound event viewer is still indexing.");
     }
 
     private static bool PressSoundEventButton(TabPage tab, string? name, string? file, string button)
@@ -269,7 +277,7 @@ internal sealed partial class McpTools
             CanPlay = Named<ThemedButton>(viewer, "Play event").Enabled,
             CanGoBack = Flag(Named<ThemedButton>(viewer, "Back").Enabled),
             CanGoForward = Flag(Named<ThemedButton>(viewer, "Forward").Enabled),
-            SoundPanel = Flag(FindAudioPanel(viewer) != null),
+            SoundPanel = Flag(Named<Panel>(viewer, "Sound player").Visible),
             Properties = groups,
             Sounds = GridRows(Named<DataGridView>(viewer, "Sounds")),
             References = GridRows(Named<DataGridView>(viewer, "References")),
@@ -277,30 +285,19 @@ internal sealed partial class McpTools
         };
     }
 
-    private static AudioPlaybackPanel? FindAudioPanel(Control control)
-    {
-        if (control is AudioPlaybackPanel panel)
-        {
-            return panel;
-        }
-
-        foreach (Control child in control.Controls)
-        {
-            if (FindAudioPanel(child) is { } found)
-            {
-                return found;
-            }
-        }
-
-        return null;
-    }
-
-    private static List<Dictionary<string, object?>> GridRows(DataGridView grid)
+    /// <param name="grid">The grid to read.</param>
+    /// <param name="linksOnly">Leave out rows that link to nothing, such as a note that the list is empty.</param>
+    private static List<Dictionary<string, object?>> GridRows(DataGridView grid, bool linksOnly = false)
     {
         var rows = new List<Dictionary<string, object?>>();
 
         foreach (DataGridViewRow row in grid.Rows)
         {
+            if (linksOnly && row.Tag == null)
+            {
+                continue;
+            }
+
             var cells = new Dictionary<string, object?>();
 
             foreach (DataGridViewCell cell in row.Cells)

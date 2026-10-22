@@ -779,7 +779,7 @@ namespace GUI.Types.Viewers
                         var autoPlay = ((Settings.QuickPreviewFlags)Settings.Config.QuickFilePreview & Settings.QuickPreviewFlags.AutoPlaySounds) != 0;
 
                         specialTabPage.Controls.Add(CreateSoundInfoLabel(soundData));
-                        specialTabPage.Controls.Add(SoundEventViewer.CreateSoundUsersList(vrfGuiContext, vrfGuiContext.FileName));
+                        specialTabPage.Controls.Add(SoundEventViewer.CreateSoundUsersList(vrfGuiContext));
 
                         try
                         {
