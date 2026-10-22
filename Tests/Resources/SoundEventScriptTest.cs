@@ -413,22 +413,47 @@ namespace Tests.Resources
                 await Assert.That(keys.Rejected).IsFalse();
                 await Assert.That(keys.Keys.Single(r => r.Key == "track_vsnd_files").Field).IsEqualTo("track_1");
             }
+        }
 
-            static KVObject Field(string dataType, string value, params (string Key, KVObject Value)[] extra)
-                => Event([("data_type", dataType), ("value", value), .. extra]);
+        [Test]
+        public async Task PlacesFragmentKeysInNestedSubStackFields()
+        {
+            var index = new SoundEventIndex();
+            index.AddStack("soundstacks/test.vsndstck_c", "parent", Stack(("outer", Field("public_opvar", "middle"))));
+            index.AddStack("soundstacks/test.vsndstck_c", "middle", Stack(("inner", Field("public_opvar", "leaf")), ("middle_level", Field("float", "1"))));
+            index.AddStack("soundstacks/test.vsndstck_c", "leaf", Stack(("leaf_level", Field("float", "0.5"))));
+            index.AddEvents("soundevents/test.vsndevts_c",
+            [
+                ("Middle", Event(("type", "middle"), ("leaf_level", 2f))),
+                ("Nested", Event(("type", "parent"), ("base", KVObject.Array([Fragment("Middle", "outer")])))),
+            ]);
 
-            static KVObject Stack(params (string Name, KVObject Field)[] fields)
+            var fields = index.GetStackFields("parent");
+            var keys = index.Resolve(index.Find("Nested")!);
+
+            using (Assert.Multiple())
             {
-                var variables = KVObject.Collection();
-
-                foreach (var (name, field) in fields)
-                {
-                    variables.Add(name, field);
-                }
-
-                var op = Event(("name", "public"), ("operator", "util_null"), ("operator_variables", variables));
-                return Event(("operators", KVObject.Array([op])));
+                await Assert.That(fields.Single(f => f.Name == "middle_level").Blocks).IsEquivalentTo(["outer"]);
+                await Assert.That(fields.Single(f => f.Name == "leaf_level").Blocks).IsEquivalentTo(["outer", "inner"], TUnit.Assertions.Enums.CollectionOrdering.Matching);
+                await Assert.That(keys.Rejected).IsFalse();
+                await Assert.That(keys.Keys.Single(r => r.Key == "leaf_level").Field).IsEqualTo("outer");
             }
+        }
+
+        private static KVObject Field(string dataType, string value, params (string Key, KVObject Value)[] extra)
+            => Event([("data_type", dataType), ("value", value), .. extra]);
+
+        private static KVObject Stack(params (string Name, KVObject Field)[] fields)
+        {
+            var variables = KVObject.Collection();
+
+            foreach (var (name, field) in fields)
+            {
+                variables.Add(name, field);
+            }
+
+            var op = Event(("name", "public"), ("operator", "util_null"), ("operator_variables", variables));
+            return Event(("operators", KVObject.Array([op])));
         }
 
         [Test]

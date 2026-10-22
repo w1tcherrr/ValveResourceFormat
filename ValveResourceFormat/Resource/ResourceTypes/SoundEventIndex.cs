@@ -42,8 +42,8 @@ namespace ValveResourceFormat.ResourceTypes
         private readonly List<string> files = [];
         private readonly Dictionary<string, List<(string File, KVObject Data)>> definitions = new(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, (string File, List<(string Name, KVObject Operator)> Operators)> stacks = new(StringComparer.OrdinalIgnoreCase);
-        private readonly Dictionary<string, (List<(string Name, KVObject Field, string Stack, string? Block)> Fields, Dictionary<string, int> ByName,
-            List<(string Block, string Name, string Stack, int Position)> Collisions)> stackFields
+        private readonly Dictionary<string, (List<(string Name, KVObject Field, string Stack, IReadOnlyList<string> Blocks)> Fields, Dictionary<string, int> ByName,
+            List<(IReadOnlyList<string> Blocks, string Name, string Stack, int Position)> Collisions)> stackFields
             = new(StringComparer.OrdinalIgnoreCase);
         private Dictionary<string, List<(string Event, string Key)>>? referencedBy;
         private Dictionary<string, List<string>>? soundUsers;
@@ -566,7 +566,8 @@ namespace ValveResourceFormat.ResourceTypes
         }
 
         /// <summary>
-        /// Gets the events whose own keys name an event, with the key that names it, including events that base on it.
+        /// Gets the events whose own keys name an event, with the key that names it, including events that base on it. Only the
+        /// definition of each event that is used, the one that loads last, is read.
         /// </summary>
         public IReadOnlyList<(string Event, string Key)> GetReferencedBy(string name)
         {
@@ -579,7 +580,7 @@ namespace ValveResourceFormat.ResourceTypes
         }
 
         /// <summary>
-        /// Gets the events whose own keys name a sound.
+        /// Gets the events whose own keys name a sound, reading only the definition of each event that is used.
         /// </summary>
         /// <param name="sound">The path of the sound, with or without the compiled <c>_c</c> suffix.</param>
         public IReadOnlyList<string> GetEventsUsingSound(string sound)
@@ -599,7 +600,8 @@ namespace ValveResourceFormat.ResourceTypes
         /// </summary>
         /// <remarks>
         /// The fields that the sub-stack of a <c>public_opvar</c> field brings in form the block of that field, which the
-        /// fragments of an array base with that <c>field_name</c> set. There is one field of each name: a later field of the
+        /// fragments of an array base with that <c>field_name</c> set. A block includes the blocks of the <c>public_opvar</c>
+        /// fields inside it. There is one field of each name: a later field of the
         /// same name replaces an earlier one of the same stack, and an imported field whose name, or name without its scope,
         /// is already taken is left out, giving only its <c>data_type</c> to a field that has none. The fields of a sub-stack
         /// whose <c>public_opvar</c> field sets <c>use_public_opvar_scope</c> are named after that field, such as
@@ -607,21 +609,21 @@ namespace ValveResourceFormat.ResourceTypes
         /// </remarks>
         /// <returns>Each field name, its definition with <c>data_type</c>, the default <c>value</c> and <c>_system_properties</c>,
         /// the stack that declares it, which differs from <paramref name="stackName"/> for imported fields, and the
-        /// <c>public_opvar</c> field whose block it is in, null for the stack's own and <c>import_public_opvars</c> fields.
-        /// The stack's own fields come first.</returns>
-        public IReadOnlyList<(string Name, KVObject Field, string Stack, string? Block)> GetStackFields(string stackName) => GetStackFieldMap(stackName).Fields;
+        /// <c>public_opvar</c> fields whose blocks it is in, outermost first, which is empty for the stack's own and
+        /// <c>import_public_opvars</c> fields. The stack's own fields come first.</returns>
+        public IReadOnlyList<(string Name, KVObject Field, string Stack, IReadOnlyList<string> Blocks)> GetStackFields(string stackName) => GetStackFieldMap(stackName).Fields;
 
         /// <summary>
         /// Gets the fields of the blocks of a stack that were left out because a field of their name already exists. The
         /// engine places the values of a fragment by their position in the block, so a fragment's values for the fields of
         /// the block after a left out field land one field later.
         /// </summary>
-        /// <returns>The block, the name of the left out field, the stack that declares it, and the index in
-        /// <see cref="GetStackFields"/> of the first field added after it.</returns>
-        public IReadOnlyList<(string Block, string Name, string Stack, int Position)> GetStackFieldCollisions(string stackName) => GetStackFieldMap(stackName).Collisions;
+        /// <returns>The blocks the left out field was in, outermost first, its name, the stack that declares it, and the index
+        /// in <see cref="GetStackFields"/> of the first field added after it.</returns>
+        public IReadOnlyList<(IReadOnlyList<string> Blocks, string Name, string Stack, int Position)> GetStackFieldCollisions(string stackName) => GetStackFieldMap(stackName).Collisions;
 
-        private (List<(string Name, KVObject Field, string Stack, string? Block)> Fields, Dictionary<string, int> ByName,
-            List<(string Block, string Name, string Stack, int Position)> Collisions) GetStackFieldMap(string stackName)
+        private (List<(string Name, KVObject Field, string Stack, IReadOnlyList<string> Blocks)> Fields, Dictionary<string, int> ByName,
+            List<(IReadOnlyList<string> Blocks, string Name, string Stack, int Position)> Collisions) GetStackFieldMap(string stackName)
         {
             lock (stackFields)
             {
@@ -631,13 +633,13 @@ namespace ValveResourceFormat.ResourceTypes
                 }
             }
 
-            var fields = new List<(string Name, KVObject Field, string Stack, string? Block)>();
+            var fields = new List<(string Name, KVObject Field, string Stack, IReadOnlyList<string> Blocks)>();
             var byName = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-            var collisions = new List<(string Block, string Name, string Stack, int Position)>();
+            var collisions = new List<(IReadOnlyList<string> Blocks, string Name, string Stack, int Position)>();
             var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var path = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-            AddFields(stackName, imported: false, prefix: string.Empty, block: null);
+            AddFields(stackName, imported: false, prefix: string.Empty, blocks: []);
 
             lock (stackFields)
             {
@@ -646,14 +648,15 @@ namespace ValveResourceFormat.ResourceTypes
 
             return (fields, byName, collisions);
 
-            void AddFields(string stack, bool imported, string prefix, string? block)
+            void AddFields(string stack, bool imported, string prefix, IReadOnlyList<string> blocks)
             {
-                if (!stacks.TryGetValue(stack, out var stackData) || !visited.Add($"{block}|{prefix}{stack}") || !path.Add(stack))
+                if (!stacks.TryGetValue(stack, out var stackData) || !visited.Add($"{string.Join('|', blocks)}|{prefix}{stack}") || !path.Add(stack))
                 {
                     return;
                 }
 
-                var imports = new List<(string Stack, string Prefix, string? Block)>();
+                var block = blocks.Count > 0 ? blocks[^1] : null;
+                var imports = new List<(string Stack, string Prefix, IReadOnlyList<string> Blocks)>();
 
                 foreach (var (opName, op) in stackData.Operators)
                 {
@@ -666,7 +669,7 @@ namespace ValveResourceFormat.ResourceTypes
                     {
                         if (fieldName == "import_public_opvars" && field.ValueType == KVValueType.String)
                         {
-                            imports.Add(((string)field, prefix, block));
+                            imports.Add(((string)field, prefix, blocks));
                             continue;
                         }
 
@@ -680,17 +683,19 @@ namespace ValveResourceFormat.ResourceTypes
                         if (!byName.TryGetValue(name, out var existing) && !byName.TryGetValue(fieldName, out existing))
                         {
                             byName.Add(name, fields.Count);
-                            fields.Add((name, field, stack, block));
+                            fields.Add((name, field, stack, blocks));
                         }
                         else if (!imported && fields[existing].Stack == stack)
                         {
-                            fields[existing] = (name, field, stack, fields[existing].Block);
+                            fields[existing] = (name, field, stack, fields[existing].Blocks);
                         }
                         else
                         {
-                            if (block != null && !block.Equals(fields[existing].Block, StringComparison.OrdinalIgnoreCase))
+                            var existingBlocks = fields[existing].Blocks;
+
+                            if (block != null && (existingBlocks.Count == 0 || !block.Equals(existingBlocks[^1], StringComparison.OrdinalIgnoreCase)))
                             {
-                                collisions.Add((block, name, stack, fields.Count));
+                                collisions.Add((blocks, name, stack, fields.Count));
                             }
 
                             if (imported && !fields[existing].Field.ContainsKey("data_type") && field.TryGetValue("data_type", out var dataType))
@@ -703,20 +708,20 @@ namespace ValveResourceFormat.ResourceTypes
                                 }
 
                                 overridden.Add("data_type", dataType);
-                                fields[existing] = (fields[existing].Name, overridden, fields[existing].Stack, fields[existing].Block);
+                                fields[existing] = (fields[existing].Name, overridden, fields[existing].Stack, fields[existing].Blocks);
                             }
                         }
 
                         if (field.GetStringProperty("data_type") == "public_opvar" && field.GetStringProperty("value") is { Length: > 0 } subStack)
                         {
-                            imports.Add((subStack, field.GetBooleanProperty("use_public_opvar_scope") ? $"{name}." : prefix, name));
+                            imports.Add((subStack, field.GetBooleanProperty("use_public_opvar_scope") ? $"{name}." : prefix, [.. blocks, name]));
                         }
                     }
                 }
 
-                foreach (var (import, importPrefix, importBlock) in imports)
+                foreach (var (import, importPrefix, importBlocks) in imports)
                 {
-                    AddFields(import, imported: true, importPrefix, importBlock);
+                    AddFields(import, imported: true, importPrefix, importBlocks);
                 }
 
                 path.Remove(stack);
@@ -743,10 +748,7 @@ namespace ValveResourceFormat.ResourceTypes
                 seenEvents.Clear();
                 seenSounds.Clear();
 
-                foreach (var (_, data) in list)
-                {
-                    CollectReferences(name, data, events, sounds);
-                }
+                CollectReferences(name, list[^1].Data, events, sounds);
 
                 foreach (var (key, target) in events)
                 {
