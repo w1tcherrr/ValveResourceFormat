@@ -28,7 +28,7 @@ namespace ValveResourceFormat.ResourceTypes
 
         private readonly List<string> files = [];
         private readonly Dictionary<string, List<(string File, KVObject Data)>> definitions = new(StringComparer.OrdinalIgnoreCase);
-        private readonly Dictionary<string, List<(string Name, KVObject Operator)>> stacks = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, (string File, List<(string Name, KVObject Operator)> Operators)> stacks = new(StringComparer.OrdinalIgnoreCase);
         private Dictionary<string, List<(string Event, string Key)>>? referencedBy;
         private Dictionary<string, List<string>>? soundUsers;
 
@@ -141,7 +141,7 @@ namespace ValveResourceFormat.ResourceTypes
                                 }
                             }
 
-                            stacks.TryAdd(stack.Key, operators);
+                            stacks.TryAdd(stack.Key, (resource.FileName ?? string.Empty, operators));
                         }
                     }
 
@@ -157,7 +157,7 @@ namespace ValveResourceFormat.ResourceTypes
                             operators.Add((op.GetStringProperty("name", string.Empty), op));
                         }
 
-                        stacks.TryAdd(stack.Key, operators);
+                        stacks.TryAdd(stack.Key, (resource.FileName ?? string.Empty, operators));
                     }
 
                     break;
@@ -180,6 +180,11 @@ namespace ValveResourceFormat.ResourceTypes
         /// Gets whether a stack of this name was added.
         /// </summary>
         public bool ContainsStack(string name) => stacks.ContainsKey(name);
+
+        /// <summary>
+        /// Gets the file of the resource that a stack was added from, or null when the stack is unknown.
+        /// </summary>
+        public string? GetStackFile(string name) => stacks.TryGetValue(name, out var stack) ? stack.File : null;
 
         /// <summary>
         /// Resolves the keys of an event with the keys it inherits through <c>base</c>, see <see cref="Resolve(KVObject, Func{string, KVObject?})"/>.
@@ -336,14 +341,14 @@ namespace ValveResourceFormat.ResourceTypes
 
             void AddFields(string stack)
             {
-                if (!visited.Add(stack) || !stacks.TryGetValue(stack, out var operators))
+                if (!visited.Add(stack) || !stacks.TryGetValue(stack, out var stackData))
                 {
                     return;
                 }
 
                 var imports = new List<string>();
 
-                foreach (var (opName, op) in operators)
+                foreach (var (opName, op) in stackData.Operators)
                 {
                     if (opName == "public")
                     {

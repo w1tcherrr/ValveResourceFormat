@@ -43,6 +43,9 @@ public sealed class SoundEventCurve
     private readonly float outputMin;
     private readonly float outputMax;
 
+    /// <summary>Gets the smallest x value covered by the curve.</summary>
+    public float MinX => points[0].X;
+
     /// <summary>Gets the largest x value covered by the curve.</summary>
     public float MaxX => points[^1].X;
 

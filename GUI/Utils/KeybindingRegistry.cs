@@ -4,6 +4,7 @@ using GUI.Controls;
 using GUI.Types.Exporter;
 using GUI.Types.GLViewers;
 using GUI.Types.PackageViewer;
+using GUI.Types.Viewers;
 
 namespace GUI.Utils
 {
@@ -25,6 +26,7 @@ namespace GUI.Utils
         MaterialViewer,
         GraphViewer,
         AudioPlayer,
+        SoundEventViewer,
         //PackageViewer,
         PackageEditor,
     }
@@ -134,6 +136,16 @@ namespace GUI.Utils
                 new("L", "Loop"),
             ],
 
+            [ViewerType.SoundEventViewer] =
+            [
+                new("Ctrl+F", "Search"),
+                new("Space", "Play event"),
+                new("Esc", "Stop"),
+                new("Enter", "Follow link"),
+                new("Alt+←→", "Back/Forward"),
+                new("Ctrl+C", "Copy name"),
+            ],
+
             [ViewerType.PackageEditor] =
             [
                 new("Ctrl+S", "Save"),
@@ -174,6 +186,11 @@ namespace GUI.Utils
                         GLSceneViewer => ViewerType.ModelViewer,
                         _ => ViewerType.Default,
                     };
+                }
+
+                if (selectedSubTab != null && SoundEventViewer.Find(selectedSubTab) != null)
+                {
+                    return ViewerType.SoundEventViewer;
                 }
 
                 if ((selectedSubTab ?? tab).Controls.OfType<AudioPlaybackPanel>().Any())

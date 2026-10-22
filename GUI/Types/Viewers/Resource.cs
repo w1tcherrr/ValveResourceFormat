@@ -779,6 +779,7 @@ namespace GUI.Types.Viewers
                         var autoPlay = ((Settings.QuickPreviewFlags)Settings.Config.QuickFilePreview & Settings.QuickPreviewFlags.AutoPlaySounds) != 0;
 
                         specialTabPage.Controls.Add(CreateSoundInfoLabel(soundData));
+                        specialTabPage.Controls.Add(SoundEventViewer.CreateSoundUsersList(vrfGuiContext, vrfGuiContext.FileName));
 
                         try
                         {
@@ -790,6 +791,7 @@ namespace GUI.Types.Viewers
                                 {
                                     var audio = new AudioPlaybackPanel(ownedStream, vrfGuiContext.DisplayPath, isPreview && autoPlay, loopMarkers);
                                     specialTabPage.Controls.Add(audio);
+                                    audio.BringToFront();
                                     ownedStream = null;
                                 }
                                 finally
@@ -805,6 +807,16 @@ namespace GUI.Types.Viewers
                             errorControl.BringToFront(); // Fill below the docked info label instead of under it
                         }
 
+                        resTabs.TabPages.Add(specialTabPage);
+                        return true;
+                    }
+                    break;
+
+                case ResourceType.SoundEventScript:
+                    if (resource.DataBlock is SoundEventScript soundEventScript)
+                    {
+                        var specialTabPage = new ThemedTabPage("SOUND EVENTS");
+                        specialTabPage.Controls.Add(new SoundEventViewer(vrfGuiContext, soundEventScript.Events));
                         resTabs.TabPages.Add(specialTabPage);
                         return true;
                     }

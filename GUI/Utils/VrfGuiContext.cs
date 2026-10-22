@@ -485,6 +485,14 @@ namespace GUI.Utils
         }
 
         // Override to add support for parent file loaders
+        public override IEnumerable<string> EnumerateFiles(string extension)
+        {
+            var files = base.EnumerateFiles(extension);
+
+            return ParentGuiContext == null ? files : files.Concat(ParentGuiContext.EnumerateFiles(extension)).Distinct(StringComparer.OrdinalIgnoreCase);
+        }
+
+        // Override to add support for parent file loaders
         protected override ShaderCollection LoadShaderFromDisk(string shaderName)
         {
             if (ParentGuiContext != null)

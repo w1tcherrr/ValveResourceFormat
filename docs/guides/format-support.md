@@ -84,7 +84,7 @@ in the Dump column.
 | vsmart   | Smart Prop                 | 3D (partial)                  | yes     | KV3 text                                                                                                     |
 | vsnap    | Particle Snapshot          | 3D                            | yes     | `.vsnap`                                                                                                     |
 | vsnd     | Sound                      | audio                         | yes     | `.wav` / `.mp3` + phonemes `.txt` + `.vsnd` KV3 for newer sounds; sounds with no audio as `.vsnd` only       |
-| vsndevts | Sound Event Script         | text                          | generic | KV3 text (lossless)                                                                                          |
+| vsndevts | Sound Event Script         | event browser, playback       | generic | KV3 text (lossless)                                                                                          |
 | vsndstck | Sound Stack Script         | text                          | yes     | script text                                                                                                  |
 | vsurf    | Surface Properties         | text                          | generic | -                                                                                                            |
 | vsvg     | Panorama Vector Graphic    | image                         | yes     | `.svg` (byte-exact)                                                                                          |
@@ -354,6 +354,13 @@ phoneme data extracts to a companion `.txt` that the compiler picks back up. Sou
 scripts dump losslessly as KV3 text; stack scripts dump each stack's stored text, though
 duplicate stack names collapse to the last one. VMix DSP graphs are dumped but not
 interpreted.
+
+The sound event viewer lists the events of a file or of the whole game, with the keys each
+inherits through `base`, its stack's defaults and the events and sounds it links. Legacy
+events stored as KeyValues1 operator stacks are shown flattened to the modern layout, and
+which of two files defining the same event wins follows search order, not verified engine
+behaviour. Events play only for the stack types the renderer implements; the rest can only
+play their sounds one at a time.
 
 ## Choreo, Captions, and UI
 
