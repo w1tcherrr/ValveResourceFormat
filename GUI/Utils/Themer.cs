@@ -25,6 +25,9 @@ namespace GUI.Utils
             /// <summary>For borders meant to visually separate parts of the interface.</summary>
             public required Color Border { get; init; }
 
+            /// <summary>For the outline that the app draws around text boxes.</summary>
+            public required Color ControlBorder { get; init; }
+
             /// <summary>For any element which needs contrast from the background, like text</summary>
             public required Color Contrast { get; init; }
             /// <summary>For any element which needs contrast but doesn't have to be as visible, like inactive text or scrollbars</summary>
@@ -63,6 +66,7 @@ namespace GUI.Utils
             AppSoft = Color.FromArgb(44, 49, 61),
 
             Border = Color.FromArgb(51, 57, 74),
+            ControlBorder = Color.FromArgb(100, 100, 100),
 
             Contrast = Color.White,
             ContrastSoft = Color.FromArgb(158, 159, 164),
@@ -84,6 +88,7 @@ namespace GUI.Utils
             AppSoft = Color.FromArgb(251, 251, 251),
 
             Border = Color.FromArgb(188, 188, 188),
+            ControlBorder = Color.FromArgb(100, 100, 100),
 
             Contrast = Color.Black,
             ContrastSoft = Color.FromArgb(80, 80, 80),
@@ -187,7 +192,12 @@ namespace GUI.Utils
             {
                 opt.BackColor = opt.Parent?.BackColor ?? CurrentThemeColors.AppMiddle;
             }
-            if (control is ComboBox combo)
+            if (control is ThemedComboBox themedCombo)
+            {
+                themedCombo.ForeColor = CurrentThemeColors.Contrast;
+                themedCombo.UpdateBackColor();
+            }
+            else if (control is ComboBox combo)
             {
                 combo.ForeColor = CurrentThemeColors.Contrast;
                 combo.BackColor = combo.Parent?.BackColor ?? CurrentThemeColors.AppMiddle;

@@ -12,6 +12,9 @@ namespace GUI.Types.PackageViewer
         public Color Highlight { get; set; } = Color.White;
         public VrfGuiContext? VrfGuiContext { get; set; }
         internal List<ListViewItem>? VirtualItems { get; set; }
+
+        /// <summary>Gets or sets a column that shares the flexible width with the first column, or -1 for none.</summary>
+        internal int SharedFlexibleColumn { get; set; } = -1;
         private bool isAdjustingColumns;
         public event ScrollEventHandler? Scroll;
 
@@ -132,19 +135,22 @@ namespace GUI.Types.PackageViewer
                 var availableWidth = ClientSize.Width;
                 var fixedColumnsWidth = 0;
 
+                var sharedColumn = SharedFlexibleColumn < Columns.Count ? SharedFlexibleColumn : -1;
+                var flexibleColumns = sharedColumn >= 0 ? 2 : 1;
+
                 for (var i = 0; i < Columns.Count; i++)
                 {
-                    if (i != flexibleColumnIndex)
+                    if (i != flexibleColumnIndex && i != sharedColumn)
                     {
                         fixedColumnsWidth += scaledFixedWidth;
                     }
                 }
 
-                var flexibleWidth = Math.Max(availableWidth - fixedColumnsWidth, scaledFixedWidth);
+                var flexibleWidth = Math.Max((availableWidth - fixedColumnsWidth) / flexibleColumns, scaledFixedWidth);
 
                 for (var i = 0; i < Columns.Count; i++)
                 {
-                    var targetWidth = i == flexibleColumnIndex ? flexibleWidth : scaledFixedWidth;
+                    var targetWidth = i == flexibleColumnIndex || i == sharedColumn ? flexibleWidth : scaledFixedWidth;
 
                     if (Columns[i].Width != targetWidth)
                     {
@@ -167,7 +173,7 @@ namespace GUI.Types.PackageViewer
                 e.Bounds.Left, e.Bounds.Bottom - 1,
                 e.Bounds.Right, e.Bounds.Bottom - 1);
 
-            if (e.ColumnIndex < Columns.Count - 1)
+            if (e.Header?.DisplayIndex < Columns.Count - 1)
             {
                 var pos = e.Bounds.Right - 2;
                 e.Graphics.DrawLine(borderPen,

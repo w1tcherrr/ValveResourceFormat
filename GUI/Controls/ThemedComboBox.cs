@@ -1,6 +1,7 @@
 using System.Drawing;
 using System.Windows.Forms;
 using GUI.Utils;
+using Windows.Win32;
 
 namespace GUI.Controls;
 
@@ -25,6 +26,20 @@ public class ThemedComboBox : ComboBox
     /// </summary>
     public bool TrimStart { get; set; }
 
+    /// <summary>Gets or sets whether the box is outlined in the attention colour for a value that can not be used.</summary>
+    public bool HasError
+    {
+        get;
+        set
+        {
+            if (field != value)
+            {
+                field = value;
+                Invalidate();
+            }
+        }
+    }
+
     public ThemedComboBox() : base()
     {
         DrawMode = DrawMode.OwnerDrawFixed;
@@ -41,8 +56,31 @@ public class ThemedComboBox : ComboBox
         DropDownForeColor = Themer.CurrentThemeColors.Contrast;
         HighlightColor = Themer.CurrentThemeColors.Accent;
         HeaderColor = Themer.CurrentThemeColors.Border;
-        BackColor = Parent?.BackColor ?? Themer.CurrentThemeColors.AppMiddle;
         ForeColor = Themer.CurrentThemeColors.Contrast;
+        UpdateBackColor();
+    }
+
+    protected override void OnDropDownStyleChanged(EventArgs e)
+    {
+        base.OnDropDownStyleChanged(e);
+        UpdateBackColor();
+    }
+
+    internal void UpdateBackColor()
+        => BackColor = DropDownStyle == ComboBoxStyle.DropDown ? Themer.CurrentThemeColors.AppMiddle : Parent?.BackColor ?? Themer.CurrentThemeColors.AppMiddle;
+
+    protected override void WndProc(ref Message m)
+    {
+        base.WndProc(ref m);
+
+        if (m.Msg != PInvoke.WM_PAINT || !HasError)
+        {
+            return;
+        }
+
+        using var graphics = Graphics.FromHwnd(Handle);
+        using var pen = new Pen(Themer.CurrentThemeColors.Attention);
+        graphics.DrawRectangle(pen, 0, 0, Width - 1, Height - 1);
     }
 
     protected override void OnDrawItem(DrawItemEventArgs e)
@@ -110,7 +148,7 @@ public class ThemedComboBox : ComboBox
         e.DrawFocusRectangle();
     }
 
-    private static string TrimStartToFit(Graphics graphics, string text, Font font, int width, TextFormatFlags drawFlags)
+    internal static string TrimStartToFit(Graphics graphics, string text, Font font, int width, TextFormatFlags drawFlags)
     {
         // Measured with the padding the text is drawn with, minus the end ellipsis it would otherwise take
         var measureFlags = (drawFlags & ~(TextFormatFlags.EndEllipsis | TextFormatFlags.PathEllipsis)) | TextFormatFlags.SingleLine;
