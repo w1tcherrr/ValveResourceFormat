@@ -3,6 +3,7 @@ using System.Drawing.Drawing2D;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -53,8 +54,10 @@ namespace GUI.Types.Viewers
         // Read by the engine when it parses the event, outside of its stack
         private static readonly HashSet<string> EventKeys = new(["groups", "preload_vsnds", "memory_type"], StringComparer.OrdinalIgnoreCase);
 
-        private static readonly Dictionary<string, WeakReference<Task<(SoundEventIndex Index, List<ValveResourceFormat.ClosedCaptions.ClosedCaptions> Captions)>>> Indexes
+        private static readonly Dictionary<string, (Task<(SoundEventIndex Index, List<ValveResourceFormat.ClosedCaptions.ClosedCaptions> Captions)> Task, HashSet<VrfGuiContext> Roots)> GameIndexes
             = new(StringComparer.OrdinalIgnoreCase);
+
+        private static readonly Dictionary<VrfGuiContext, Task<(SoundEventIndex Index, List<ValveResourceFormat.ClosedCaptions.ClosedCaptions> Captions)>> PackageIndexes = [];
 
         private readonly VrfGuiContext guiContext;
         private readonly string fileName;
@@ -359,7 +362,8 @@ namespace GUI.Types.Viewers
 
         /// <summary>
         /// Gets the index of the sound events and stacks of a file's game, with the English closed captions found there.
-        /// It holds only the game's own files, is built once per game off the UI thread, and is kept while a viewer uses it.
+        /// It holds only the game's own files, is built once per game off the UI thread, and is kept until every root
+        /// context of that game is disposed.
         /// </summary>
         private static Task<(SoundEventIndex Index, List<ValveResourceFormat.ClosedCaptions.ClosedCaptions> Captions)> GetGameIndexAsync(VrfGuiContext context)
         {
@@ -368,18 +372,32 @@ namespace GUI.Types.Viewers
                 ? string.Join('|', root.GameSearchPaths.Order(StringComparer.OrdinalIgnoreCase))
                 : root.FileName;
 
-            lock (Indexes)
+            lock (GameIndexes)
             {
-                if (Indexes.TryGetValue(key, out var cached) && cached.TryGetTarget(out var task) && !task.IsFaulted && !task.IsCanceled)
+                if (!GameIndexes.TryGetValue(key, out var entry) || entry.Task.IsFaulted || entry.Task.IsCanceled)
                 {
-                    return task;
+                    entry = (Task.Run(() => BuildIndex(root)), []);
+                    root.DisposeAfter(entry.Task);
+                    GameIndexes[key] = entry;
                 }
 
-                task = Task.Run(() => BuildIndex(root));
-                root.DisposeAfter(task);
-                Indexes[key] = new(task);
+                if (entry.Roots.Add(root))
+                {
+                    root.DisposalCompleted.ContinueWith(_ => ReleaseGameIndex(key, root), TaskScheduler.Default);
+                }
 
-                return task;
+                return entry.Task;
+            }
+        }
+
+        private static void ReleaseGameIndex(string key, VrfGuiContext root)
+        {
+            lock (GameIndexes)
+            {
+                if (GameIndexes.TryGetValue(key, out var entry) && entry.Roots.Remove(root) && entry.Roots.Count == 0)
+                {
+                    GameIndexes.Remove(key);
+                }
             }
         }
 
@@ -393,8 +411,7 @@ namespace GUI.Types.Viewers
                 .Select(static file => file[..^GameFileLoader.CompiledFileSuffix.Length]);
             List<string> loadOrder = [.. SoundEventIndex.GetEventFilesInLoadOrder(context.LoadGameFile, eventFiles).Select(static file => file + GameFileLoader.CompiledFileSuffix)];
             List<string> stackFiles = [.. files.Where(static file => file.EndsWith(StacksExtension, StringComparison.OrdinalIgnoreCase))];
-            var index = SoundEventIndex.Build(context.LoadGameFile, loadOrder, stackFiles, VrfGuiContext.Logger);
-            index.MaxBaseVisits = context.SoundEventMaxBaseVisits;
+            var index = SoundEventIndex.Build(context.LoadGameFile, loadOrder, stackFiles, context.SoundEventMaxBaseVisits, VrfGuiContext.Logger);
             var captions = new List<ValveResourceFormat.ClosedCaptions.ClosedCaptions>();
 
             foreach (var file in files.Where(static file => file.EndsWith("english.dat", StringComparison.OrdinalIgnoreCase)))
@@ -427,27 +444,57 @@ namespace GUI.Types.Viewers
 
         /// <summary>
         /// Gets the index a file's tab shows: the game's index, with the sound event files that the file's packages, map
-        /// packages and addons hold besides the game's own, and the file itself when it is none of those, loaded after the
-        /// game's files on a copy.
+        /// packages and addons hold besides the game's own, and the file itself when it is a loose file outside of those,
+        /// loaded after the game's files on a copy. The copy is shared by the files of a package, and kept until it closes.
         /// </summary>
         /// <param name="context">The context of the file.</param>
         /// <param name="fileEvents">The events of the file, when it is a sound event file.</param>
-        public static async Task<(SoundEventIndex Index, List<ValveResourceFormat.ClosedCaptions.ClosedCaptions> Captions)> GetIndexAsync(
+        public static Task<(SoundEventIndex Index, List<ValveResourceFormat.ClosedCaptions.ClosedCaptions> Captions)> GetIndexAsync(
             VrfGuiContext context, IReadOnlyList<(string Name, KVObject Data)>? fileEvents = null)
+        {
+            var looseFile = context.ParentGuiContext == null;
+            var owner = context.ParentGuiContext ?? context;
+
+            lock (PackageIndexes)
+            {
+                if (!looseFile && PackageIndexes.TryGetValue(owner, out var cached) && !cached.IsFaulted && !cached.IsCanceled)
+                {
+                    return cached;
+                }
+
+                var task = BuildViewIndexAsync(context, looseFile ? fileEvents : null);
+                context.DisposeAfter(task);
+
+                if (!looseFile)
+                {
+                    PackageIndexes[owner] = task;
+                    owner.DisposalCompleted.ContinueWith(_ =>
+                    {
+                        lock (PackageIndexes)
+                        {
+                            PackageIndexes.Remove(owner);
+                        }
+                    }, TaskScheduler.Default);
+                }
+
+                return task;
+            }
+        }
+
+        private static async Task<(SoundEventIndex Index, List<ValveResourceFormat.ClosedCaptions.ClosedCaptions> Captions)> BuildViewIndexAsync(
+            VrfGuiContext context, IReadOnlyList<(string Name, KVObject Data)>? fileEvents)
         {
             var (gameIndex, captions) = await GetGameIndexAsync(context).ConfigureAwait(false);
 
-            var task = Task.Run(() =>
+            return await Task.Run(() =>
             {
-                var gameFiles = gameIndex.Files.ToHashSet(StringComparer.OrdinalIgnoreCase);
                 var ownFiles = context.EnumerateFiles("vsndevts_c").Where(file =>
                 {
                     var found = context.FindFile(file, logNotFound: false);
                     return !context.RootContext.IsGameLocation(found.Package, found.PathOnDisk);
                 }).ToList();
                 var fileName = GetIndexPath(context);
-                var addFile = fileEvents != null && !ownFiles.Contains(fileName, StringComparer.OrdinalIgnoreCase)
-                    && (!gameFiles.Contains(fileName) || Path.IsPathRooted(context.FileName));
+                var addFile = fileEvents != null && !ownFiles.Contains(fileName, StringComparer.OrdinalIgnoreCase);
 
                 if (ownFiles.Count == 0 && !addFile)
                 {
@@ -485,14 +532,10 @@ namespace GUI.Types.Viewers
                     index.AddEvents(fileName, fileEvents!);
                 }
 
-                index.GetReferencedBy(string.Empty);
+                index.IndexReferences();
 
                 return (index, captions);
-            });
-
-            context.RootContext.DisposeAfter(task);
-
-            return await task.ConfigureAwait(false);
+            }).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -895,13 +938,15 @@ namespace GUI.Types.Viewers
 
             var (name, file) = from[^1];
             from.RemoveAt(from.Count - 1);
-            to.Add((current.Name, current.File));
 
-            if (rows.Find(r => r.Name == name && r.File == file) is { } row)
+            if (rows.Find(r => r.Name == name && r.File == file) is not { } row)
             {
-                ShowRow(row, addToHistory: false);
-                SelectCurrentInList();
+                return;
             }
+
+            to.Add((current.Name, current.File));
+            ShowRow(row, addToHistory: false);
+            SelectCurrentInList();
         }
 
         private void ShowRow(EventRow row, bool addToHistory)
@@ -996,54 +1041,82 @@ namespace GUI.Types.Viewers
             var resolved = index.Resolve(current.Data).Keys;
             var fields = current.Type.Length > 0 ? index.GetStackFields(current.Type) : [];
             var groups = new List<(string Name, List<(string Key, KVObject? Value, string Source, ValueSource Kind, bool Curve)> Rows)>();
+            var fieldNames = new Dictionary<string, KVObject>(StringComparer.OrdinalIgnoreCase);
+            var byFieldName = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var (name, field, _) in fields)
+            {
+                fieldNames[name] = field;
+            }
+
+            // Keys of a scoped sub-stack are named after its field, keys of an unscoped one keep their own names
+            for (var i = 0; i < resolved.Count; i++)
+            {
+                var (key, _, _, subStack) = resolved[i];
+
+                if (subStack == null)
+                {
+                    byFieldName.TryAdd(key, i);
+                }
+                else if (fieldNames.TryGetValue(subStack, out var opvar) && opvar.GetBooleanProperty("use_public_opvar_scope"))
+                {
+                    byFieldName.TryAdd($"{subStack}.{key}", i);
+                }
+            }
+
             var shown = new HashSet<int>();
 
-            foreach (var (name, field, stack) in fields)
+            List<(string Key, KVObject? Value, string Source, ValueSource Kind, bool Curve)> Group(string name)
             {
-                var groupName = field.GetSubCollection("_system_properties")?.GetStringProperty("property_group") is { Length: > 0 } propertyGroup ? propertyGroup : "General";
-                var group = groups.Find(g => g.Name == groupName).Rows;
+                var group = groups.Find(g => g.Name == name).Rows;
 
                 if (group == null)
                 {
                     group = [];
-                    groups.Add((groupName, group));
+                    groups.Add((name, group));
                 }
 
+                return group;
+            }
+
+            (string Key, KVObject? Value, string Source, ValueSource Kind, bool Curve) Row(int i, string name, bool curve)
+            {
+                var (_, value, source, subStack) = resolved[i];
+                var origin = source == null ? string.Empty : subStack == null ? source : $"{source} via {subStack}";
+                return (name, value, origin, source == null ? ValueSource.Own : ValueSource.Inherited, curve);
+            }
+
+            foreach (var (name, field, stack) in fields)
+            {
+                var group = Group(field.GetSubCollection("_system_properties")?.GetStringProperty("property_group") is { Length: > 0 } propertyGroup ? propertyGroup : "General");
                 var curve = field.GetStringProperty("data_type") == "float6";
-                var found = false;
 
-                for (var i = 0; i < resolved.Count; i++)
+                if (byFieldName.TryGetValue(name, out var i))
                 {
-                    var (key, value, source) = resolved[i];
-
-                    if (key.Equals(name, StringComparison.OrdinalIgnoreCase) && shown.Add(i))
-                    {
-                        group.Add((name, value, source ?? string.Empty, source == null ? ValueSource.Own : ValueSource.Inherited, curve));
-                        found = true;
-                    }
+                    group.Add(Row(i, name, curve));
+                    shown.Add(i);
                 }
-
-                if (!found && defaultsBox.Checked)
+                else if (defaultsBox.Checked)
                 {
                     var origin = stack.Equals(current.Type, StringComparison.OrdinalIgnoreCase) ? stack : $"{stack}, imported";
                     group.Add((name, field.TryGetValue("value", out var defaultValue) ? defaultValue : null, $"default ({origin})", ValueSource.Default, curve));
                 }
             }
 
-            var unshown = resolved.Where((r, i) => !shown.Contains(i) && !r.Key.Equals("type", StringComparison.OrdinalIgnoreCase))
-                .Select(static r => (r.Key, (KVObject?)r.Value, r.Source ?? string.Empty, r.Source == null ? ValueSource.Own : ValueSource.Inherited, false))
-                .ToList();
-            var eventKeys = unshown.FindAll(static r => EventKeys.Contains(r.Key));
-            var other = unshown.FindAll(static r => !EventKeys.Contains(r.Key));
-
-            if (eventKeys.Count > 0)
+            for (var i = 0; i < resolved.Count; i++)
             {
-                groups.Add(("Event", eventKeys));
-            }
+                var (key, _, _, subStack) = resolved[i];
 
-            if (other.Count > 0)
-            {
-                groups.Add((fields.Count > 0 ? "Not in stack, ignored by the engine" : "Keys", other));
+                if (shown.Contains(i) || key.Equals("type", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var groupName = subStack != null && fieldNames.ContainsKey(subStack) ? subStack
+                    : EventKeys.Contains(key) ? "Event"
+                    : fields.Count > 0 ? "Not in stack, ignored by the engine" : "Keys";
+                var curve = subStack != null && fieldNames.TryGetValue(key, out var field) && field.GetStringProperty("data_type") == "float6";
+                Group(groupName).Add(Row(i, key, curve));
             }
 
             propertyGrid.SuspendLayout();
@@ -1100,7 +1173,7 @@ namespace GUI.Types.Viewers
         private static bool IsNumber(KVObject value) => value.ValueType is KVValueType.FloatingPoint or KVValueType.FloatingPoint64
             or KVValueType.Int16 or KVValueType.Int32 or KVValueType.Int64 or KVValueType.UInt16 or KVValueType.UInt32 or KVValueType.UInt64;
 
-        private static string GetString(List<(string Key, KVObject Value, string? Source)> resolved, string key)
+        private static string GetString(List<(string Key, KVObject Value, string? Source, string? Field)> resolved, string key)
         {
             var value = resolved.FirstOrDefault(r => r.Key.Equals(key, StringComparison.OrdinalIgnoreCase)).Value;
             return value?.ValueType == KVValueType.String ? (string)value : string.Empty;
@@ -1419,13 +1492,10 @@ namespace GUI.Types.Viewers
             try
             {
 #pragma warning disable CA2000 // The player owns the device and disposes it
-                player = new SoundEventPlayer(guiContext, new NAudioDevice(), VrfGuiContext.Logger)
-                {
-                    MaxBaseVisits = index.MaxBaseVisits,
-                };
+                player = new SoundEventPlayer(guiContext, new NAudioDevice(), VrfGuiContext.Logger, index.MaxBaseVisits);
 #pragma warning restore CA2000
             }
-            catch (System.Runtime.InteropServices.COMException e)
+            catch (COMException e)
             {
                 Log.Warn(nameof(SoundEventViewer), $"No audio device available, sound playback disabled: {e.Message}");
                 return;

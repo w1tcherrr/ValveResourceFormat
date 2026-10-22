@@ -615,7 +615,7 @@ namespace GUI.Types.GLViewers
                 // The player takes ownership of the device and disposes it in its own Dispose (called from ours);
                 // CA2000 cannot see ownership transfer through the constructor, so this is not actually a leak.
 #pragma warning disable CA2000
-                soundPlayer = new SoundEventPlayer(GuiContext, new NAudioDevice(), Scene.RendererContext.Logger);
+                soundPlayer = new SoundEventPlayer(GuiContext, new NAudioDevice(), Scene.RendererContext.Logger, GuiContext.RootContext.SoundEventMaxBaseVisits);
 #pragma warning restore CA2000
             }
             catch (COMException e)
@@ -627,7 +627,6 @@ namespace GUI.Types.GLViewers
             }
 
             // TODO: load soundevents once per game not per sub context
-            soundPlayer.MaxBaseVisits = GuiContext.RootContext.SoundEventMaxBaseVisits;
             soundPlayer.LoadAsync(Scene.RendererContext.CancellationToken);
 
             // todo: collision filter 'default' and 'blocksound'
