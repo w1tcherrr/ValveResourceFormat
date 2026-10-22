@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using System.Windows.Forms;
 using GUI.Controls;
 using GUI.Types.GLViewers;
@@ -85,7 +86,10 @@ internal sealed partial class McpTools
         }
 
         var controls = SidebarControls(root);
-        var matches = controls.Where(control => (control.Label.Equals(name, StringComparison.OrdinalIgnoreCase) || control.Control.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
+        var caption = StripMnemonics(name);
+        var matches = controls.Where(control => (control.Label.Equals(name, StringComparison.OrdinalIgnoreCase)
+                || control.Label.Equals(caption, StringComparison.OrdinalIgnoreCase)
+                || control.Control.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
             && (group == null || string.Equals(control.Group, group, StringComparison.OrdinalIgnoreCase))).ToList();
 
         if (matches.Count == 0)
@@ -250,7 +254,7 @@ internal sealed partial class McpTools
             Name = details && input.Name != control.Label ? input.Name : null,
             control.Group,
             Value = ValueOf(input),
-            Text = details && input is not (TextBoxBase or ListControl) && input.Text != control.Label ? input.Text : null,
+            Text = details && input is not (TextBoxBase or ListControl) && CaptionOf(input) != control.Label ? input.Text : null,
             Items = items ? ListItems(input) : null,
             Disabled = Flag(!input.Enabled),
             Hidden = Flag(!input.Visible),
@@ -424,9 +428,9 @@ internal sealed partial class McpTools
                 // Other buttons and labels use their text as the name, but a label that only repeats the name of an input beside it is skipped
                 if (child is ButtonBase or Label && child.Text.Length > 0)
                 {
-                    if (child is ButtonBase || !HasInputNamed(parent, child.Text))
+                    if (child is ButtonBase || !HasInputNamed(parent, CaptionOf(child)))
                     {
-                        controls.Add(new SidebarControl(child, child.Text.ReplaceLineEndings(", "), group));
+                        controls.Add(new SidebarControl(child, CaptionOf(child).ReplaceLineEndings(", "), group));
                     }
 
                     continue;
@@ -442,9 +446,9 @@ internal sealed partial class McpTools
                 var childGroup = group;
 
                 // A group box titles the controls in it, unless it frames a single input of that name, as a checked list's does
-                if (child is GroupBox groupBox && !HasInputNamed(groupBox, groupBox.Text))
+                if (child is GroupBox groupBox && !HasInputNamed(groupBox, CaptionOf(groupBox)))
                 {
-                    childGroup = groupBox.Text;
+                    childGroup = CaptionOf(groupBox);
                 }
                 else if (child.AccessibleRole == AccessibleRole.ToolBar)
                 {
@@ -462,6 +466,13 @@ internal sealed partial class McpTools
 
         return controls;
     }
+
+    /// <summary>The text of a control as the screen shows it, without the ampersands that mark its access key.</summary>
+    private static string CaptionOf(Control control)
+        => control is ButtonBase { UseMnemonic: true } or Label { UseMnemonic: true } or GroupBox ? StripMnemonics(control.Text) : control.Text;
+
+    /// <summary>Drops the ampersand that marks an access key, and turns a doubled one into a single ampersand.</summary>
+    private static string StripMnemonics(string text) => Regex.Replace(text, "&(&?)", "$1");
 
     /// <summary>The text of a section header, which titles the controls below it, or null for any other control.</summary>
     private static string? SectionTitle(Control control) => control switch
@@ -529,7 +540,7 @@ internal sealed partial class McpTools
 
         if (row.Editors is [CheckBox { Text.Length: > 0 } leadingCheckBox])
         {
-            return leadingCheckBox.Text;
+            return CaptionOf(leadingCheckBox);
         }
 
         return null;
@@ -585,8 +596,8 @@ internal sealed partial class McpTools
                 return input.AccessibleName;
 
             // The caption tells it apart from the row's other inputs
-            case CheckBox or Button when input.Text.Length > 0 && input.Text != rowName:
-                return $"{rowName} {input.Text}";
+            case CheckBox or Button when input.Text.Length > 0 && CaptionOf(input) != rowName:
+                return $"{rowName} {CaptionOf(input)}";
 
             default:
                 return rowName;

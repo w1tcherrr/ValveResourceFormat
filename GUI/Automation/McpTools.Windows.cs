@@ -189,6 +189,18 @@ internal sealed partial class McpTools
         }, cancellationToken).ConfigureAwait(false);
     }
 
+    [Tool("Resize an open window as dragging its frame does, so a window with a minimum or maximum size keeps within it. Returns the size it got.")]
+    private static object SetWindowSize(
+        [Description("Title or control name of the window. Defaults to the topmost dialog, or the main window when none is open.")] string? window = null,
+        [Description("Width in pixels, frame included. Omit to keep the width.")][Range(1, int.MaxValue)] int? width = null,
+        [Description("Height in pixels, frame included. Omit to keep the height.")][Range(1, int.MaxValue)] int? height = null)
+    {
+        var form = FindWindow(window);
+        form.Size = new Size(width ?? form.Width, height ?? form.Height);
+
+        return new { form.Width, form.Height };
+    }
+
     [Tool("Capture an open window as the screen shows it, frame included, even while other windows cover it. Returns a JPEG. 'path' also writes a PNG.")]
     private static ImageReply ScreenshotWindow(
         [Description("Title or control name of the window, such as Find. Defaults to the topmost dialog, or the main window when none is open.")] string? window = null,
