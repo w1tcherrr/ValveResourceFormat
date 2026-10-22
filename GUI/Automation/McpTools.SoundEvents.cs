@@ -105,6 +105,7 @@ internal sealed partial class McpTools
         TabPage tab,
         [Description("Name of the event to show.")] string? name = null,
         [Description("The file whose definition to show, when several files define the event.")] string? file = null,
+        [Description("Which definition to show, counted from 0 in load order among the definitions in 'file', or among all of them without 'file'. Defaults to the last one, which is used.")][Range(0, int.MaxValue)] int? occurrence = null,
         [Description("A button to press after showing the event: play_event, stop, back, forward, copy_name or open_file. play_sound plays the sound at 'sound' in the sounds list.")] string? action = null,
         [Description("Index in the sounds list for play_sound.")][Range(0, int.MaxValue)] int sound = 0,
         [Description("Whether to show properties that only show a stack default, as the checkbox does. Leave it out to keep the checkbox as it is.")] bool? showDefaults = null,
@@ -115,16 +116,16 @@ internal sealed partial class McpTools
 
         if (action == "open_file")
         {
-            return await OpenTab(_ => OnUi(() => PressSoundEventButton(tab, name, file, "Open file"), cancellationToken), $"the file of '{name}'", cancellationToken).ConfigureAwait(false);
+            return await OpenTab(_ => OnUi(() => PressSoundEventButton(tab, name, file, occurrence, "Open file"), cancellationToken), $"the file of '{name}'", cancellationToken).ConfigureAwait(false);
         }
 
         return await OnUi(() =>
         {
             var viewer = SoundEventViewerOf(tab);
 
-            if (name != null && !viewer.ShowEvent(name, file))
+            if (name != null && !viewer.ShowEvent(name, file, occurrence))
             {
-                throw new ToolException($"No event '{name}'{(file == null ? string.Empty : $" in '{file}'")} is indexed.");
+                throw new ToolException($"No event '{name}'{(file == null ? string.Empty : $" in '{file}'")}{(occurrence == null ? string.Empty : $" with definition {occurrence}")} is indexed.");
             }
 
             if (showDefaults != null)
@@ -165,7 +166,7 @@ internal sealed partial class McpTools
 
                     break;
                 default:
-                    PressSoundEventButton(tab, null, null, action switch
+                    PressSoundEventButton(tab, null, null, null, action switch
                     {
                         "play_event" => "Play event",
                         "stop" => "Stop",
@@ -239,11 +240,11 @@ internal sealed partial class McpTools
         }
     }
 
-    private static bool PressSoundEventButton(TabPage tab, string? name, string? file, string button)
+    private static bool PressSoundEventButton(TabPage tab, string? name, string? file, int? occurrence, string button)
     {
         var viewer = SoundEventViewerOf(tab);
 
-        if (name != null && !viewer.ShowEvent(name, file))
+        if (name != null && !viewer.ShowEvent(name, file, occurrence))
         {
             throw new ToolException($"No event '{name}' is indexed.");
         }
@@ -307,19 +308,22 @@ internal sealed partial class McpTools
             Properties = groups,
             Sounds = GridRows(Named<DataGridView>(viewer, "Sounds")),
             References = GridRows(Named<DataGridView>(viewer, "References")),
-            UsedBy = GridRows(Named<DataGridView>(viewer, "Used by")),
+            UsedByCount = Named<DataGridView>(viewer, "Used by").RowCount,
+            UsedBy = GridRows(Named<DataGridView>(viewer, "Used by"), limit: 100),
         };
     }
 
-    private static List<Dictionary<string, object?>> GridRows(DataGridView grid)
+    /// <param name="grid">The grid to read.</param>
+    /// <param name="limit">How many rows to read from the top.</param>
+    private static List<Dictionary<string, object?>> GridRows(DataGridView grid, int limit = int.MaxValue)
     {
         var rows = new List<Dictionary<string, object?>>();
 
-        foreach (DataGridViewRow row in grid.Rows)
+        for (var i = 0; i < Math.Min(grid.RowCount, limit); i++)
         {
             var cells = new Dictionary<string, object?>();
 
-            foreach (DataGridViewCell cell in row.Cells)
+            foreach (DataGridViewCell cell in grid.Rows[i].Cells)
             {
                 if (cell.Value is string { Length: > 0 } value)
                 {

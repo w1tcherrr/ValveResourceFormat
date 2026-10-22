@@ -30,9 +30,12 @@ namespace GUI.Types.Viewers
         private const string PreviewChannel = "sound_event_viewer";
         private const TextFormatFlags SegmentFlags = TextFormatFlags.NoPadding | TextFormatFlags.SingleLine | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix;
 
-        private sealed class EventRow(string name, string file, KVObject data, string type, float duration, bool duplicate, bool hasProblems, bool rejected, bool missingBase)
+        private sealed class EventRow(string name, int definition, string file, KVObject data, string type, float duration, bool duplicate, bool hasProblems, bool rejected, bool missingBase)
         {
             public string Name { get; } = name;
+
+            /// <summary>The index of this definition among the definitions of the event, in load order.</summary>
+            public int Definition { get; } = definition;
             public string File { get; } = file;
             public KVObject Data { get; } = data;
             public string Type { get; } = type;
@@ -74,6 +77,7 @@ namespace GUI.Types.Viewers
         private SoundEventIndex? index;
         private List<ValveResourceFormat.ClosedCaptions.ClosedCaptions> captions = [];
         private List<EventRow> rows = [];
+        private List<EventRow>? sortedRows;
         private List<EventRow> scopedRows = [];
         private List<EventRow> filteredRows = [];
         private bool? soundsChecked;
@@ -81,9 +85,10 @@ namespace GUI.Types.Viewers
         private readonly List<(string Key, string Sound, string? Source, bool Exists)> eventSounds = [];
         private readonly List<(string Key, string Event, string? Source)> eventReferences = [];
         private readonly HashSet<string> missingSounds = new(StringComparer.OrdinalIgnoreCase);
+        private List<(string Event, string Key, string File)> usedBy = [];
         private string captionText = string.Empty;
-        private readonly List<(string Name, string File)> backHistory = [];
-        private readonly List<(string Name, string File)> forwardHistory = [];
+        private readonly List<(string Name, int Definition)> backHistory = [];
+        private readonly List<(string Name, int Definition)> forwardHistory = [];
         private readonly List<string?> typeFilters = [null];
         private int sortColumn = 1;
         private bool sortDescending;
@@ -317,7 +322,14 @@ namespace GUI.Types.Viewers
             noticeLabel.Dock = DockStyle.Top;
             noticeLabel.MaximumSize = new Size(4000, 0);
             noticeLabel.Padding = new Padding(0, 2, 0, 4);
-            noticeLabel.LinkClicked += (_, e) => ShowEvent(current!.Name, (string)e.Link!.LinkData!);
+            noticeLabel.LinkClicked += (_, e) =>
+            {
+                if (FindRow(current!.Name, (int)e.Link!.LinkData!) is { } row)
+                {
+                    ShowRow(row, addToHistory: true);
+                    SelectCurrentInList();
+                }
+            };
 
             captionLabel = new Label
             {
@@ -359,10 +371,31 @@ namespace GUI.Types.Viewers
             referenceGrid.Columns.Add(CreateColumn("Source", 20));
             referenceGrid.Columns.Add(CreateColumn("Status", 10));
 
-            usedByGrid = new Grid("Used by") { LinkColumn = 0, EmptyText = "No event names this event" };
+            usedByGrid = new Grid("Used by") { VirtualMode = true, EmptyText = "No event names this event" };
             usedByGrid.Columns.Add(CreateColumn("Event", 60));
             usedByGrid.Columns.Add(CreateColumn("Key", 10));
             usedByGrid.Columns.Add(CreateColumn("File", 40));
+            usedByGrid.FindLink = (rowIndex, columnIndex, _) => columnIndex == 0 && rowIndex < usedBy.Count ? usedBy[rowIndex].Event : null;
+            usedByGrid.CellValueNeeded += (_, e) =>
+            {
+                if (e.RowIndex < usedBy.Count)
+                {
+                    var (user, key, file) = usedBy[e.RowIndex];
+                    e.Value = e.ColumnIndex switch
+                    {
+                        0 => user,
+                        1 => key,
+                        _ => ShortFileName(file),
+                    };
+                }
+            };
+            usedByGrid.CellToolTipTextNeeded += (_, e) =>
+            {
+                if (e.ColumnIndex == 2 && e.RowIndex >= 0 && e.RowIndex < usedBy.Count)
+                {
+                    e.ToolTipText = usedBy[e.RowIndex].File;
+                }
+            };
 
             foreach (var grid in new[] { soundGrid, referenceGrid, usedByGrid })
             {
@@ -372,7 +405,7 @@ namespace GUI.Types.Viewers
                 {
                     if (column.HeaderText is "Key" or "Source" or "Status")
                     {
-                        column.AutoSizeMode = DataGridViewAutoSizeColumnMode.AllCells;
+                        column.AutoSizeMode = grid.VirtualMode ? DataGridViewAutoSizeColumnMode.DisplayedCells : DataGridViewAutoSizeColumnMode.AllCells;
                         column.MinimumWidth = this.AdjustForDPI(60);
                     }
                 }
@@ -785,16 +818,16 @@ namespace GUI.Types.Viewers
                 var definitions = loadedIndex.GetDefinitions(name);
                 var duplicate = definitions.Count > 1;
 
-                foreach (var (file, data) in definitions)
+                for (var i = 0; i < definitions.Count; i++)
                 {
-                    result.Add(CreateRow(loadedIndex, name, file, data, duplicate));
+                    result.Add(CreateRow(loadedIndex, name, i, definitions[i].File, definitions[i].Data, duplicate));
                 }
             }
 
             return result;
         }
 
-        private static EventRow CreateRow(SoundEventIndex loadedIndex, string name, string file, KVObject data, bool duplicate)
+        private static EventRow CreateRow(SoundEventIndex loadedIndex, string name, int definition, string file, KVObject data, bool duplicate)
         {
             var (resolved, problems, rejected) = loadedIndex.Resolve(data);
             var duration = resolved.FirstOrDefault(static r => r.Key == "vsnd_duration").Value is { } durationValue && IsNumber(durationValue)
@@ -802,7 +835,7 @@ namespace GUI.Types.Viewers
                 : -1f;
             var missingBase = SoundEventIndex.GetBases(data).Any(b => loadedIndex.Find(b.Name) == null);
 
-            return new EventRow(name, file, data, GetString(resolved, "type"), duration, duplicate, problems.Count > 0, rejected, missingBase);
+            return new EventRow(name, definition, file, data, GetString(resolved, "type"), duration, duplicate, problems.Count > 0, rejected, missingBase);
         }
 
         private bool SoundExists(string sound)
@@ -934,8 +967,22 @@ namespace GUI.Types.Viewers
         /// <summary>Lists the events of the scope in the order of the sorted column, which filtering keeps.</summary>
         private void UpdateScopedRows()
         {
-            scopedRows = scopeBox.SelectedIndex == 1 ? [.. rows] : [.. rows.Where(r => r.File.Equals(fileName, StringComparison.OrdinalIgnoreCase))];
+            if (sortedRows == null)
+            {
+                sortedRows = [.. rows];
+                SortRows(sortedRows);
+            }
 
+            scopedRows = scopeBox.SelectedIndex == 1 ? sortedRows : [.. sortedRows.Where(r => r.File.Equals(fileName, StringComparison.OrdinalIgnoreCase))];
+
+            for (var i = 0; i < eventGrid.Columns.Count; i++)
+            {
+                eventGrid.Columns[i].HeaderCell.SortGlyphDirection = i != sortColumn ? SortOrder.None : sortDescending ? SortOrder.Descending : SortOrder.Ascending;
+            }
+        }
+
+        private void SortRows(List<EventRow> list)
+        {
             Comparison<EventRow> comparison = sortColumn switch
             {
                 0 => static (a, b) => b.HasWarning.CompareTo(a.HasWarning),
@@ -945,7 +992,7 @@ namespace GUI.Types.Viewers
                 _ => static (a, b) => StringComparer.OrdinalIgnoreCase.Compare(a.Name, b.Name),
             };
 
-            scopedRows.Sort((a, b) =>
+            list.Sort((a, b) =>
             {
                 var result = comparison(a, b);
 
@@ -956,11 +1003,6 @@ namespace GUI.Types.Viewers
 
                 return sortDescending ? -result : result;
             });
-
-            for (var i = 0; i < eventGrid.Columns.Count; i++)
-            {
-                eventGrid.Columns[i].HeaderCell.SortGlyphDirection = i != sortColumn ? SortOrder.None : sortDescending ? SortOrder.Descending : SortOrder.Ascending;
-            }
         }
 
         private void RefreshEventGrid()
@@ -1082,6 +1124,7 @@ namespace GUI.Types.Viewers
         {
             sortDescending = sortColumn == e.ColumnIndex && !sortDescending;
             sortColumn = e.ColumnIndex;
+            sortedRows = null;
             UpdateScopedRows();
             ApplyFilter();
         }
@@ -1094,15 +1137,17 @@ namespace GUI.Types.Viewers
         /// when given, otherwise the one that wins.
         /// </summary>
         /// <returns>Whether the event is known.</returns>
-        public bool ShowEvent(string name, string? file = null)
+        public bool ShowEvent(string name, string? file = null, int? occurrence = null)
         {
-            file ??= index?.Find(name) != null ? index.GetDefinitions(name)[^1].File : null;
-            var row = rows.Find(r => r.Name.Equals(name, StringComparison.OrdinalIgnoreCase) && r.File.Equals(file, StringComparison.OrdinalIgnoreCase));
+            List<EventRow> definitions = [.. rows.Where(r => r.Name.Equals(name, StringComparison.OrdinalIgnoreCase)
+                && (file == null || r.File.Equals(file, StringComparison.OrdinalIgnoreCase)))];
 
-            if (row == null)
+            if (definitions.Count == 0 || occurrence < 0 || occurrence >= definitions.Count)
             {
                 return false;
             }
+
+            var row = definitions[occurrence ?? definitions.Count - 1];
 
             if (row != current)
             {
@@ -1136,26 +1181,29 @@ namespace GUI.Types.Viewers
             updating = false;
         }
 
+        private EventRow? FindRow(string name, int definition)
+            => rows.Find(r => r.Definition == definition && r.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+
         public void GoBack() => Navigate(backHistory, forwardHistory);
 
         public void GoForward() => Navigate(forwardHistory, backHistory);
 
-        private void Navigate(List<(string Name, string File)> from, List<(string Name, string File)> to)
+        private void Navigate(List<(string Name, int Definition)> from, List<(string Name, int Definition)> to)
         {
             if (from.Count == 0 || current == null)
             {
                 return;
             }
 
-            var (name, file) = from[^1];
+            var (name, definition) = from[^1];
             from.RemoveAt(from.Count - 1);
 
-            if (rows.Find(r => r.Name == name && r.File == file) is not { } row)
+            if (FindRow(name, definition) is not { } row)
             {
                 return;
             }
 
-            to.Add((current.Name, current.File));
+            to.Add((current.Name, current.Definition));
             ShowRow(row, addToHistory: false);
             SelectCurrentInList();
         }
@@ -1164,7 +1212,7 @@ namespace GUI.Types.Viewers
         {
             if (addToHistory && current != null)
             {
-                backHistory.Add((current.Name, current.File));
+                backHistory.Add((current.Name, current.Definition));
                 forwardHistory.Clear();
             }
 
@@ -1188,23 +1236,30 @@ namespace GUI.Types.Viewers
             CollectLinks(row, resolved);
 
             var notice = new StringBuilder();
-            var noticeLinks = new List<(int Start, int Length, string File)>();
+            var noticeLinks = new List<(int Start, int Length, int Definition)>();
             List<string> definitionFiles = [.. index.GetDefinitions(row.Name).Select(static d => d.File)];
 
             if (definitionFiles.Count > 1)
             {
-                notice.Append("Also defined in ");
+                notice.Append("Also defined ");
 
-                foreach (var file in definitionFiles.Where(f => f != row.File))
+                for (var i = 0; i < definitionFiles.Count; i++)
                 {
-                    var shortName = ShortFileName(file);
-                    notice.Append(noticeLinks.Count > 0 ? ", " : string.Empty);
-                    noticeLinks.Add((notice.Length, shortName.Length, file));
-                    notice.Append(shortName);
+                    if (i == row.Definition)
+                    {
+                        continue;
+                    }
+
+                    var sameFile = definitionFiles[i].Equals(row.File, StringComparison.OrdinalIgnoreCase);
+                    notice.Append(noticeLinks.Count > 0 ? ", " : string.Empty).Append(sameFile ? string.Empty : "in ");
+
+                    var text = !sameFile ? ShortFileName(definitionFiles[i]) : i < row.Definition ? "earlier in this file" : "later in this file";
+                    noticeLinks.Add((notice.Length, text.Length, i));
+                    notice.Append(text);
                 }
 
-                notice.Append(definitionFiles[^1] == row.File
-                    ? ". This definition is used, as it loads last."
+                notice.Append(row.Definition == definitionFiles.Count - 1 ? ". This definition is used, as it loads last."
+                    : definitionFiles[^1].Equals(row.File, StringComparison.OrdinalIgnoreCase) ? ". The later definition in this file overrides this one."
                     : $". The definition in {ShortFileName(definitionFiles[^1])} is used, as it loads last.");
             }
 
@@ -1247,9 +1302,9 @@ namespace GUI.Types.Viewers
             noticeLabel.Text = notice.ToString();
             noticeLabel.Links.Clear();
 
-            foreach (var (start, length, file) in noticeLinks)
+            foreach (var (start, length, definition) in noticeLinks)
             {
-                noticeLabel.Links.Add(start, length, file);
+                noticeLabel.Links.Add(start, length, definition);
             }
 
             noticeLabel.Visible = notice.Length > 0;
@@ -1534,6 +1589,7 @@ namespace GUI.Types.Viewers
             }
 
             propertyGrid.SuspendLayout();
+            propertyGrid.BeginFill();
             propertyGrid.Rows.Clear();
 
             foreach (var (groupName, groupRows) in groups)
@@ -1588,6 +1644,7 @@ namespace GUI.Types.Viewers
                 }
             }
 
+            propertyGrid.EndFill();
             propertyGrid.ResumeLayout();
             propertyGrid.ClearSelection();
         }
@@ -1944,45 +2001,28 @@ namespace GUI.Types.Viewers
         private void ShowLinks()
         {
             updating = true;
+            soundGrid.BeginFill();
+            referenceGrid.BeginFill();
             soundGrid.Rows.Clear();
-
-            foreach (var (key, sound, source, exists) in eventSounds)
-            {
-                var soundRow = soundGrid.Rows[soundGrid.Rows.Add(sound, key, source == null ? "own" : $"from {source}", exists ? string.Empty : "Not shipped")];
-                soundRow.Tag = exists ? sound : null;
-
-                if (!exists)
-                {
-                    soundRow.DefaultCellStyle.ForeColor = Themer.CurrentThemeColors.Attention;
-                }
-            }
+            soundGrid.Rows.AddRange([.. eventSounds.Select(s => CreateLinkRow(soundGrid, s.Exists ? s.Sound : null, s.Sound, s.Key, s.Source, s.Exists ? string.Empty : "Not shipped"))]);
 
             referenceGrid.Rows.Clear();
-
-            foreach (var (key, target, source) in eventReferences)
+            referenceGrid.Rows.AddRange([.. eventReferences.Select(r =>
             {
-                var exists = index!.Find(target) != null;
-                var referenceRow = referenceGrid.Rows[referenceGrid.Rows.Add(target, key, source == null ? "own" : $"from {source}", exists ? string.Empty : "Not loaded")];
-                referenceRow.Tag = exists ? target : null;
-
-                if (!exists)
-                {
-                    referenceRow.DefaultCellStyle.ForeColor = Themer.CurrentThemeColors.Attention;
-                }
-            }
+                var exists = index!.Find(r.Event) != null;
+                return CreateLinkRow(referenceGrid, exists ? r.Event : null, r.Event, r.Key, r.Source, exists ? string.Empty : "Not loaded");
+            })]);
 
             soundGrid.Columns[3].Visible = eventSounds.Any(static s => !s.Exists);
             referenceGrid.Columns[3].Visible = referenceGrid.Rows.Cast<DataGridViewRow>().Any(static r => r.Tag == null);
+            soundGrid.EndFill();
+            referenceGrid.EndFill();
 
+            usedBy = [.. index!.GetReferencedBy(current!.Name)
+                .Select(user => (user.Event, user.Key, index.GetDefinitions(user.Event)[^1].File))
+                .OrderBy(static user => user.Event, StringComparer.OrdinalIgnoreCase)];
             usedByGrid.Rows.Clear();
-
-            foreach (var (user, key) in index!.GetReferencedBy(current!.Name).OrderBy(static u => u.Event, StringComparer.OrdinalIgnoreCase))
-            {
-                var file = index.GetDefinitions(user)[^1].File;
-                var userRow = usedByGrid.Rows[usedByGrid.Rows.Add(user, key, ShortFileName(file))];
-                userRow.Tag = user;
-                userRow.Cells[2].ToolTipText = file;
-            }
+            usedByGrid.RowCount = usedBy.Count;
 
             soundsPage.Text = string.Create(CultureInfo.InvariantCulture, $"Sounds ({soundGrid.RowCount})");
             referencesPage.Text = string.Create(CultureInfo.InvariantCulture, $"References ({referenceGrid.RowCount})");
@@ -1998,6 +2038,20 @@ namespace GUI.Types.Viewers
             StopSound();
         }
 
+        /// <summary>Creates a row of the sounds or references list, which links to <paramref name="target"/> unless it is null.</summary>
+        private static DataGridViewRow CreateLinkRow(Grid grid, string? target, string name, string key, string? source, string status)
+        {
+            var row = new DataGridViewRow { Tag = target };
+            row.CreateCells(grid, name, key, source == null ? "own" : $"from {source}", status);
+
+            if (target == null)
+            {
+                row.DefaultCellStyle.ForeColor = Themer.CurrentThemeColors.Attention;
+            }
+
+            return row;
+        }
+
         private void OnSoundSelectionChanged(object? sender, EventArgs e)
         {
             if (!updating && soundGrid.CurrentCell != null)
@@ -2011,6 +2065,12 @@ namespace GUI.Types.Viewers
             if (sender == soundGrid)
             {
                 PlaySound(rowIndex, autoPlay: true);
+                return;
+            }
+
+            if (sender == usedByGrid)
+            {
+                ShowEvent(usedBy[rowIndex].Event);
                 return;
             }
 
@@ -2185,6 +2245,10 @@ namespace GUI.Types.Viewers
             {
                 StopPlayback();
             }
+            else if (IsHandleCreated)
+            {
+                BeginInvoke(TakeFocus);
+            }
         }
 
         private void CopyName()
@@ -2294,6 +2358,30 @@ namespace GUI.Types.Viewers
             }
 
             return base.ProcessCmdKey(ref msg, keyData);
+        }
+
+        /// <summary>
+        /// Puts the focus in the event list when the viewer's tab is shown, so its keys work without a click, unless the
+        /// user is typing into a text box or a dropdown elsewhere.
+        /// </summary>
+        private void TakeFocus()
+        {
+            if (!Visible || ContainsFocus)
+            {
+                return;
+            }
+
+            Control? focused = FindForm()?.ActiveControl;
+
+            while (focused is ContainerControl { ActiveControl: { } inner })
+            {
+                focused = inner;
+            }
+
+            if (focused is not (TextBoxBase or ComboBox))
+            {
+                eventGrid.Focus();
+            }
         }
 
         /// <summary>Gets whether a button, check box or tab strip has the focus, which handle Space and Esc themselves.</summary>
@@ -2447,6 +2535,31 @@ namespace GUI.Types.Viewers
 
             /// <summary>Finds what a point in a cell links to, given the row, the column and the point in the cell.</summary>
             public Func<int, int, Point, object?>? FindLink { get; set; }
+
+            private List<(DataGridViewColumn Column, DataGridViewAutoSizeColumnMode Mode)> autoSizedColumns = [];
+
+            /// <summary>Stops sizing columns to their cells while rows are added, until <see cref="EndFill"/> sizes them once.</summary>
+            public void BeginFill()
+            {
+                autoSizedColumns = [.. Columns.Cast<DataGridViewColumn>()
+                    .Where(static column => column.AutoSizeMode is not (DataGridViewAutoSizeColumnMode.None or DataGridViewAutoSizeColumnMode.Fill or DataGridViewAutoSizeColumnMode.NotSet))
+                    .Select(static column => (column, column.AutoSizeMode))];
+
+                foreach (var (column, _) in autoSizedColumns)
+                {
+                    column.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
+                }
+            }
+
+            public void EndFill()
+            {
+                foreach (var (column, mode) in autoSizedColumns)
+                {
+                    column.AutoSizeMode = mode;
+                }
+
+                autoSizedColumns = [];
+            }
 
             /// <summary>Text shown in place of the rows while there are none.</summary>
             public string EmptyText
