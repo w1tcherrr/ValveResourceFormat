@@ -325,16 +325,22 @@ namespace ValveResourceFormat.IO
         }
 
         /// <summary>
-        /// Lists the paths of the files with an extension in every search location, in the order <see cref="FindFile"/>
+        /// Gets the game folders on disk that files are searched in, as found in gameinfo files or added with <see cref="AddDiskPathToSearch"/>.
+        /// </summary>
+        public IReadOnlyCollection<string> GameSearchPaths => CurrentGameSearchPaths;
+
+        /// <summary>
+        /// Lists the paths of the files with the given extensions in every search location, in the order <see cref="FindFile"/>
         /// searches them: the current package, map packages, addons, game packages and folders on disk.
         /// A path that is in several locations is listed once.
         /// </summary>
-        /// <param name="extension">The extension without the leading dot, such as <c>vsndevts_c</c>.</param>
-        public virtual IEnumerable<string> EnumerateFiles(string extension)
+        /// <param name="extensions">The extensions without the leading dot, such as <c>vsndevts_c</c>.</param>
+        public virtual IEnumerable<string> EnumerateFiles(params string[] extensions)
         {
             LoadPendingAddonDependencies();
 
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var diskOptions = new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true };
             IEnumerable<(Package? Package, string? Folder)> locations =
             [
                 (CurrentPackage, null),
@@ -350,11 +356,12 @@ namespace ValveResourceFormat.IO
 
                 if (package != null)
                 {
-                    paths = package.Entries?.GetValueOrDefault(extension)?.Select(static entry => entry.GetFullPath()) ?? [];
+                    paths = extensions.SelectMany(extension => package.Entries?.GetValueOrDefault(extension) ?? []).Select(static entry => entry.GetFullPath());
                 }
                 else if (folder != null && Directory.Exists(folder))
                 {
-                    paths = Directory.EnumerateFiles(folder, $"*.{extension}", SearchOption.AllDirectories)
+                    paths = Directory.EnumerateFiles(folder, "*", diskOptions)
+                        .Where(file => extensions.Any(extension => file.EndsWith($".{extension}", StringComparison.OrdinalIgnoreCase)))
                         .Select(file => Path.GetRelativePath(folder, file).Replace(Path.DirectorySeparatorChar, '/'));
                 }
                 else

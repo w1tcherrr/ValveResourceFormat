@@ -2,6 +2,7 @@ using System.IO;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 using ValveKeyValue;
 using ValveResourceFormat.IO;
 using ValveResourceFormat.Serialization.KeyValues;
@@ -28,6 +29,11 @@ namespace ValveResourceFormat.ResourceTypes
         // Bases are resolved past the engine's limit for display, this only stops cycles
         private const int MaxResolvedVisits = 64;
 
+        /// <summary>
+        /// The sound event file of an addon or workshop map, which the engine loads after the sound event manifest.
+        /// </summary>
+        public const string AddonEventsFile = "soundevents/soundevents_addon.vsndevts";
+
         private static readonly KVSerializer KeyValues1Serializer = KVSerializer.Create(KVSerializationFormat.KeyValues1Text);
 
         private readonly List<string> files = [];
@@ -53,21 +59,31 @@ namespace ValveResourceFormat.ResourceTypes
 
         /// <summary>
         /// Loads sound event files and sound stack files into a new index. The files are loaded in parallel and added in order.
+        /// A file that fails to load is logged and left out.
         /// </summary>
         /// <param name="fileLoader">Loads each file by its path.</param>
-        /// <param name="eventFiles">Paths of the <c>vsndevts_c</c> files in the order the engine loads them: the files of the
-        /// sound event manifest first, see <see cref="GetManifestFiles"/>. A later file wins.</param>
+        /// <param name="eventFiles">Paths of the <c>vsndevts_c</c> files in the order the engine loads them, see
+        /// <see cref="GetEventFilesInLoadOrder"/>. A later file wins.</param>
         /// <param name="stackFiles">Paths of the <c>vsndstck_c</c> files.</param>
+        /// <param name="logger">Logs the files that fail to load.</param>
         /// <param name="cancellationToken">Cancels the load.</param>
-        public static SoundEventIndex Build(IFileLoader fileLoader, IReadOnlyList<string> eventFiles, IReadOnlyList<string> stackFiles, CancellationToken cancellationToken = default)
+        public static SoundEventIndex Build(IFileLoader fileLoader, IReadOnlyList<string> eventFiles, IReadOnlyList<string> stackFiles,
+            ILogger? logger = null, CancellationToken cancellationToken = default)
         {
             var events = new IReadOnlyList<(string Name, KVObject Data)>?[eventFiles.Count];
             var options = new ParallelOptions { CancellationToken = cancellationToken };
 
             Parallel.For(0, eventFiles.Count, options, i =>
             {
-                using var resource = fileLoader.LoadFile(eventFiles[i]);
-                events[i] = (resource?.DataBlock as SoundEventScript)?.Events;
+                try
+                {
+                    using var resource = fileLoader.LoadFile(eventFiles[i]);
+                    events[i] = (resource?.DataBlock as SoundEventScript)?.Events;
+                }
+                catch (Exception e)
+                {
+                    logger?.LogError(e, "Failed to load sound events from {File}", eventFiles[i]);
+                }
             });
 
             var index = new SoundEventIndex();
@@ -84,11 +100,18 @@ namespace ValveResourceFormat.ResourceTypes
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                using var resource = fileLoader.LoadFile(stackFile);
-
-                if (resource != null)
+                try
                 {
-                    index.AddStacks(resource);
+                    using var resource = fileLoader.LoadFile(stackFile);
+
+                    if (resource != null)
+                    {
+                        index.AddStacks(resource);
+                    }
+                }
+                catch (Exception e)
+                {
+                    logger?.LogError(e, "Failed to load sound stacks from {File}", stackFile);
                 }
             }
 
@@ -123,10 +146,11 @@ namespace ValveResourceFormat.ResourceTypes
 
         /// <summary>
         /// Adds the stacks of a sound stack resource, in either the KeyValues1 text or the KeyValues3 layout.
-        /// Stacks already added stay first.
         /// </summary>
         public void AddStacks(Resource resource)
         {
+            var fileName = resource.FileName ?? string.Empty;
+
             switch (resource.DataBlock)
             {
                 case SoundStackScript script:
@@ -134,38 +158,115 @@ namespace ValveResourceFormat.ResourceTypes
                     {
                         using var stream = new MemoryStream(Encoding.UTF8.GetBytes(text));
 
-                        foreach (var stack in KeyValues1Serializer.DeserializeWithoutRoot(stream))
+                        foreach (var (name, stack) in KeyValues1Serializer.DeserializeWithoutRoot(stream))
                         {
-                            var operators = new List<(string Name, KVObject Operator)>();
-
-                            foreach (var op in stack.Value)
-                            {
-                                if (op.Value.ValueType == KVValueType.Collection && op.Value.ContainsKey("operator"))
-                                {
-                                    operators.Add((op.Key, op.Value));
-                                }
-                            }
-
-                            stacks.TryAdd(stack.Key, (resource.FileName ?? string.Empty, stack.Value, operators));
+                            AddStack(fileName, name, stack);
                         }
                     }
 
                     break;
 
                 case BinaryKV3 kv3:
-                    foreach (var stack in kv3.Data.Root)
+                    foreach (var (name, stack) in kv3.Data.Root)
                     {
-                        var operators = new List<(string Name, KVObject Operator)>();
-
-                        foreach (var op in stack.Value.GetArray("operators") ?? [])
-                        {
-                            operators.Add((op.GetStringProperty("name", string.Empty), op));
-                        }
-
-                        stacks.TryAdd(stack.Key, (resource.FileName ?? string.Empty, stack.Value, operators));
+                        AddStack(fileName, name, stack);
                     }
 
                     break;
+            }
+        }
+
+        /// <summary>
+        /// Adds a stack. Stacks already added stay first.
+        /// </summary>
+        /// <param name="fileName">The path of the file that holds the stack.</param>
+        /// <param name="name">The name of the stack, which event types name.</param>
+        /// <param name="stack">The stack, either with an <c>operators</c> array of operators that each have a <c>name</c>, as
+        /// KeyValues3 stacks store it, or with each operator under its name, as KeyValues1 stacks store it.</param>
+        public void AddStack(string fileName, string name, KVObject stack)
+        {
+            var operators = new List<(string Name, KVObject Operator)>();
+
+            if (stack.GetArray("operators") is { } operatorArray)
+            {
+                foreach (var op in operatorArray)
+                {
+                    operators.Add((op.GetStringProperty("name", string.Empty), op));
+                }
+            }
+            else
+            {
+                foreach (var (opName, op) in stack)
+                {
+                    if (op.ValueType == KVValueType.Collection && op.ContainsKey("operator"))
+                    {
+                        operators.Add((opName, op));
+                    }
+                }
+            }
+
+            stacks.TryAdd(name, (fileName, stack, operators));
+        }
+
+        /// <summary>
+        /// Lists sound event files in the order the engine loads them: the files of the sound event manifest, including
+        /// the manifests it lists, then <see cref="AddonEventsFile"/>, then <paramref name="otherFiles"/> that are not listed yet.
+        /// </summary>
+        /// <param name="fileLoader">Loads the manifests.</param>
+        /// <param name="otherFiles">Further files to load last, such as every sound event file the loader can find.</param>
+        /// <returns>The paths, without the compiled <c>_c</c> suffix. The files may not exist.</returns>
+        public static List<string> GetEventFilesInLoadOrder(IFileLoader fileLoader, IEnumerable<string> otherFiles)
+        {
+            var files = new List<string>();
+            var listed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            CollectManifest("soundevents/soundevents_manifest.vrman");
+            Add(AddonEventsFile);
+
+            foreach (var file in otherFiles)
+            {
+                Add(file);
+            }
+
+            return files;
+
+            void Add(string file)
+            {
+                if (listed.Add(file))
+                {
+                    files.Add(file);
+                }
+            }
+
+            void CollectManifest(string manifest)
+            {
+                if (!visited.Add(manifest))
+                {
+                    return;
+                }
+
+                using var resource = fileLoader.LoadFileCompiled(manifest);
+
+                if (resource?.DataBlock is not ResourceManifest resourceManifest)
+                {
+                    return;
+                }
+
+                foreach (var resourceGroup in resourceManifest.Resources)
+                {
+                    foreach (var file in resourceGroup)
+                    {
+                        if (file.EndsWith(".vrman", StringComparison.OrdinalIgnoreCase))
+                        {
+                            CollectManifest(file);
+                        }
+                        else
+                        {
+                            Add(file);
+                        }
+                    }
+                }
             }
         }
 
@@ -196,8 +297,10 @@ namespace ValveResourceFormat.ResourceTypes
         /// Resolves the keys of an event with the keys it inherits through <c>base</c>, checking fragments that name a
         /// field against the fields of the event's stack when that stack was added. See <see cref="Resolve(KVObject, Func{string, KVObject?}, Func{string, string, string?})"/>.
         /// </summary>
-        public (List<(string Key, KVObject Value, string? Source)> Keys, List<string> Problems, bool Rejected) Resolve(KVObject soundEvent)
-            => Resolve(soundEvent, Find, soundEvent.GetStringProperty("type") is { } type && ContainsStack(type) ? GetFieldDefault : null);
+        /// <param name="soundEvent">The event to resolve.</param>
+        /// <param name="findEvent">Finds a base event by name, in place of <see cref="Find"/>.</param>
+        public (List<(string Key, KVObject Value, string? Source)> Keys, List<string> Problems, bool Rejected) Resolve(KVObject soundEvent, Func<string, KVObject?>? findEvent = null)
+            => Resolve(soundEvent, findEvent ?? Find, soundEvent.GetStringProperty("type") is { } type && ContainsStack(type) ? GetFieldDefault : null);
 
         /// <summary>
         /// Resolves the keys of an event with the keys it inherits through <c>base</c>, as the engine does.
@@ -393,52 +496,6 @@ namespace ValveResourceFormat.ResourceTypes
         }
 
         /// <summary>
-        /// Lists the sound event files of a resource manifest in order, including those of the manifests it lists.
-        /// </summary>
-        /// <param name="fileLoader">Loads the manifests.</param>
-        /// <param name="manifest">The manifest, such as <c>soundevents/soundevents_manifest.vrman</c>.</param>
-        /// <returns>The listed paths, without the compiled <c>_c</c> suffix.</returns>
-        public static List<string> GetManifestFiles(IFileLoader fileLoader, string manifest)
-        {
-            var files = new List<string>();
-            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            Collect(manifest);
-
-            return files;
-
-            void Collect(string manifestFile)
-            {
-                if (!visited.Add(manifestFile))
-                {
-                    return;
-                }
-
-                using var resource = fileLoader.LoadFileCompiled(manifestFile);
-
-                if (resource?.DataBlock is not ResourceManifest resourceManifest)
-                {
-                    return;
-                }
-
-                foreach (var resourceGroup in resourceManifest.Resources)
-                {
-                    foreach (var file in resourceGroup)
-                    {
-                        if (file.EndsWith(".vrman", StringComparison.OrdinalIgnoreCase))
-                        {
-                            Collect(file);
-                        }
-                        else
-                        {
-                            files.Add(file);
-                        }
-                    }
-                }
-            }
-        }
-
-        /// <summary>
         /// Gets the known events that an event names in its own keys, with the top level key that names each.
         /// Bases are included under the <c>base</c> key whether or not they exist.
         /// </summary>
@@ -495,7 +552,7 @@ namespace ValveResourceFormat.ResourceTypes
         /// </summary>
         /// <remarks>
         /// A later field of the same name replaces an earlier one. An imported field does not replace a field that already
-        /// exists, and fields marked <c>ignore_import</c> in <c>_stack_properties.&lt;stack&gt;._field_properties</c> are not imported.
+        /// exists, but gives its <c>data_type</c> to one that has none. Fields marked <c>ignore_import</c> in <c>_stack_properties.&lt;stack&gt;._field_properties</c> are not imported.
         /// </remarks>
         /// <returns>Each field name, its definition with <c>data_type</c>, the default <c>value</c> and <c>_system_properties</c>,
         /// and the stack that declares it, which differs from <paramref name="stackName"/> for imported fields. The stack's
@@ -549,6 +606,18 @@ namespace ValveResourceFormat.ResourceTypes
                         else if (!imported && fields[existing].Stack == stack)
                         {
                             fields[existing] = (name, field, stack);
+                        }
+                        else if (imported && !fields[existing].Field.ContainsKey("data_type") && field.TryGetValue("data_type", out var dataType))
+                        {
+                            var overridden = KVObject.Collection();
+
+                            foreach (var (key, value) in fields[existing].Field)
+                            {
+                                overridden.Add(key, value);
+                            }
+
+                            overridden.Add("data_type", dataType);
+                            fields[existing] = (name, overridden, fields[existing].Stack);
                         }
 
                         if (field.GetStringProperty("data_type") == "public_opvar" && field.GetStringProperty("value") is { Length: > 0 } subStack)

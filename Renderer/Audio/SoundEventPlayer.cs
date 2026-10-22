@@ -286,15 +286,8 @@ public sealed class SoundEventPlayer : IDisposable
     }
 
     /// <summary>
-    /// Conventional path for an addon or workshop map's extra sound events. Addon files are not listed in
-    /// the base game's "soundevents/soundevents_manifest.vrman", so this is always attempted directly in
-    /// <see cref="LoadSoundEvents"/>. Most content has no such file.
-    /// </summary>
-    private const string AddonSoundEventsFile = "soundevents/soundevents_addon.vsndevts";
-
-    /// <summary>
     /// Loads sound event definitions from all soundevent files listed in the game's soundevents manifest,
-    /// plus <see cref="AddonSoundEventsFile"/> when present. An optional filter matches against the file
+    /// plus <see cref="SoundEventIndex.AddonEventsFile"/> when present. An optional filter matches against the file
     /// name (e.g. "game_sounds").
     /// </summary>
     public void LoadSoundEvents(string filter = "") => LoadSoundEventsInto(Bank, filter);
@@ -318,19 +311,15 @@ public sealed class SoundEventPlayer : IDisposable
     {
         var stopwatch = Stopwatch.StartNew();
 
-        foreach (var soundEventsFile in GetSoundEventFiles())
+        foreach (var soundEventsFile in SoundEventIndex.GetEventFilesInLoadOrder(fileLoader, []))
         {
             cancellationToken.ThrowIfCancellationRequested();
 
             if (filter.Length == 0 || soundEventsFile.Contains(filter, StringComparison.OrdinalIgnoreCase))
             {
-                LoadSoundEventsFile(bank, soundEventsFile, optional: false);
+                // Most content has no addon file
+                LoadSoundEventsFile(bank, soundEventsFile, optional: soundEventsFile == SoundEventIndex.AddonEventsFile);
             }
-        }
-
-        if (filter.Length == 0 || AddonSoundEventsFile.Contains(filter, StringComparison.OrdinalIgnoreCase))
-        {
-            LoadSoundEventsFile(bank, AddonSoundEventsFile, optional: true);
         }
 
         stopwatch.Stop();
@@ -339,7 +328,7 @@ public sealed class SoundEventPlayer : IDisposable
 
     /// <summary>
     /// Loads sound event definitions from a single soundevent (vsndevts) file. When <paramref name="optional"/>
-    /// is set, a missing file is skipped quietly instead of logging a warning (see <see cref="AddonSoundEventsFile"/>).
+    /// is set, a missing file is skipped quietly instead of logging a warning (see <see cref="SoundEventIndex.AddonEventsFile"/>).
     /// </summary>
     public void LoadSoundEventsFile(string fileName, bool optional = false) => LoadSoundEventsFile(Bank, fileName, optional);
 
@@ -1046,8 +1035,6 @@ public sealed class SoundEventPlayer : IDisposable
 
         activeSoundscapeEvents.Clear();
     }
-
-    private List<string> GetSoundEventFiles() => SoundEventIndex.GetManifestFiles(fileLoader, "soundevents/soundevents_manifest.vrman");
 
     /// <summary>Stops the mixing thread and disposes the mixer and the audio device.</summary>
     public void Dispose()

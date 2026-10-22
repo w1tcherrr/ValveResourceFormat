@@ -811,37 +811,43 @@ public abstract class SoundEvent
     /// <summary>
     /// Creates a sound event instance for the given definition, or null when the event type is not supported.
     /// </summary>
-    public static SoundEvent? Build(SoundEventDefinition definition)
+    public static SoundEvent? Build(SoundEventDefinition definition) => GetFactory(definition.Type)?.Invoke(definition);
+
+    /// <summary>Gets whether events of a type can be played.</summary>
+    /// <param name="type">The type of the event, which names its stack.</param>
+    public static bool IsSupportedType(string type) => GetFactory(type) != null;
+
+    private static Func<SoundEventDefinition, SoundEvent>? GetFactory(string type)
     {
-        return definition.Type switch
+        return type switch
         {
-            "csgo_mega" or "choreo_3d" => new SoundEventCSGOMega(definition),
+            "csgo_mega" or "choreo_3d" => static definition => new SoundEventCSGOMega(definition),
             "citadel_default_2d" or "citadel_default_3d" or "citadel_ambient_3d" or "citadel_perspective_default"
                 or "citadel_emitter_lod" or "citadel_emitter_obb" or "citadel_dialog" or "citadel_music"
                 or "citadel_diagetic_music" or "citadel_ui_panner" or "citadel_weapons" or "citadel_footsteps"
                 or "citadel_bullet_impact" or "citadel_bullet_whizby" or "citadel_hit_confirm" or "citadel_damage"
                 or "citadel_health_effects" or "citadel_closest_point_on_segment"
-                => new SoundEventCitadel(definition),
-            "citadel_start_multi" => new SoundEventHLVRMulti(definition),
+                => static definition => new SoundEventCitadel(definition),
+            "citadel_start_multi" => static definition => new SoundEventHLVRMulti(definition),
             "hlvr_default_3d" or "hlvr_2d_w_occlusion" or "src1_3d" or "src1_2d"
                 or "hlvr_default_3d_on_aabb" or "hlvr_default_3d_xen_propagation" or "hlvr_lpf_3d" or "hlvr_2d_w_falloff"
                 or "hlvr_ambient_rand_child" or "hlvr_ambient_rand_child_random_anim_time"
-                => new SoundEventHLVRDefault(definition),
+                => static definition => new SoundEventHLVRDefault(definition),
             "hlvr_update_vo_default" or "hlvr_update_vo_combine" or "hlvr_music_2d" or "hlvr_music_3d"
-                => new SoundEventHLVRDefault(definition),
-            "hlvr_gun_layers_3d" or "hlvr_player_gun_layers_3d" => new SoundEventHLVRGunLayers(definition),
-            "hlvr_start_soundevent" => new SoundEventHLVRStartSoundEvent(definition),
-            "hlvr_animate_soundevent" => new SoundEventHLVRMulti(definition),
+                => static definition => new SoundEventHLVRDefault(definition),
+            "hlvr_gun_layers_3d" or "hlvr_player_gun_layers_3d" => static definition => new SoundEventHLVRGunLayers(definition),
+            "hlvr_start_soundevent" => static definition => new SoundEventHLVRStartSoundEvent(definition),
+            "hlvr_animate_soundevent" => static definition => new SoundEventHLVRMulti(definition),
             "hlvr_start_multi" or "hlvr_start_multi_quad" or "hlvr_start_multi_24" or "hlvr_start_multi_simple"
                 or "hlvr_start_multi_aabb" or "hlvr_start_multi_bullet" or "hlvr_startup_start_multi"
                 or "hlvr_music_start_multi_quad"
-                => new SoundEventHLVRMulti(definition),
-            "hlvr_start_multi_switch" => new SoundEventHLVRSwitch(definition),
-            "hlvr_ambient_rand" => new SoundEventHLVRAmbientRand(definition),
-            "hlvr_ambient_fixed_rotation" => new SoundEventHLVRAmbientFixedRotation(definition),
-            "hlvr_ambient_fixed_rotation_multi_vsnd" => new SoundEventHLVRAmbientMultiVsnd(definition),
-            "script_playrandom" => new SoundEventScriptedRandom(definition),
-            "script_playlooping" => new SoundEventScriptedLoop(definition),
+                => static definition => new SoundEventHLVRMulti(definition),
+            "hlvr_start_multi_switch" => static definition => new SoundEventHLVRSwitch(definition),
+            "hlvr_ambient_rand" => static definition => new SoundEventHLVRAmbientRand(definition),
+            "hlvr_ambient_fixed_rotation" => static definition => new SoundEventHLVRAmbientFixedRotation(definition),
+            "hlvr_ambient_fixed_rotation_multi_vsnd" => static definition => new SoundEventHLVRAmbientMultiVsnd(definition),
+            "script_playrandom" => static definition => new SoundEventScriptedRandom(definition),
+            "script_playlooping" => static definition => new SoundEventScriptedLoop(definition),
             _ => null,
         };
     }

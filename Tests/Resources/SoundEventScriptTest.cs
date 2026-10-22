@@ -1,4 +1,7 @@
+using System.Globalization;
+using System.IO;
 using System.Linq;
+using System.Text;
 using System.Threading.Tasks;
 using ValveKeyValue;
 using ValveResourceFormat;
@@ -76,6 +79,85 @@ namespace Tests.Resources
                 await Assert.That(index.ContainsStack(stack)).IsTrue();
                 await Assert.That(fields.Single(f => f.Name == field).Field.GetStringProperty("data_type")).IsEqualTo(dataType);
                 await Assert.That(fields.Select(f => f.Stack).Distinct()).IsEquivalentTo([stack]);
+            }
+        }
+
+        [Test]
+        public async Task ImportsKeyValues1StackFieldsWithoutReplacingOwnFields()
+        {
+            const string Text = """
+                "child"
+                {
+                    "public"
+                    {
+                        "operator" "util_null"
+                        "operator_variables"
+                        {
+                            "volume" { "data_type" "float" "value" "1.0" }
+                            "volume" { "data_type" "float" "value" "0.5" }
+                            "import_public_opvars" "imported"
+                            "reverb" { "data_type" "public_opvar" "value" "reverb_stack" }
+                        }
+                    }
+                    "import_operator"
+                    {
+                        "operator" "sos_import_stack"
+                        "import_stack" "not_public"
+                        "auto_connect_public_fields" "true"
+                    }
+                }
+                "imported"
+                {
+                    "public"
+                    {
+                        "operator" "util_null"
+                        "operator_variables"
+                        {
+                            "volume" { "data_type" "float" "value" "9.0" }
+                            "pitch" { "data_type" "float" "value" "1.0" }
+                        }
+                    }
+                }
+                "reverb_stack"
+                {
+                    "public"
+                    {
+                        "operator" "util_null"
+                        "operator_variables"
+                        {
+                            "reverb_level" { "data_type" "float" "value" "0.2" }
+                        }
+                    }
+                }
+                "not_public"
+                {
+                    "public"
+                    {
+                        "operator" "util_null"
+                        "operator_variables"
+                        {
+                            "hidden" { "data_type" "float" "value" "1.0" }
+                        }
+                    }
+                }
+                """;
+
+            using var stream = new MemoryStream(Encoding.UTF8.GetBytes(Text));
+            var index = new SoundEventIndex();
+
+            foreach (var (name, stack) in KVSerializer.Create(KVSerializationFormat.KeyValues1Text).DeserializeWithoutRoot(stream))
+            {
+                index.AddStack("soundstacks/test.vsndstck_c", name, stack);
+            }
+
+            var fields = index.GetStackFields("child");
+
+            using (Assert.Multiple())
+            {
+                await Assert.That(fields.Select(f => f.Name)).IsEquivalentTo(["volume", "reverb", "pitch", "reverb_level"]);
+                await Assert.That(fields.Single(f => f.Name == "volume").Field["value"].ToSingle(CultureInfo.InvariantCulture)).IsEqualTo(0.5f);
+                await Assert.That(fields.Single(f => f.Name == "pitch").Stack).IsEqualTo("imported");
+                await Assert.That(fields.Single(f => f.Name == "reverb_level").Stack).IsEqualTo("reverb_stack");
             }
         }
 

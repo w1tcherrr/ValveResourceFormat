@@ -1,6 +1,4 @@
-using System.Globalization;
 using System.IO;
-using System.Linq;
 using System.Text;
 using ValveKeyValue;
 using ValveResourceFormat.Serialization.KeyValues;
@@ -30,7 +28,7 @@ namespace ValveResourceFormat.ResourceTypes
         /// Legacy files store each event as text. Events written as KeyValues3 text are parsed as they are.
         /// Events written as KeyValues1 operator stacks are mapped to the modern layout as the engine does: the
         /// <c>reference_stack</c> of <c>update_stack.reference_operator</c> becomes <c>type</c>, and the <c>value</c> of each of
-        /// its operator variables becomes a key of that name, a string or an array of strings when the value has sub-keys.
+        /// its operator variables becomes a key of that name, an array of the sub-values when the value has sub-keys.
         /// Everything else is dropped.
         /// </remarks>
         public IReadOnlyList<(string Name, KVObject Data)> Events => events ??= ReadEvents();
@@ -96,14 +94,10 @@ namespace ValveResourceFormat.ResourceTypes
                     continue;
                 }
 
-                soundEvent[name] = value.ValueType == KVValueType.Collection
-                    ? KVObject.Array(value.Values.Select(static item => (KVObject)ToText(item)))
-                    : ToText(value);
+                soundEvent[name] = value.ValueType == KVValueType.Collection ? KVObject.Array(value.Values) : value;
             }
 
             return soundEvent;
         }
-
-        private static string ToText(KVObject value) => value.ValueType == KVValueType.String ? (string)value : value.ToString(CultureInfo.InvariantCulture);
     }
 }
