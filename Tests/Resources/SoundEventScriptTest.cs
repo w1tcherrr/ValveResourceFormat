@@ -467,6 +467,23 @@ namespace Tests.Resources
             }
         }
 
+        [Test]
+        public async Task ShiftsFragmentValuesOnlyForFieldsThatTheParentAloneLeavesOut()
+        {
+            var index = new SoundEventIndex();
+            index.AddStack("soundstacks/test.vsndstck_c", "shared", Stack(("x", Field("float", "0")), ("inner", Field("public_opvar", "inner")), ("b", Field("float", "0"))));
+            index.AddStack("soundstacks/test.vsndstck_c", "inner", Stack(("x", Field("float", "0")), ("y", Field("float", "0"))));
+            index.AddStack("soundstacks/test.vsndstck_c", "shared_parent", Stack(("f", Field("public_opvar", "shared"))));
+            index.AddStack("soundstacks/test.vsndstck_c", "sub", Stack(("a", Field("float", "0")), ("x", Field("float", "0")), ("b", Field("float", "0"))));
+            index.AddStack("soundstacks/test.vsndstck_c", "own_parent", Stack(("x", Field("float", "0")), ("f", Field("public_opvar", "sub"))));
+
+            using (Assert.Multiple())
+            {
+                await Assert.That(index.GetShiftedBlockFields("shared_parent", "f")).IsEmpty();
+                await Assert.That(index.GetShiftedBlockFields("own_parent", "f")).IsEquivalentTo(["x"]);
+            }
+        }
+
         private static KVObject Field(string dataType, string value, params (string Key, KVObject Value)[] extra)
             => Event([("data_type", dataType), ("value", value), .. extra]);
 
