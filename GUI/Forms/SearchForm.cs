@@ -17,15 +17,13 @@ namespace GUI.Forms
         internal static readonly StringComparer NumericComparer =
             StringComparer.Create(CultureInfo.InvariantCulture, CompareOptions.IgnoreCase | CompareOptions.NumericOrdering);
 
-        private record FilterKeyEntry(string Key, SortedSet<string> Values)
+        /// <summary>A dropdown item for a key, shown with how many files have it.</summary>
+        private record CountedEntry(string Key, int Count, string? Label = null)
         {
-            public override string ToString() => Key;
+            public sealed override string ToString() => string.Create(CultureInfo.InvariantCulture, $"{Label ?? Key} ({Count})");
         }
 
-        private record ExtensionEntry(string Extension, int Count)
-        {
-            public override string ToString() => string.Create(CultureInfo.InvariantCulture, $"{(Extension == " " ? "No extension" : Extension)} ({Count})");
-        }
+        private sealed record FilterKeyEntry(string Key, int Count, Dictionary<string, int> Values) : CountedEntry(Key, Count);
 
         private const string AnyKey = "Any key";
         private const string AnyValue = "Any value";
@@ -34,6 +32,7 @@ namespace GUI.Forms
         private int filterLoadVersion;
         private int lastPopulatedKeysHash;
         private VirtualPackageNode? folder;
+        private Dictionary<string, List<PackageEntry>>? packageEntries;
         private FilterKeyEntry? valuesKey;
         private bool hasInputError;
 
@@ -41,7 +40,9 @@ namespace GUI.Forms
 
         private FilterKeyEntry? SelectedFilterKey => FindTypedItem(filterKeyComboBox) as FilterKeyEntry;
 
-        private string? SelectedFilterValue => filterValueComboBox.Enabled && filterValueComboBox.Text is { Length: > 0 } value && value != AnyValue ? value : null;
+        private string? SelectedFilterValue => filterValueComboBox.Enabled && filterValueComboBox.Text is { Length: > 0 } value && !value.Equals(AnyValue, StringComparison.OrdinalIgnoreCase)
+            ? (FindTypedItem(filterValueComboBox) as CountedEntry)?.Key ?? value
+            : null;
 
         /// <summary>
         /// Gets the search as entered in the dialog.
@@ -54,7 +55,7 @@ namespace GUI.Forms
             regexToggle.Checked,
             hexBytesToggle.Checked && SelectedTarget == SearchTarget.Contents,
             onlyInFolderCheckBox.Checked ? folder : null,
-            (extensionComboBox.SelectedItem as ExtensionEntry)?.Extension,
+            (extensionComboBox.SelectedItem as CountedEntry)?.Key,
             SelectedFilterKey?.Key,
             SelectedFilterKey != null ? SelectedFilterValue : null);
 
@@ -78,6 +79,8 @@ namespace GUI.Forms
                 UpdateFilterValues();
                 UpdateState();
             };
+            filterValueComboBox.TextChanged += (_, _) => UpdateState();
+            onlyInFolderCheckBox.CheckedChanged += (_, _) => UpdateExtensions();
 
             UpdateState();
         }
@@ -91,11 +94,12 @@ namespace GUI.Forms
             wholeWordToggle.Enabled = !request.HexBytes;
             regexToggle.Enabled = !request.HexBytes;
 
-            var unknownKey = filterKeyComboBox.Enabled && filterKeyComboBox.Text.Length > 0 && FindTypedItem(filterKeyComboBox) == null
-                ? $"There is no asset info key named \"{filterKeyComboBox.Text}\"."
-                : null;
-            var (hint, isError, canSearch) = unknownKey != null ? (unknownKey, true, false) : GetHint(request);
-            hasInputError = isError && unknownKey == null;
+            var (filterError, filterComboBox) = GetFilterError();
+            filterKeyComboBox.HasError = filterComboBox == filterKeyComboBox;
+            filterValueComboBox.HasError = filterComboBox == filterValueComboBox;
+
+            var (hint, isError, canSearch) = filterError != null ? (filterError, true, false) : GetHint(request);
+            hasInputError = isError && filterError == null;
             hintLabel.Text = hint;
             hintLabel.ForeColor = isError ? Themer.CurrentThemeColors.Attention : Themer.CurrentThemeColors.ContrastSoft;
             toolTip.SetToolTip(hintLabel, hint);
@@ -106,23 +110,51 @@ namespace GUI.Forms
             findButton.ForeColor = canSearch ? Color.Black : Themer.CurrentThemeColors.Contrast;
         }
 
+        private (string? Error, ThemedComboBox? ComboBox) GetFilterError()
+        {
+            if (!filterKeyComboBox.Enabled || filterKeyComboBox.Text.Length == 0)
+            {
+                return (null, null);
+            }
+
+            if (FindTypedItem(filterKeyComboBox) == null)
+            {
+                return ($"Asset info: no key named \"{filterKeyComboBox.Text}\"", filterKeyComboBox);
+            }
+
+            if (SelectedFilterKey is { } key && SelectedFilterValue is { } value
+                && FindTypedItem(filterValueComboBox) == null && key.Values.Count < TreeViewWithSearchResults.MaxSearchDataValues)
+            {
+                return ($"Asset info: no value \"{value}\" for {key.Key}", filterValueComboBox);
+            }
+
+            return (null, null);
+        }
+
         private static (string Hint, bool IsError, bool CanSearch) GetHint(SearchRequest request)
         {
             if (request.HexBytes)
             {
+                byte[] bytes;
+
                 try
                 {
-                    if (request.Text.Length > 0 && Convert.FromHexString(request.Text.Replace(" ", "", StringComparison.Ordinal)).Length < 3)
-                    {
-                        return ("Enter at least 3 bytes to search for.", false, false);
-                    }
+                    bytes = Convert.FromHexString(request.Text.Replace(" ", "", StringComparison.Ordinal));
                 }
                 catch (FormatException)
                 {
-                    return ("Enter pairs of hex digits, such as 56 42 4B 56.", true, false);
+                    return ("Enter pairs of hex digits, such as 56 42 4B 56", true, false);
                 }
 
-                return ("Bytes in the file contents, such as 56 42 4B 56", false, true);
+                if (request.Text.Length == 0)
+                {
+                    return ("Bytes in the file contents, such as 56 42 4B 56", false, true);
+                }
+
+                var text = string.Concat(bytes.Select(static b => b is >= 0x20 and < 0x7F ? (char)b : '.'));
+                var preview = string.Create(CultureInfo.InvariantCulture, $"{bytes.Length} bytes: \"{text}\"");
+
+                return bytes.Length < 3 ? ($"{preview}, enter at least 3 bytes", false, false) : (preview, false, true);
             }
 
             if (request.UseRegex && request.Text.Length > 0)
@@ -136,13 +168,20 @@ namespace GUI.Forms
                     var error = Regex.Replace(e.Error.ToString(), "(?<=[a-z])(?=[A-Z])", " ").ToLowerInvariant();
                     var offset = Math.Clamp(e.Offset - (request.WholeWord ? BetterTreeView.WholeWordPrefix.Length : 0), 0, request.Text.Length);
 
-                    return (string.Create(CultureInfo.InvariantCulture, $"{char.ToUpperInvariant(error[0])}{error[1..]} (at character {offset})"), true, false);
+                    var message = string.Create(CultureInfo.InvariantCulture, $"{char.ToUpperInvariant(error[0])}{error[1..]} (at character {offset})");
+
+                    if (request.Text[0] is '*' or '?')
+                    {
+                        message += ", use .* instead, or turn off regex";
+                    }
+
+                    return (message, true, false);
                 }
             }
 
             if (request.Target == SearchTarget.Contents && !request.UseRegex && request.Text.Length > 0 && Encoding.UTF8.GetByteCount(request.Text) < 3)
             {
-                return ("Enter at least 3 characters to search file contents.", false, false);
+                return ("Enter at least 3 characters to search file contents", false, false);
             }
 
             var hint = (request.Target, request.UseRegex) switch
@@ -155,14 +194,10 @@ namespace GUI.Forms
                 _ => "Part of the file name",
             };
 
-            if (request.Target != SearchTarget.Contents)
-            {
-                hint += ". Hex bytes (0x) are available when searching contents";
-            }
-
             return (hint, false, true);
         }
 
+        /// <summary>Finds the item whose text or key was typed into the box, ignoring case.</summary>
         private static object? FindTypedItem(ComboBox comboBox)
         {
             var text = comboBox.Text;
@@ -172,7 +207,8 @@ namespace GUI.Forms
                 return selected;
             }
 
-            return comboBox.Items.Cast<object>().FirstOrDefault(item => string.Equals(comboBox.GetItemText(item), text, StringComparison.OrdinalIgnoreCase));
+            return comboBox.Items.Cast<object>().FirstOrDefault(item => string.Equals(comboBox.GetItemText(item), text, StringComparison.OrdinalIgnoreCase)
+                || (item is CountedEntry entry && string.Equals(entry.Key, text, StringComparison.OrdinalIgnoreCase)));
         }
 
         private void FindTextBoxPanel_Paint(object? sender, PaintEventArgs e)
@@ -213,12 +249,28 @@ namespace GUI.Forms
         /// </summary>
         public void SetExtensions(Dictionary<string, List<PackageEntry>>? entries)
         {
-            var selected = (extensionComboBox.SelectedItem as ExtensionEntry)?.Extension;
+            packageEntries = entries;
+            UpdateExtensions();
+        }
+
+        /// <summary>
+        /// Lists the extensions with how many files have each, in the folder when "Only in" is ticked, otherwise in the package.
+        /// </summary>
+        private void UpdateExtensions()
+        {
+            var selected = (extensionComboBox.SelectedItem as CountedEntry)?.Key;
             var counts = new SortedDictionary<string, int>(NumericComparer);
 
-            foreach (var (extension, files) in entries ?? [])
+            if (onlyInFolderCheckBox.Checked && folder != null)
             {
-                counts[extension] = counts.GetValueOrDefault(extension) + files.Count;
+                CountExtensions(folder, counts);
+            }
+            else
+            {
+                foreach (var (extension, files) in packageEntries ?? [])
+                {
+                    counts[extension] = counts.GetValueOrDefault(extension) + files.Count;
+                }
             }
 
             extensionComboBox.BeginUpdate();
@@ -228,7 +280,12 @@ namespace GUI.Forms
 
             foreach (var (extension, count) in counts)
             {
-                var index = extensionComboBox.Items.Add(new ExtensionEntry(extension, count));
+                if (count == 0)
+                {
+                    continue;
+                }
+
+                var index = extensionComboBox.Items.Add(new CountedEntry(extension, count, extension == " " ? "No extension" : null));
 
                 if (selected != null && NumericComparer.Equals(extension, selected))
                 {
@@ -239,6 +296,19 @@ namespace GUI.Forms
             extensionComboBox.EndUpdate();
         }
 
+        private static void CountExtensions(VirtualPackageNode node, SortedDictionary<string, int> counts)
+        {
+            foreach (var file in node.Files)
+            {
+                counts[file.TypeName] = counts.GetValueOrDefault(file.TypeName) + 1;
+            }
+
+            foreach (var child in node.Folders.Values)
+            {
+                CountExtensions(child, counts);
+            }
+        }
+
         /// <summary>
         /// Sets the folder that "Only in" limits the search to, or <see langword="null"/> when no folder is selected.
         /// </summary>
@@ -247,45 +317,43 @@ namespace GUI.Forms
         public void SetFolder(VirtualPackageNode? searchFolder, bool onlyInFolder)
         {
             folder = searchFolder;
-            onlyInFolderCheckBox.Enabled = folder != null;
-            UpdateOnlyInFolderText();
+            onlyInFolderTable.Visible = folder != null;
+            noFolderLabel.Visible = folder == null;
+            folderPathLabel.Invalidate();
+            toolTip.SetToolTip(folderPathLabel, folder != null ? PackageViewer.GetFolderPath(folder) : null);
 
             if (onlyInFolder)
             {
                 onlyInFolderCheckBox.Checked = true;
             }
+
+            UpdateExtensions();
         }
 
-        private void OnlyInFolderCheckBox_SizeChanged(object? sender, EventArgs e) => UpdateOnlyInFolderText();
-
-        private void UpdateOnlyInFolderText()
+        private void FolderPathLabel_Paint(object? sender, PaintEventArgs e)
         {
-            const string Prefix = "Only in ";
-
             if (folder == null)
             {
-                onlyInFolderCheckBox.Text = "&Only in selected folder";
-                toolTip.SetToolTip(onlyInFolderCheckBox, null);
                 return;
             }
 
-            var path = PackageViewer.GetFolderPath(folder);
+            const TextFormatFlags Flags = TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix;
+            var bounds = folderPathLabel.ClientRectangle;
+            var path = ThemedComboBox.TrimStartToFit(e.Graphics, PackageViewer.GetFolderPath(folder), folderPathLabel.Font, bounds.Width, Flags);
 
-            using var graphics = onlyInFolderCheckBox.CreateGraphics();
-            var font = onlyInFolderCheckBox.Font;
-            var width = onlyInFolderCheckBox.ClientSize.Width - this.AdjustForDPI(24) - TextRenderer.MeasureText(graphics, Prefix, font).Width;
-            var trimmed = ThemedComboBox.TrimStartToFit(graphics, path, font, width, TextFormatFlags.Left);
-
-            onlyInFolderCheckBox.Text = string.Concat("&", Prefix, trimmed.Replace("&", "&&", StringComparison.Ordinal));
-            toolTip.SetToolTip(onlyInFolderCheckBox, path);
+            TextRenderer.DrawText(e.Graphics, path, folderPathLabel.Font, bounds, folderPathLabel.ForeColor, Flags);
         }
+
+        private void FolderPathLabel_Resize(object? sender, EventArgs e) => folderPathLabel.Invalidate();
+
+        private void FolderPathLabel_Click(object? sender, EventArgs e) => onlyInFolderCheckBox.Checked = !onlyInFolderCheckBox.Checked;
 
         /// <summary>
         /// Sets the available SearchableUserData filter keys from a task.
         /// If the task is already completed, populates immediately.
         /// Otherwise shows a loading state and populates when the task completes.
         /// </summary>
-        public void SetSearchableUserDataKeys(Task<Dictionary<string, SortedSet<string>>?> keysTask)
+        public void SetSearchableUserDataKeys(Task<Dictionary<string, (int Count, Dictionary<string, int> Values)>?> keysTask)
         {
             // Skip repopulating if the same data is already loaded (preserves user's filter selection)
             if (keysTask.IsCompletedSuccessfully
@@ -302,7 +370,7 @@ namespace GUI.Forms
                 return;
             }
 
-            SetFilterKeyItems(["Loading asset info…"], enabled: false);
+            SetFilterKeyItems(["Loading asset info\u2026"], enabled: false);
 
             keysTask.ContinueWith(t =>
             {
@@ -313,7 +381,7 @@ namespace GUI.Forms
             }, uiTaskScheduler);
         }
 
-        private void PopulateFilterKeys(Dictionary<string, SortedSet<string>>? keys)
+        private void PopulateFilterKeys(Dictionary<string, (int Count, Dictionary<string, int> Values)>? keys)
         {
             lastPopulatedKeysHash = keys?.GetHashCode() ?? 0;
 
@@ -323,7 +391,7 @@ namespace GUI.Forms
                 return;
             }
 
-            SetFilterKeyItems([AnyKey, .. keys.OrderBy(kv => kv.Key, NumericComparer).Select(kv => new FilterKeyEntry(kv.Key, kv.Value))], enabled: true);
+            SetFilterKeyItems([AnyKey, .. keys.OrderBy(kv => kv.Key, NumericComparer).Select(kv => new FilterKeyEntry(kv.Key, kv.Value.Count, kv.Value.Values))], enabled: true);
         }
 
         private void SetFilterKeyItems(object[] items, bool enabled)
@@ -334,6 +402,7 @@ namespace GUI.Forms
             filterKeyComboBox.SelectedIndex = 0;
             filterKeyComboBox.EndUpdate();
             SetComboBoxEnabled(filterKeyComboBox, enabled);
+            filterKeyLabel.ForeColor = enabled ? Themer.CurrentThemeColors.Contrast : Themer.CurrentThemeColors.ContrastSoft;
 
             UpdateFilterValues();
             UpdateState();
@@ -356,7 +425,7 @@ namespace GUI.Forms
 
             if (entry != null)
             {
-                filterValueComboBox.Items.AddRange([.. entry.Values]);
+                filterValueComboBox.Items.AddRange([.. entry.Values.OrderBy(static value => value.Key, NumericComparer).Select(static value => new CountedEntry(value.Key, value.Value))]);
             }
 
             filterValueComboBox.SelectedIndex = 0;
@@ -377,6 +446,8 @@ namespace GUI.Forms
             var colors = Themer.CurrentThemeColors;
             findTextBoxPanel.BackColor = colors.AppMiddle;
             findTextBox.BackColor = colors.AppMiddle;
+            noFolderLabel.ForeColor = colors.ContrastSoft;
+            filterKeyLabel.ForeColor = filterKeyComboBox.Enabled ? colors.Contrast : colors.ContrastSoft;
             findButton.HoveredBackColor = Color.FromArgb(140, 191, 255);
             findButton.ClickedBackColor = Color.FromArgb(70, 135, 235);
 

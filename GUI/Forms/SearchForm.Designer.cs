@@ -42,7 +42,10 @@ namespace GUI.Forms
             nameRadioButton = new System.Windows.Forms.RadioButton();
             pathRadioButton = new System.Windows.Forms.RadioButton();
             contentsRadioButton = new System.Windows.Forms.RadioButton();
+            onlyInFolderTable = new System.Windows.Forms.TableLayoutPanel();
             onlyInFolderCheckBox = new System.Windows.Forms.CheckBox();
+            folderPathLabel = new System.Windows.Forms.Label();
+            noFolderLabel = new System.Windows.Forms.Label();
             extensionLabel = new System.Windows.Forms.Label();
             extensionComboBox = new ThemedComboBox();
             filterKeyLabel = new System.Windows.Forms.Label();
@@ -118,7 +121,7 @@ namespace GUI.Forms
             hexBytesToggle.Size = new System.Drawing.Size(34, 26);
             hexBytesToggle.TabIndex = 4;
             hexBytesToggle.Text = "0x";
-            toolTip.SetToolTip(hexBytesToggle, "Search file contents for hex bytes, such as 56 42 4B 56 (Alt+X)");
+            toolTip.SetToolTip(hexBytesToggle, "Search file contents for hex bytes, such as 56 42 4B 56, available when searching contents (Alt+X)");
             //
             // hintLabel
             //
@@ -170,13 +173,51 @@ namespace GUI.Forms
             //
             // onlyInFolderCheckBox
             //
-            onlyInFolderCheckBox.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right;
-            onlyInFolderCheckBox.Location = new System.Drawing.Point(12, 103);
+            onlyInFolderCheckBox.Anchor = System.Windows.Forms.AnchorStyles.Left;
+            onlyInFolderCheckBox.AutoSize = true;
+            onlyInFolderCheckBox.Margin = new System.Windows.Forms.Padding(0);
             onlyInFolderCheckBox.Name = "onlyInFolderCheckBox";
-            onlyInFolderCheckBox.Size = new System.Drawing.Size(462, 24);
-            onlyInFolderCheckBox.TabIndex = 10;
-            onlyInFolderCheckBox.Text = "&Only in selected folder";
-            onlyInFolderCheckBox.SizeChanged += OnlyInFolderCheckBox_SizeChanged;
+            onlyInFolderCheckBox.TabIndex = 0;
+            onlyInFolderCheckBox.Text = "&Only in";
+            //
+            // folderPathLabel
+            //
+            folderPathLabel.Dock = System.Windows.Forms.DockStyle.Fill;
+            folderPathLabel.Margin = new System.Windows.Forms.Padding(0);
+            folderPathLabel.Name = "folderPathLabel";
+            folderPathLabel.TabIndex = 1;
+            folderPathLabel.UseMnemonic = false;
+            folderPathLabel.Click += FolderPathLabel_Click;
+            folderPathLabel.Paint += FolderPathLabel_Paint;
+            folderPathLabel.Resize += FolderPathLabel_Resize;
+            //
+            // onlyInFolderTable
+            //
+            onlyInFolderTable.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right;
+            onlyInFolderTable.ColumnCount = 2;
+            onlyInFolderTable.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle());
+            onlyInFolderTable.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Percent, 100F));
+            onlyInFolderTable.Controls.Add(onlyInFolderCheckBox, 0, 0);
+            onlyInFolderTable.Controls.Add(folderPathLabel, 1, 0);
+            onlyInFolderTable.Location = new System.Drawing.Point(12, 103);
+            onlyInFolderTable.Margin = new System.Windows.Forms.Padding(0);
+            onlyInFolderTable.Name = "onlyInFolderTable";
+            onlyInFolderTable.RowCount = 1;
+            onlyInFolderTable.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.Percent, 100F));
+            onlyInFolderTable.Size = new System.Drawing.Size(462, 24);
+            onlyInFolderTable.TabIndex = 10;
+            //
+            // noFolderLabel
+            //
+            noFolderLabel.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right;
+            noFolderLabel.AutoEllipsis = true;
+            noFolderLabel.Location = new System.Drawing.Point(12, 106);
+            noFolderLabel.Name = "noFolderLabel";
+            noFolderLabel.Size = new System.Drawing.Size(462, 19);
+            noFolderLabel.TabIndex = 10;
+            noFolderLabel.Text = "Select a folder in the tree to limit the search to it";
+            noFolderLabel.UseMnemonic = false;
+            noFolderLabel.Visible = false;
             //
             // extensionLabel
             //
@@ -285,7 +326,8 @@ namespace GUI.Forms
             Controls.Add(nameRadioButton);
             Controls.Add(pathRadioButton);
             Controls.Add(contentsRadioButton);
-            Controls.Add(onlyInFolderCheckBox);
+            Controls.Add(onlyInFolderTable);
+            Controls.Add(noFolderLabel);
             Controls.Add(extensionLabel);
             Controls.Add(extensionComboBox);
             Controls.Add(filterKeyLabel);
@@ -320,7 +362,10 @@ namespace GUI.Forms
         private System.Windows.Forms.RadioButton nameRadioButton;
         private System.Windows.Forms.RadioButton pathRadioButton;
         private System.Windows.Forms.RadioButton contentsRadioButton;
+        private System.Windows.Forms.TableLayoutPanel onlyInFolderTable;
         private System.Windows.Forms.CheckBox onlyInFolderCheckBox;
+        private System.Windows.Forms.Label folderPathLabel;
+        private System.Windows.Forms.Label noFolderLabel;
         private System.Windows.Forms.Label extensionLabel;
         private ThemedComboBox extensionComboBox;
         private System.Windows.Forms.Label filterKeyLabel;

@@ -66,7 +66,7 @@ namespace GUI.Utils
             AppSoft = Color.FromArgb(44, 49, 61),
 
             Border = Color.FromArgb(51, 57, 74),
-            ControlBorder = Color.FromArgb(83, 92, 119),
+            ControlBorder = Color.FromArgb(100, 100, 100),
 
             Contrast = Color.White,
             ContrastSoft = Color.FromArgb(158, 159, 164),
@@ -88,7 +88,7 @@ namespace GUI.Utils
             AppSoft = Color.FromArgb(251, 251, 251),
 
             Border = Color.FromArgb(188, 188, 188),
-            ControlBorder = Color.FromArgb(124, 124, 124),
+            ControlBorder = Color.FromArgb(100, 100, 100),
 
             Contrast = Color.Black,
             ContrastSoft = Color.FromArgb(80, 80, 80),

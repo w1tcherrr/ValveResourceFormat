@@ -25,6 +25,20 @@ public class ThemedComboBox : ComboBox
     /// </summary>
     public bool TrimStart { get; set; }
 
+    /// <summary>Gets or sets whether the box is outlined in the attention colour for a value that can not be used.</summary>
+    public bool HasError
+    {
+        get;
+        set
+        {
+            if (field != value)
+            {
+                field = value;
+                Invalidate();
+            }
+        }
+    }
+
     public ThemedComboBox() : base()
     {
         DrawMode = DrawMode.OwnerDrawFixed;
@@ -41,9 +55,19 @@ public class ThemedComboBox : ComboBox
         DropDownForeColor = Themer.CurrentThemeColors.Contrast;
         HighlightColor = Themer.CurrentThemeColors.Accent;
         HeaderColor = Themer.CurrentThemeColors.Border;
-        BackColor = Parent?.BackColor ?? Themer.CurrentThemeColors.AppMiddle;
         ForeColor = Themer.CurrentThemeColors.Contrast;
+        UpdateBackColor();
     }
+
+    protected override void OnDropDownStyleChanged(EventArgs e)
+    {
+        base.OnDropDownStyleChanged(e);
+        UpdateBackColor();
+    }
+
+    /// <summary>Gives a box that can be typed in the background of a text box, and a list the background behind it.</summary>
+    private void UpdateBackColor()
+        => BackColor = DropDownStyle == ComboBoxStyle.DropDown ? Themer.CurrentThemeColors.AppMiddle : Parent?.BackColor ?? Themer.CurrentThemeColors.AppMiddle;
 
     protected override void WndProc(ref Message m)
     {
@@ -57,10 +81,26 @@ public class ThemedComboBox : ComboBox
         }
 
         using var graphics = Graphics.FromHwnd(Handle);
-        using var borderPen = new Pen(Themer.CurrentThemeColors.ControlBorder);
+        using var borderPen = new Pen(HasError ? Themer.CurrentThemeColors.Attention : Themer.CurrentThemeColors.ControlBorder);
         using var innerPen = new Pen(BackColor);
         graphics.DrawRectangle(borderPen, 0, 0, Width - 1, Height - 1);
         graphics.DrawRectangle(innerPen, 1, 1, Width - 3, Height - 3);
+    }
+
+    protected override void OnResize(EventArgs e)
+    {
+        base.OnResize(e);
+
+        if (DropDownStyle == ComboBoxStyle.DropDown && IsHandleCreated)
+        {
+            BeginInvoke(() =>
+            {
+                if (!Focused)
+                {
+                    SelectionLength = 0;
+                }
+            });
+        }
     }
 
     protected override void OnDrawItem(DrawItemEventArgs e)
@@ -72,9 +112,8 @@ public class ThemedComboBox : ComboBox
 
         e.DrawBackground();
 
-        var backColor = (e.State & DrawItemState.Selected) == DrawItemState.Selected
-           ? HighlightColor
-           : DropDownBackColor;
+        var isHighlighted = (e.State & DrawItemState.Selected) == DrawItemState.Selected && (e.State & DrawItemState.ComboBoxEdit) == 0;
+        var backColor = isHighlighted ? HighlightColor : DropDownBackColor;
 
         var text = string.Empty;
 
@@ -94,7 +133,7 @@ public class ThemedComboBox : ComboBox
             }
         }
 
-        var foreColor = DropDownForeColor;
+        var foreColor = !Enabled ? Themer.CurrentThemeColors.ContrastSoft : isHighlighted ? Color.Black : DropDownForeColor;
 
         using (var brush = new SolidBrush(backColor))
         {

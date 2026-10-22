@@ -84,7 +84,13 @@ namespace GUI.Types.PackageViewer
         public CancellationTokenSource? PreviewTokenSource { get; private set; }
 
         private Dictionary<string, Dictionary<string, string>>? AssetSearchData;
-        private Dictionary<string, SortedSet<string>>? SearchDataKeys;
+        private string? searchStatus;
+        private Dictionary<string, (int Count, Dictionary<string, int> Values)>? SearchDataKeys;
+
+        /// <summary>
+        /// The most values of one searchable user data key that are listed, a key with more lists only the first ones found.
+        /// </summary>
+        internal const int MaxSearchDataValues = 100;
         private bool SearchDataBuilt;
 
         public event EventHandler<PackageEntry>? OpenPackageEntry;
@@ -263,7 +269,8 @@ namespace GUI.Types.PackageViewer
             mainSplitContainer.BackColor = Themer.CurrentThemeColors.AppMiddle;
             tableLayoutPanel2.BackColor = Themer.CurrentThemeColors.AppSoft;
             gridSizeSlider.BackColor = Themer.CurrentThemeColors.AppSoft;
-            searchStatusLabel.ForeColor = Themer.CurrentThemeColors.ContrastSoft;
+            searchStatusLabel.Paint += SearchStatusLabel_Paint;
+            searchStatusLabel.Resize += (_, _) => searchStatusLabel.Invalidate();
 
             Themer.ThemeControl(gridRadioButton);
             Themer.ThemeControl(listRadioButton);
@@ -1449,23 +1456,29 @@ namespace GUI.Types.PackageViewer
             DisplayMainListView();
             MainListView_DisplayNodes(node, updatePath: false);
             UpdateSearchTextBoxToCurrentPath(request.Folder ?? node);
-            ShowSearchResultsState(DescribeSearch(request, results.Count));
+
+            var isFiltered = request is not { Folder: null, Extension: null, FilterKey: null };
+            ShowSearchResultsState(DescribeSearch(request, results.Count), isFiltered ? "No matching files. Clear a filter or search the whole package." : "No matching files");
         }
 
         /// <summary>
         /// Shows the description of the search whose results are listed, with a Folder column, or hides them for <see langword="null"/>.
         /// </summary>
-        private void ShowSearchResultsState(string? description)
+        /// <param name="description">What the search found.</param>
+        /// <param name="emptyText">What the list shows when nothing was found.</param>
+        private void ShowSearchResultsState(string? description, string? emptyText = null)
         {
             const int FolderColumn = 3;
 
-            searchStatusLabel.Text = description;
-            mainListView.EmptyText = description;
+            searchStatus = description;
+            searchStatusLabel.Invalidate();
+            searchStatusLabel.AccessibleName = description;
+            mainListView.EmptyText = emptyText;
             mainListView.SharedFlexibleColumn = description != null ? FolderColumn : -1;
 
             if (description != null && mainListView.Columns.Count == FolderColumn)
             {
-                mainListView.Columns.Add("Folder");
+                mainListView.Columns.Add("Folder").DisplayIndex = 1;
             }
             else if (description == null && mainListView.Columns.Count > FolderColumn)
             {
@@ -1478,6 +1491,12 @@ namespace GUI.Types.PackageViewer
             }
 
             mainListView.AdjustColumnWidths();
+        }
+
+        private void SearchStatusLabel_Paint(object? sender, PaintEventArgs e)
+        {
+            TextRenderer.DrawText(e.Graphics, searchStatus, searchStatusLabel.Font, searchStatusLabel.ClientRectangle, Themer.CurrentThemeColors.ContrastSoft,
+                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
         }
 
         private static string DescribeSearch(SearchRequest request, int count)
@@ -1494,9 +1513,12 @@ namespace GUI.Types.PackageViewer
                 description.Append(request switch
                 {
                     { HexBytes: true } => $" containing the bytes {request.Text}",
+                    { Target: SearchTarget.Contents, UseRegex: true } => $" with contents matching {request.Text}",
                     { Target: SearchTarget.Contents } => $" containing \"{request.Text}\"",
+                    { Target: SearchTarget.Path, UseRegex: true } => $" with a path matching {request.Text}",
                     { Target: SearchTarget.Path } => $" with \"{request.Text}\" in the path",
-                    _ => $" named \"{request.Text}\"",
+                    { UseRegex: true } => $" with a name matching {request.Text}",
+                    _ => $" with \"{request.Text}\" in the name",
                 });
             }
 
@@ -2085,7 +2107,7 @@ namespace GUI.Types.PackageViewer
         /// Returns a task that resolves to the <see cref="ValveResourceFormat.ToolsAssetInfo.ToolsAssetInfo.File.SearchableUserData"/> filter keys.
         /// If already cached, returns a completed task. Otherwise loads on a background thread.
         /// </summary>
-        internal Task<Dictionary<string, SortedSet<string>>?> GetSearchDataKeysAsync()
+        internal Task<Dictionary<string, (int Count, Dictionary<string, int> Values)>?> GetSearchDataKeysAsync()
         {
             if (SearchDataBuilt)
             {
@@ -2097,9 +2119,10 @@ namespace GUI.Types.PackageViewer
 
         /// <summary>
         /// Lazily loads the tools asset info and builds the <see cref="ValveResourceFormat.ToolsAssetInfo.ToolsAssetInfo.File.SearchableUserData"/> index.
-        /// Returns the collected filter keys and their unique values, or null if no data.
+        /// Returns the filter keys of the files in the package with how many files have each, and their values with how many files have each, or null if no data.
+        /// The tools asset info sits next to the package and covers the whole game, so files that are not in this package are left out.
         /// </summary>
-        internal Dictionary<string, SortedSet<string>>? GetSearchDataKeys()
+        internal Dictionary<string, (int Count, Dictionary<string, int> Values)>? GetSearchDataKeys()
         {
             if (SearchDataBuilt)
             {
@@ -2109,7 +2132,7 @@ namespace GUI.Types.PackageViewer
             SearchDataBuilt = true;
 
             var vrfGuiContext = mainTreeView?.VrfGuiContext;
-            if (vrfGuiContext == null)
+            if (vrfGuiContext?.CurrentPackage is not { } package)
             {
                 return null;
             }
@@ -2121,11 +2144,12 @@ namespace GUI.Types.PackageViewer
             }
 
             var assetSearchData = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
-            var searchDataKeys = new Dictionary<string, SortedSet<string>>(StringComparer.OrdinalIgnoreCase);
+            var searchDataKeys = new Dictionary<string, (int Count, Dictionary<string, int> Values)>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var (filePath, file) in toolsAssetInfo.Files)
             {
-                if (file.SearchableUserData.Count == 0)
+                if (file.SearchableUserData.Count == 0
+                    || (package.FindEntry(filePath) == null && package.FindEntry(string.Concat(filePath, GameFileLoader.CompiledFileSuffix)) == null))
                 {
                     continue;
                 }
@@ -2137,16 +2161,14 @@ namespace GUI.Types.PackageViewer
                     var stringValue = Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty;
                     converted[key] = stringValue;
 
-                    if (!searchDataKeys.TryGetValue(key, out var values))
+                    var (count, values) = searchDataKeys.GetValueOrDefault(key, (0, []));
+
+                    if (values.Count < MaxSearchDataValues || values.ContainsKey(stringValue))
                     {
-                        values = new SortedSet<string>(SearchForm.NumericComparer);
-                        searchDataKeys[key] = values;
+                        values[stringValue] = values.GetValueOrDefault(stringValue) + 1;
                     }
 
-                    if (values.Count < 100)
-                    {
-                        values.Add(stringValue);
-                    }
+                    searchDataKeys[key] = (count + 1, values);
                 }
 
                 assetSearchData[filePath] = converted;

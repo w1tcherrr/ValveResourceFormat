@@ -58,8 +58,8 @@ Press <kbd>Ctrl</kbd>+<kbd>F</kbd> to open the search dialog, or right-click a f
 - The buttons next to the text box toggle **Match case** (<kbd>Alt</kbd>+<kbd>C</kbd>), **Match whole word** (<kbd>Alt</kbd>+<kbd>W</kbd>) and **Use regular expression** (<kbd>Alt</kbd>+<kbd>R</kbd>). They apply to contents too, which are read as UTF-8 text. With a regular expression, `^name$` matches a whole name exactly.
 - **0x** (<kbd>Alt</kbd>+<kbd>X</kbd>) searches the contents for hex bytes such as `56 42 4B 56` instead of text.
 - **Only in** limits the search to the folder selected in the tree and its subfolders.
-- **Extension** limits the search to one file type, listing how many files of each type the package has, ignoring case.
-- **Asset info** limits the search to files with a given searchable user data key, and optionally a value, from the package's tools asset info. Both boxes accept typing and complete from the list.
+- **Extension** limits the search to one file type, listing how many files of each type the package, or the **Only in** folder, has, ignoring case.
+- **Asset info** limits the search to files with a given searchable user data key, and optionally a value, from the package's tools asset info. Only keys and values of files in the package are listed, with how many files have each. Both boxes accept typing and complete from the list.
 - Input that can not be searched, such as an invalid regular expression or odd hex digits, is shown in red with the reason below the text box, and **Find** stays disabled until it is fixed.
 
 The text can be left empty to list every file that the filters allow. Results are shown in a list with file name, size, type and folder columns, and the toolbar above them says how many files matched what. The dialog keeps its options until Source 2 Viewer is closed.
