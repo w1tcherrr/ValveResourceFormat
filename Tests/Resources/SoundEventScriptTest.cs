@@ -440,6 +440,33 @@ namespace Tests.Resources
             }
         }
 
+        [Test]
+        public async Task KeepsABasesOwnKeysBeforeItsFieldBasesWhenNested()
+        {
+            var index = new SoundEventIndex();
+            index.AddStack("soundstacks/test.vsndstck_c", "recursive", Stack(("import", Field("public_opvar", "imported"))));
+            index.AddStack("soundstacks/test.vsndstck_c", "imported", Stack(("parent", Field("public_opvar", "parent")), ("value4", Field("float", "0"))));
+            index.AddStack("soundstacks/test.vsndstck_c", "parent", Stack(("value3", Field("float", "0")), ("value4", Field("float", "0"))));
+            index.AddEvents("soundevents/test.vsndevts_c",
+            [
+                ("Parent", Event(("type", "parent"), ("value3", -3f), ("value4", -4f))),
+                ("Imported", Event(("type", "imported"), ("value4", 7f), ("base", KVObject.Array([Fragment("Parent", "parent")])))),
+                ("Recursive", Event(("type", "recursive"), ("base", KVObject.Array([Fragment("Imported", "import")])))),
+            ]);
+
+            var fields = index.GetStackFields("recursive");
+            var value4 = index.Resolve(index.Find("Recursive")!).Keys.Where(static r => r.Key == "value4").ToList();
+
+            using (Assert.Multiple())
+            {
+                await Assert.That(fields.Count(static f => f.Name == "value4")).IsEqualTo(1);
+                await Assert.That(fields.Single(static f => f.Name == "value4").Blocks).IsEquivalentTo(["import"]);
+                await Assert.That(fields.Single(static f => f.Name == "value3").Blocks).IsEquivalentTo(["import", "parent"], TUnit.Assertions.Enums.CollectionOrdering.Matching);
+                await Assert.That(value4.Select(static r => (r.Value.ToSingle(CultureInfo.InvariantCulture), r.Source, r.Field)))
+                    .IsEquivalentTo([(7f, "Imported", "import"), (-4f, "Parent", "parent")], TUnit.Assertions.Enums.CollectionOrdering.Matching);
+            }
+        }
+
         private static KVObject Field(string dataType, string value, params (string Key, KVObject Value)[] extra)
             => Event([("data_type", dataType), ("value", value), .. extra]);
 
