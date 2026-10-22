@@ -263,7 +263,8 @@ namespace ValveResourceFormat.ResourceTypes
 
         /// <summary>
         /// Lists sound event files in the order the engine loads them: the files of the sound event manifest, including
-        /// the manifests it lists, then <see cref="AddonEventsFile"/>, then <paramref name="otherFiles"/> that are not listed yet.
+        /// the manifests it lists, then <see cref="AddonEventsFile"/>, then <paramref name="otherFiles"/> that are not listed yet,
+        /// sorted by path, as the engine's order for those is not known.
         /// </summary>
         /// <param name="loadFile">Loads a manifest by its compiled path, or returns null when it is not found.</param>
         /// <param name="otherFiles">Further files to load last, such as every sound event file the loader can find.</param>
@@ -277,7 +278,7 @@ namespace ValveResourceFormat.ResourceTypes
             CollectManifest("soundevents/soundevents_manifest.vrman");
             Add(AddonEventsFile);
 
-            foreach (var file in otherFiles)
+            foreach (var file in otherFiles.Order(StringComparer.OrdinalIgnoreCase))
             {
                 Add(file);
             }

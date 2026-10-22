@@ -380,13 +380,14 @@ namespace Tests.Resources
         }
 
         [Test]
-        public async Task LoadsManifestFilesFirstThenTheAddonFileThenTheRest()
+        public async Task LoadsManifestFilesFirstThenTheAddonFileThenTheRestByPath()
         {
             static Resource? NoManifest(string file) => null;
 
-            var order = SoundEventIndex.GetEventFilesInLoadOrder(NoManifest, ["soundevents/b.vsndevts", SoundEventIndex.AddonEventsFile, "soundevents/a.vsndevts"]);
+            var order = SoundEventIndex.GetEventFilesInLoadOrder(NoManifest, ["soundevents/b.vsndevts", SoundEventIndex.AddonEventsFile, "soundevents/C.vsndevts", "soundevents/a.vsndevts"]);
 
-            await Assert.That(order).IsEquivalentTo([SoundEventIndex.AddonEventsFile, "soundevents/b.vsndevts", "soundevents/a.vsndevts"], TUnit.Assertions.Enums.CollectionOrdering.Matching);
+            await Assert.That(order).IsEquivalentTo([SoundEventIndex.AddonEventsFile, "soundevents/a.vsndevts", "soundevents/b.vsndevts", "soundevents/C.vsndevts"],
+                TUnit.Assertions.Enums.CollectionOrdering.Matching);
         }
 
         [Test]
