@@ -48,7 +48,7 @@ internal sealed partial class McpTools
         {
             await OnUi(() =>
             {
-                var target = (HWND)FocusedControl(FindWindow(window))!.Handle;
+                HWND target = (HWND)FocusedControl(FindWindow(window))!.Handle;
 
                 foreach (var character in text)
                 {
@@ -175,7 +175,7 @@ internal sealed partial class McpTools
     /// </summary>
     private static byte[] PressKey(Form form, Keys key)
     {
-        var target = (HWND)FocusedControl(form)!.Handle;
+        HWND target = (HWND)FocusedControl(form)!.Handle;
         var state = new byte[256];
         PInvoke.GetKeyboardState(state);
         var saved = state.ToArray();
@@ -185,7 +185,7 @@ internal sealed partial class McpTools
         state[(int)Keys.Menu] = (key & Keys.Alt) != 0 ? (byte)0x80 : (byte)0;
         PInvoke.SetKeyboardState(state);
 
-        var code = (uint)(key & Keys.KeyCode);
+        uint code = (uint)(key & Keys.KeyCode);
         var alt = (key & Keys.Alt) != 0;
         var down = 1u | (PInvoke.MapVirtualKey(code, MAP_VIRTUAL_KEY_TYPE.MAPVK_VK_TO_VSC) << 16) | (alt ? 1u << 29 : 0u);
         var up = down | (3u << 30);

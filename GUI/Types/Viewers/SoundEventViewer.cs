@@ -72,6 +72,7 @@ namespace GUI.Types.Viewers
         private SoundEventIndex? index;
         private List<ValveResourceFormat.ClosedCaptions.ClosedCaptions> captions = [];
         private List<EventRow> rows = [];
+        private List<EventRow> scopedRows = [];
         private List<EventRow> filteredRows = [];
         private bool? soundsChecked;
         private EventRow? current;
@@ -160,6 +161,8 @@ namespace GUI.Types.Viewers
             typeBox = CreateFilterBox("Type", ["All types"]);
             statusBox = CreateFilterBox("Status", ["All events", "Duplicate names", "Rejected or skipped bases", "Missing base events", "Missing sounds", "Not playable here"]);
             scopeBox.SelectedIndexChanged += (_, _) => OnScopeChanged();
+            typeBox.SelectedIndexChanged += (_, _) => ApplyFilter();
+            statusBox.SelectedIndexChanged += (_, _) => ApplyFilter();
 
             var filters = new TableLayoutPanel
             {
@@ -400,6 +403,13 @@ namespace GUI.Types.Viewers
             detailsSplit.Panel2.Controls.Add(linkTabs);
 
             var rightPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(8, 4, 4, 4) };
+            rightPanel.SizeChanged += (_, _) =>
+            {
+                foreach (var label in new Label[] { noticeLabel, captionLabel })
+                {
+                    label.MaximumSize = new Size(Math.Max(100, rightPanel.ClientSize.Width - rightPanel.Padding.Horizontal), 0);
+                }
+            };
             rightPanel.Controls.Add(detailsSplit);
             rightPanel.Controls.Add(captionLabel);
             rightPanel.Controls.Add(noticeLabel);
@@ -650,6 +660,7 @@ namespace GUI.Types.Viewers
                 Dock = DockStyle.Bottom,
                 LinkColumn = 0,
                 EmptyText = "Finding events that use this sound...",
+                Loading = true,
             };
             grid.Height = grid.AdjustForDPI(150);
             grid.Columns.Add(CreateColumn("Used by event", 55));
@@ -688,6 +699,11 @@ namespace GUI.Types.Viewers
                 catch (Exception e)
                 {
                     Log.Error(nameof(SoundEventViewer), $"Failed to index sound events for \"{context.DisplayPath}\": {e}");
+                    grid.EmptyText = "Failed to find the events that use this sound";
+                }
+                finally
+                {
+                    grid.Loading = false;
                 }
             }
 
@@ -816,8 +832,10 @@ namespace GUI.Types.Viewers
 
         private void OnScopeChanged()
         {
+            UpdateScopedRows();
+
             var selectedType = typeFilters[Math.Max(0, typeBox.SelectedIndex)];
-            var types = ScopedRows().GroupBy(static r => r.Type, StringComparer.OrdinalIgnoreCase)
+            var types = scopedRows.GroupBy(static r => r.Type, StringComparer.OrdinalIgnoreCase)
                 .OrderBy(static g => g.Key, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
@@ -838,7 +856,7 @@ namespace GUI.Types.Viewers
             typeBox.EndUpdate();
             updating = false;
 
-            eventGrid.Columns[3].Visible = ScopedRows().Any(static r => r.Duration >= 0f);
+            eventGrid.Columns[3].Visible = scopedRows.Any(static r => r.Duration >= 0f);
             eventGrid.Columns[4].Visible = scopeBox.SelectedIndex == 1;
             ApplyFilter();
         }
@@ -852,9 +870,6 @@ namespace GUI.Types.Viewers
             updating = false;
             ApplyFilter();
         }
-
-        private IEnumerable<EventRow> ScopedRows()
-            => scopeBox.SelectedIndex == 1 ? rows : rows.Where(r => r.File.Equals(fileName, StringComparison.OrdinalIgnoreCase));
 
         private void ApplyFilter()
         {
@@ -878,7 +893,7 @@ namespace GUI.Types.Viewers
             var search = searchBox.Text.Trim();
             var type = typeFilters[Math.Max(0, typeBox.SelectedIndex)];
 
-            filteredRows = [.. ScopedRows().Where(row =>
+            filteredRows = [.. scopedRows.Where(row =>
                 (search.Length == 0 || row.Name.Contains(search, StringComparison.OrdinalIgnoreCase) || row.Type.Contains(search, StringComparison.OrdinalIgnoreCase))
                 && (type == null || row.Type.Equals(type, StringComparison.OrdinalIgnoreCase))
                 && status switch
@@ -891,9 +906,7 @@ namespace GUI.Types.Viewers
                     _ => true,
                 })];
 
-            SortRows();
-
-            var total = ScopedRows().Count();
+            var total = scopedRows.Count;
             countLabel.Text = filteredRows.Count == total
                 ? string.Create(CultureInfo.InvariantCulture, $"{total:N0} events")
                 : string.Create(CultureInfo.InvariantCulture, $"{filteredRows.Count:N0} of {total:N0} events");
@@ -902,8 +915,11 @@ namespace GUI.Types.Viewers
             RefreshEventGrid();
         }
 
-        private void SortRows()
+        /// <summary>Lists the events of the scope in the order of the sorted column, which filtering keeps.</summary>
+        private void UpdateScopedRows()
         {
+            scopedRows = scopeBox.SelectedIndex == 1 ? [.. rows] : [.. rows.Where(r => r.File.Equals(fileName, StringComparison.OrdinalIgnoreCase))];
+
             Comparison<EventRow> comparison = sortColumn switch
             {
                 0 => static (a, b) => b.HasWarning.CompareTo(a.HasWarning),
@@ -913,7 +929,7 @@ namespace GUI.Types.Viewers
                 _ => static (a, b) => StringComparer.OrdinalIgnoreCase.Compare(a.Name, b.Name),
             };
 
-            filteredRows.Sort((a, b) =>
+            scopedRows.Sort((a, b) =>
             {
                 var result = comparison(a, b);
 
@@ -934,7 +950,13 @@ namespace GUI.Types.Viewers
         private void RefreshEventGrid()
         {
             updating = true;
-            eventGrid.RowCount = 0;
+
+            // Lowering the row count removes rows one at a time, clearing them first is much faster
+            if (filteredRows.Count < eventGrid.RowCount)
+            {
+                eventGrid.Rows.Clear();
+            }
+
             eventGrid.RowCount = filteredRows.Count;
             updating = false;
 
@@ -953,7 +975,7 @@ namespace GUI.Types.Viewers
 
             e.Value = e.ColumnIndex switch
             {
-                0 => row.HasWarning ? "⚠" : string.Empty,
+                0 => row.HasWarning ? "\u26A0" : string.Empty,
                 1 => row.Name,
                 2 => row.Type.Length > 0 ? row.Type : "(no type)",
                 3 => row.Duration >= 0f ? row.Duration.ToString("0.00 s", CultureInfo.InvariantCulture) : string.Empty,
@@ -1018,8 +1040,8 @@ namespace GUI.Types.Viewers
         {
             sortDescending = sortColumn == e.ColumnIndex && !sortDescending;
             sortColumn = e.ColumnIndex;
-            SortRows();
-            RefreshEventGrid();
+            UpdateScopedRows();
+            ApplyFilter();
         }
 
         /// <summary>Completes once the events are indexed and listed.</summary>
@@ -1032,9 +1054,8 @@ namespace GUI.Types.Viewers
         /// <returns>Whether the event is known.</returns>
         public bool ShowEvent(string name, string? file = null)
         {
-            var row = file != null
-                ? rows.Find(r => r.Name.Equals(name, StringComparison.OrdinalIgnoreCase) && r.File.Equals(file, StringComparison.OrdinalIgnoreCase))
-                : rows.FindLast(r => r.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+            file ??= index?.Find(name) != null ? index.GetDefinitions(name)[^1].File : null;
+            var row = rows.Find(r => r.Name.Equals(name, StringComparison.OrdinalIgnoreCase) && r.File.Equals(file, StringComparison.OrdinalIgnoreCase));
 
             if (row == null)
             {
@@ -1049,9 +1070,6 @@ namespace GUI.Types.Viewers
 
             return true;
         }
-
-        /// <summary>Selects one of the tabs below the properties: 0 for sounds, 1 for references and 2 for the events that use this one.</summary>
-        public void ShowLinksTab(int tabIndex) => linkTabs.SelectedIndex = tabIndex;
 
         private void SelectCurrentInList()
         {
@@ -1175,7 +1193,7 @@ namespace GUI.Types.Viewers
 
             var closedCaption = captions.Select(c => c[row.Name.ToLowerInvariant()]).FirstOrDefault(static c => c != null);
             captionText = new[] { closedCaption?.Text, GetString(resolved, "line_text") }
-                .Select(static text => CaptionMarkupRegex().Replace(text ?? string.Empty, string.Empty).Trim())
+                .Select(static text => StripCaptionMarkup(text ?? string.Empty))
                 .FirstOrDefault(static text => text.Length > 0) ?? string.Empty;
             captionLabel.Text = captionText;
             captionLabel.Visible = captionText.Length > 0;
@@ -1315,40 +1333,33 @@ namespace GUI.Types.Viewers
             var shown = new HashSet<int>();
             var fieldKeys = new Dictionary<int, int>();
             var captionLine = resolved.FindIndex(r => r.Key.Equals("line_text", StringComparison.OrdinalIgnoreCase) && r.Field == null
-                && r.Value.ValueType == KVValueType.String && CaptionMarkupRegex().Replace((string)r.Value, string.Empty).Trim() == captionText);
+                && r.Value.ValueType == KVValueType.String && StripCaptionMarkup((string)r.Value) == captionText);
 
-            if (captionLine >= 0)
-            {
-                shown.Add(captionLine);
-            }
-
-            // Keys come in the order they win. Each sets the field of that name in its block, or else the stack's own field
-            // of that name, or else the first field of that name
+            // Keys come in the order they win, so the first key to reach a field sets it
             for (var i = 0; i < resolved.Count; i++)
             {
                 var (key, _, _, block) = resolved[i];
 
-                if (shown.Contains(i))
+                if (FindTargetField(key, block) is var target and >= 0 && fieldKeys.TryAdd(target, i))
                 {
-                    continue;
+                    shown.Add(i);
                 }
+            }
 
+            // A key of a block sets the field of that name in the block, or else, as the event's own keys do, the stack's
+            // own field of that name, or else the first field of that name
+            int FindTargetField(string key, string? block)
+            {
                 var target = block == null ? -1 : FindField(f => f.Block != null
                     && (f.Block.Equals(block, StringComparison.OrdinalIgnoreCase) || f.Block.EndsWith($".{block}", StringComparison.OrdinalIgnoreCase))
                     && (f.Name.Equals(key, StringComparison.OrdinalIgnoreCase) || f.Name.EndsWith($".{key}", StringComparison.OrdinalIgnoreCase)));
 
                 if (target < 0)
                 {
-                    target = FindField(f => f.Block == null && f.Name.Equals(key, StringComparison.OrdinalIgnoreCase)) is var own and >= 0
-                        ? own
-                        : FindField(f => f.Name.Equals(key, StringComparison.OrdinalIgnoreCase));
+                    target = FindField(f => f.Block == null && f.Name.Equals(key, StringComparison.OrdinalIgnoreCase));
                 }
 
-                if (target >= 0)
-                {
-                    shown.Add(i);
-                    fieldKeys.TryAdd(target, i);
-                }
+                return target >= 0 ? target : FindField(f => f.Name.Equals(key, StringComparison.OrdinalIgnoreCase));
             }
 
             int FindField(Func<(string Name, KVObject Field, string Stack, string? Block), bool> match)
@@ -1393,7 +1404,10 @@ namespace GUI.Types.Viewers
 
                 if (fieldKeys.TryGetValue(f, out var i))
                 {
-                    group.Add(Row(i, name, curve));
+                    if (i != captionLine)
+                    {
+                        group.Add(Row(i, name, curve));
+                    }
                 }
                 else if (defaultsBox.Checked && dataType != "public_opvar")
                 {
@@ -1406,7 +1420,7 @@ namespace GUI.Types.Viewers
             {
                 var key = resolved[i].Key;
 
-                if (shown.Contains(i) || key.Equals("type", StringComparison.OrdinalIgnoreCase))
+                if (shown.Contains(i) || i == captionLine || key.Equals("type", StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
                 }
@@ -1414,10 +1428,6 @@ namespace GUI.Types.Viewers
                 var groupName = EventKeys.Contains(key) ? "Event" : fields.Count > 0 ? "Not read by this stack" : "Keys";
                 Group(groupName).Add(Row(i, key, curve: false));
             }
-
-            var values = groups.SelectMany(static g => g.Rows).Where(static r => r.Value != null)
-                .DistinctBy(static r => r.Key, StringComparer.OrdinalIgnoreCase)
-                .ToDictionary(static r => r.Key, static r => r.Value!, StringComparer.OrdinalIgnoreCase);
 
             propertyGrid.SuspendLayout();
             propertyGrid.Rows.Clear();
@@ -1442,8 +1452,7 @@ namespace GUI.Types.Viewers
 
                     if (isCurve && value != null && ParseCurve(value) is var (curve, keyPoints))
                     {
-                        var dimmed = values.TryGetValue($"use_{key}", out var flag) && !IsTrue(flag);
-                        gridRow.Cells[1].Tag = (curve, keyPoints, dimmed);
+                        gridRow.Cells[1].Tag = (curve, keyPoints);
                         gridRow.Height = this.AdjustForDPI(44);
                     }
                     else if (value != null && kind != ValueSource.Default && GetLinks(key, value) is { Count: > 0 } links)
@@ -1471,13 +1480,6 @@ namespace GUI.Types.Viewers
             propertyGrid.ResumeLayout();
             propertyGrid.ClearSelection();
         }
-
-        private static bool IsTrue(KVObject value) => value.ValueType switch
-        {
-            KVValueType.Boolean => (bool)value,
-            KVValueType.String => (string)value is not ("false" or "0" or ""),
-            _ => !IsNumber(value) || value.ToDouble(CultureInfo.InvariantCulture) != 0,
-        };
 
         /// <summary>Formats a stack default, which holds numbers as text with six decimals, like the event's own numbers.</summary>
         private static string FormatDefault(KVObject value)
@@ -1554,6 +1556,9 @@ namespace GUI.Types.Viewers
 
         [GeneratedRegex("<[^<>]*>")]
         private static partial Regex CaptionMarkupRegex();
+
+        private static string StripCaptionMarkup(string caption)
+            => CaptionMarkupRegex().Replace(caption.Replace("<cr>", Environment.NewLine, StringComparison.OrdinalIgnoreCase), string.Empty).Trim();
 
         private static bool IsNumber(KVObject value) => value.ValueType is KVValueType.FloatingPoint or KVValueType.FloatingPoint64
             or KVValueType.Int16 or KVValueType.Int32 or KVValueType.Int64 or KVValueType.UInt16 or KVValueType.UInt32 or KVValueType.UInt64;
@@ -1728,15 +1733,15 @@ namespace GUI.Types.Viewers
                     e.Handled = true;
                     break;
 
-                case (SoundEventCurve curve, PointF[] keys, bool dimmed):
+                case (SoundEventCurve curve, PointF[] keys):
                     e.Paint(e.CellBounds, DataGridViewPaintParts.Background | DataGridViewPaintParts.SelectionBackground);
-                    DrawCurve(e.Graphics, e.CellBounds, curve, keys, dimmed, font);
+                    DrawCurve(e.Graphics, e.CellBounds, curve, keys, font);
                     e.Handled = true;
                     break;
             }
         }
 
-        private void DrawCurve(Graphics graphics, Rectangle cell, SoundEventCurve curve, PointF[] keys, bool dimmed, Font font)
+        private void DrawCurve(Graphics graphics, Rectangle cell, SoundEventCurve curve, PointF[] keys, Font font)
         {
             var padding = this.AdjustForDPI(4);
             var plot = Rectangle.Inflate(cell, -padding, -padding);
@@ -1757,14 +1762,13 @@ namespace GUI.Types.Viewers
             var minY = MathF.Min(values.Min(), keys.Min(static k => k.Y));
             var maxY = MathF.Max(values.Max(), keys.Max(static k => k.Y));
             var constant = maxY - minY <= MathF.Max(0.0001f, 0.01f * MathF.Max(MathF.Abs(minY), MathF.Abs(maxY)));
-            var color = dimmed ? Themer.CurrentThemeColors.ContrastSoft : Themer.CurrentThemeColors.Accent;
 
             float ToX(float x) => plot.Left + (x - minX) / (maxX - minX) * plot.Width;
             float ToY(float y) => constant ? plot.Top + plot.Height / 2f : plot.Bottom - (y - minY) / (maxY - minY) * plot.Height;
 
             using var framePen = new Pen(Themer.CurrentThemeColors.Border);
-            using var curvePen = new Pen(color, this.AdjustForDPI(2));
-            using var dotBrush = new SolidBrush(color);
+            using var curvePen = new Pen(Themer.CurrentThemeColors.Accent, this.AdjustForDPI(2));
+            using var dotBrush = new SolidBrush(Themer.CurrentThemeColors.Accent);
 
             var state = graphics.Save();
             graphics.SmoothingMode = SmoothingMode.AntiAlias;
@@ -1867,7 +1871,7 @@ namespace GUI.Types.Viewers
                 return;
             }
 
-            var grid = (Grid)sender!;
+            Grid grid = (Grid)sender!;
 
             var target = grid.Rows[rowIndex].Tag switch
             {
@@ -1939,6 +1943,7 @@ namespace GUI.Types.Viewers
         private void UpdatePlaybackState()
         {
             stopButton.Enabled = player != null || audioPanel != null;
+            toolTip.SetToolTip(stopButton, player == null && audioPanel != null ? "Stop and close the player (Esc)" : "Stop (Esc)");
             PlaceSplitters();
         }
 
@@ -2126,11 +2131,11 @@ namespace GUI.Types.Viewers
                     searchBox.Clear();
                     return true;
 
-                case Keys.Escape:
+                case Keys.Escape when !FocusOnButtons():
                     StopPlayback();
                     return true;
 
-                case Keys.Space when !searchBox.Focused:
+                case Keys.Space when !searchBox.Focused && !FocusOnButtons():
                     PlayEvent();
                     return true;
 
@@ -2140,6 +2145,19 @@ namespace GUI.Types.Viewers
             }
 
             return base.ProcessCmdKey(ref msg, keyData);
+        }
+
+        /// <summary>Gets whether a button, check box or tab strip has the focus, which handle Space and Esc themselves.</summary>
+        private bool FocusOnButtons()
+        {
+            Control? focused = ActiveControl;
+
+            while (focused is ContainerControl { ActiveControl: { } inner })
+            {
+                focused = inner;
+            }
+
+            return focused is ButtonBase or TabControl;
         }
 
         private void OnSearchKeyDown(object? sender, KeyEventArgs e)
@@ -2170,7 +2188,7 @@ namespace GUI.Types.Viewers
             }
         }
 
-        private ThemedComboBox CreateFilterBox(string name, string[] items)
+        private static ThemedComboBox CreateFilterBox(string name, string[] items)
         {
             var box = new ThemedComboBox
             {
@@ -2182,7 +2200,6 @@ namespace GUI.Types.Viewers
 
             box.Items.AddRange(items);
             box.SelectedIndex = 0;
-            box.SelectedIndexChanged += (_, _) => ApplyFilter();
 
             return box;
         }
@@ -2200,6 +2217,7 @@ namespace GUI.Types.Viewers
             var button = new ThemedButton
             {
                 Image = AppIcons.ImageList.Images[AppIcons.Icons[icon]],
+                HideFrameWhenDisabled = true,
                 Size = new Size(size, size),
                 Margin = new Padding(2, 4, 2, 4),
                 AccessibleName = name,
@@ -2223,16 +2241,6 @@ namespace GUI.Types.Viewers
             DisabledLinkColor = Themer.CurrentThemeColors.ContrastSoft,
             AccessibleName = name,
         };
-
-        protected override void OnResize(EventArgs e)
-        {
-            base.OnResize(e);
-
-            foreach (var label in new[] { noticeLabel, captionLabel })
-            {
-                label.MaximumSize = new Size(Math.Max(100, label.Parent?.ClientSize.Width ?? Width), 0);
-            }
-        }
 
         protected override void Dispose(bool disposing)
         {
@@ -2275,7 +2283,7 @@ namespace GUI.Types.Viewers
         /// A read only grid that selects whole rows, raises <see cref="Activated"/> on double-click or Enter, raises
         /// <see cref="LinkClicked"/> when a link is clicked, and copies the current cell with Ctrl+C.
         /// </summary>
-        private sealed class Grid : DataGridView
+        internal sealed class Grid : DataGridView
         {
             public event EventHandler<int>? Activated;
 
@@ -2292,13 +2300,16 @@ namespace GUI.Types.Viewers
             /// <summary>Text shown in place of the rows while there are none.</summary>
             public string EmptyText
             {
-                get => AccessibleDescription ?? string.Empty;
+                get;
                 set
                 {
-                    AccessibleDescription = value;
+                    field = value;
                     Invalidate();
                 }
-            }
+            } = string.Empty;
+
+            /// <summary>Gets or sets whether the rows are still being found.</summary>
+            public bool Loading { get; set; }
 
             public Grid(string name)
             {

@@ -134,13 +134,13 @@ internal sealed partial class McpTools
 
             if (detailsTab != null)
             {
-                viewer.ShowLinksTab(detailsTab switch
+                Named<TabControl>(viewer, "Links").SelectedIndex = detailsTab switch
                 {
                     "sounds" => 0,
                     "references" => 1,
                     "used_by" => 2,
                     _ => throw new ToolException($"Unknown details tab '{detailsTab}'. The tabs are sounds, references and used_by."),
-                });
+                };
             }
 
             switch (action)
@@ -155,7 +155,7 @@ internal sealed partial class McpTools
                         throw new ToolException(string.Create(CultureInfo.InvariantCulture, $"The event has {sounds.RowCount} sounds."));
                     }
 
-                    viewer.ShowLinksTab(0);
+                    Named<TabControl>(viewer, "Links").SelectedIndex = 0;
                     sounds.CurrentCell = sounds.Rows[sound].Cells[0];
 
                     if (!viewer.PlaySound(sound, autoPlay: true))
@@ -193,8 +193,8 @@ internal sealed partial class McpTools
         {
             var users = await OnUi(() =>
             {
-                var grid = Named<DataGridView>(tab, "Used by events");
-                return grid.AccessibleDescription == "Finding events that use this sound..." ? null : GridRows(grid);
+                var grid = Named<SoundEventViewer.Grid>(tab, "Used by events");
+                return grid.Loading ? null : GridRows(grid);
             }, cancellationToken).ConfigureAwait(false);
 
             if (users != null || waited > LoadTimeout)
