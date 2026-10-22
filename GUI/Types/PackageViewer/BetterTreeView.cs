@@ -1,7 +1,6 @@
 using System.Buffers;
 using System.Globalization;
 using System.IO;
-using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -25,6 +24,8 @@ namespace GUI.Types.PackageViewer
         public int FolderImage;
 
         public VrfGuiContext? VrfGuiContext { get; set; }
+
+        private const int MaxPooledLength = 4 * 1024 * 1024;
 
         protected override void OnPaint(PaintEventArgs e)
         {
@@ -55,7 +56,6 @@ namespace GUI.Types.PackageViewer
 
             var text = request.UseRegex ? request.Text : request.Text.Replace('\\', Package.DirectorySeparatorChar);
 
-            // A file name can not contain a slash, so such text is matched against the full path
             var matchPath = request.Target == SearchTarget.Path || (!request.UseRegex && text.Contains(Package.DirectorySeparatorChar, StringComparison.Ordinal));
 
             Func<string, bool> isMatch;
@@ -94,14 +94,17 @@ namespace GUI.Types.PackageViewer
             return candidates;
         }
 
-        private static Regex CreateRegex(string pattern, SearchRequest request, TimeSpan matchTimeout)
+        /// <summary>
+        /// Creates the regular expression that a search matches names, paths or contents with.
+        /// </summary>
+        internal static Regex CreateRegex(string pattern, SearchRequest request, TimeSpan matchTimeout)
         {
             if (request.WholeWord)
             {
                 pattern = string.Concat(@"(?<!\w)(?:", pattern, @")(?!\w)");
             }
 
-            var options = request.MatchCase ? RegexOptions.CultureInvariant : RegexOptions.CultureInvariant | RegexOptions.IgnoreCase;
+            var options = RegexOptions.CultureInvariant | RegexOptions.Multiline | (request.MatchCase ? RegexOptions.None : RegexOptions.IgnoreCase);
 
             return new Regex(pattern, options, matchTimeout);
         }
@@ -276,9 +279,9 @@ namespace GUI.Types.PackageViewer
                     );
                 }
 
-                Log.Info(nameof(BetterTreeView), $"Found {results.Count} matches");
-
-                progressDialog.SetProgress($"Found {results.Count} matches");
+                var found = string.Create(CultureInfo.InvariantCulture, $"Found {results.Count} matches");
+                Log.Info(nameof(BetterTreeView), found);
+                progressDialog.SetProgress(found);
 
                 return Task.CompletedTask;
             };
@@ -296,7 +299,7 @@ namespace GUI.Types.PackageViewer
                 cancellationToken.ThrowIfCancellationRequested();
 
                 var length = (int)entry.Length;
-                var buffer = ArrayPool<byte>.Shared.Rent(length);
+                var buffer = length <= MaxPooledLength ? ArrayPool<byte>.Shared.Rent(length) : new byte[length];
 
                 try
                 {
@@ -310,7 +313,10 @@ namespace GUI.Types.PackageViewer
                 }
                 finally
                 {
-                    ArrayPool<byte>.Shared.Return(buffer);
+                    if (length <= MaxPooledLength)
+                    {
+                        ArrayPool<byte>.Shared.Return(buffer);
+                    }
                 }
             }
 
@@ -319,7 +325,8 @@ namespace GUI.Types.PackageViewer
 
         private static bool IsTextMatch(Regex regex, PackageEntry entry, ReadOnlySpan<byte> data)
         {
-            var chars = ArrayPool<char>.Shared.Rent(Encoding.UTF8.GetMaxCharCount(data.Length));
+            var charCount = Encoding.UTF8.GetMaxCharCount(data.Length);
+            var chars = charCount <= MaxPooledLength ? ArrayPool<char>.Shared.Rent(charCount) : new char[charCount];
 
             try
             {
@@ -334,7 +341,10 @@ namespace GUI.Types.PackageViewer
             }
             finally
             {
-                ArrayPool<char>.Shared.Return(chars);
+                if (charCount <= MaxPooledLength)
+                {
+                    ArrayPool<char>.Shared.Return(chars);
+                }
             }
         }
 
@@ -378,70 +388,83 @@ namespace GUI.Types.PackageViewer
         private static HashSet<PackageEntry> SearchForContentsInArchive(Stream archive, byte[] pattern, SearchValues<byte>? firstByte, List<PackageEntry> archiveEntries, CancellationToken cancellationToken)
         {
             const int BufferSize = 4 * 1024 * 1024;
+            const int MaxReadGap = 64 * 1024;
 
             var matches = new HashSet<PackageEntry>();
-            var buffer = ArrayPool<byte>.Shared.Rent(Math.Max(BufferSize, pattern.Length));
+            var buffer = new byte[Math.Max(BufferSize, pattern.Length)];
+            var first = 0;
 
-            try
+            while (first < archiveEntries.Count)
             {
-                var bufferStart = 0L;
-                var bufferLength = 0;
-                var position = 0L;
-                var entryIndex = 0;
+                cancellationToken.ThrowIfCancellationRequested();
 
-                while (true)
+                var start = (long)archiveEntries[first].Offset;
+                var end = start + archiveEntries[first].Length;
+                var last = first;
+
+                while (last + 1 < archiveEntries.Count)
                 {
-                    var bufferOffset = position - bufferStart;
+                    var next = archiveEntries[last + 1];
+                    var nextEnd = (long)next.Offset + next.Length;
 
-                    if (bufferOffset < 0 || bufferOffset + pattern.Length > bufferLength)
+                    if (next.Offset - end > MaxReadGap || nextEnd - start > buffer.Length)
                     {
-                        cancellationToken.ThrowIfCancellationRequested();
-
-                        archive.Position = position;
-                        bufferStart = position;
-                        bufferOffset = 0;
-                        bufferLength = archive.ReadAtLeast(buffer, buffer.Length, throwOnEndOfStream: false);
-
-                        if (bufferLength < pattern.Length)
-                        {
-                            break;
-                        }
+                        break;
                     }
 
-                    var match = IndexOf(buffer.AsSpan((int)bufferOffset, bufferLength - (int)bufferOffset), pattern, firstByte);
-
-                    if (match < 0)
-                    {
-                        position = bufferStart + bufferLength - pattern.Length + 1;
-                        continue;
-                    }
-
-                    var start = position + match;
-
-                    while (entryIndex + 1 < archiveEntries.Count && archiveEntries[entryIndex + 1].Offset <= start)
-                    {
-                        entryIndex++;
-                    }
-
-                    var entry = archiveEntries[entryIndex];
-                    var entryEnd = (long)entry.Offset + entry.Length;
-
-                    if (entry.Offset > start || start + pattern.Length > entryEnd)
-                    {
-                        position = start + 1;
-                        continue;
-                    }
-
-                    matches.Add(entry);
-                    position = entryEnd;
+                    end = Math.Max(end, nextEnd);
+                    last++;
                 }
-            }
-            finally
-            {
-                ArrayPool<byte>.Shared.Return(buffer);
+
+                if (end - start > buffer.Length)
+                {
+                    if (ContainsInLargeEntry(archive, start, end, buffer, pattern, firstByte, cancellationToken))
+                    {
+                        matches.Add(archiveEntries[first]);
+                    }
+
+                    first++;
+                    continue;
+                }
+
+                archive.Position = start;
+                archive.ReadExactly(buffer, 0, (int)(end - start));
+
+                for (var i = first; i <= last; i++)
+                {
+                    var entry = archiveEntries[i];
+
+                    if (IndexOf(buffer.AsSpan((int)(entry.Offset - start), (int)entry.Length), pattern, firstByte) >= 0)
+                    {
+                        matches.Add(entry);
+                    }
+                }
+
+                first = last + 1;
             }
 
             return matches;
+        }
+
+        private static bool ContainsInLargeEntry(Stream archive, long start, long end, byte[] buffer, byte[] pattern, SearchValues<byte>? firstByte, CancellationToken cancellationToken)
+        {
+            for (var position = start; position + pattern.Length <= end;)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var length = (int)Math.Min(buffer.Length, end - position);
+                archive.Position = position;
+                archive.ReadExactly(buffer, 0, length);
+
+                if (IndexOf(buffer.AsSpan(0, length), pattern, firstByte) >= 0)
+                {
+                    return true;
+                }
+
+                position += length - pattern.Length + 1;
+            }
+
+            return false;
         }
 
         public void GenerateIconList(IEnumerable<string> extensions)

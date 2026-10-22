@@ -69,15 +69,22 @@ namespace GUI.Types.PackageViewer
         public NavigationEntry? Forward() => CanGoForward ? entries[++index] : null;
 
         /// <summary>
-        /// Removes every folder entry that points at <paramref name="removedRoot"/> or any of its
-        /// descendants, keeping the cursor on the nearest surviving earlier entry when the current
-        /// one is removed. Other folder entries and searches are kept.
+        /// Removes every folder entry and folder scoped search that points at <paramref name="removedRoot"/>
+        /// or any of its descendants, keeping the cursor on the nearest surviving earlier entry when the
+        /// current one is removed. Other entries are kept.
         /// </summary>
         public void RemoveSubtree(VirtualPackageNode removedRoot)
         {
             for (var i = entries.Count - 1; i >= 0; i--)
             {
-                if (entries[i] is FolderNavigationEntry folder && IsInSubtree(folder.Node, removedRoot))
+                var node = entries[i] switch
+                {
+                    FolderNavigationEntry folder => folder.Node,
+                    SearchNavigationEntry search => search.Search.Folder,
+                    _ => null,
+                };
+
+                if (node != null && IsInSubtree(node, removedRoot))
                 {
                     entries.RemoveAt(i);
 

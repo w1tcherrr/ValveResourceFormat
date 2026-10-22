@@ -468,7 +468,7 @@ namespace GUI
             return true;
         }
 
-        public void ShowVpkEditingContextMenu(Control control, Point position, bool isRootNode, bool isFolderNode, bool hasItem)
+        public void ShowVpkEditingContextMenu(Control control, Point position, bool isRootNode, bool isFolderNode, bool canSearchInFolder, bool hasItem)
         {
             vpkEditRemoveThisFileToolStripMenuItem.Visible = hasItem && !isFolderNode;
             vpkEditRemoveThisFolderToolStripMenuItem.Visible = hasItem && isFolderNode && !isRootNode;
@@ -479,7 +479,7 @@ namespace GUI
             vpkEditSeparator1.Visible = hasItem;
             vpkEditExtractToolStripMenuItem.Visible = hasItem;
             vpkEditDecompileToolStripMenuItem.Visible = hasItem;
-            vpkEditSearchInFolderToolStripMenuItem.Visible = hasItem && isFolderNode && !isRootNode;
+            vpkEditSearchInFolderToolStripMenuItem.Visible = canSearchInFolder;
 
             vpkEditingContextMenu.Show(control, position);
         }

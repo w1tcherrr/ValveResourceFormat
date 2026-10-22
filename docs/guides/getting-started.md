@@ -54,7 +54,7 @@ vpk:steam:730/game/csgo/maps/de_dust2.vpk:maps/de_dust2.vmap_c
 
 Press <kbd>Ctrl</kbd>+<kbd>F</kbd> to open the search dialog, or right-click a folder and choose **Search in folder**.
 
-- **Search in** picks what the text is matched against: the file name, the full path, or the file contents. Text with a `/` in it always matches the full path.
+- **Search in** picks what the text is matched against: the file name, the full path, or the file contents. In a name search without a regular expression, text with a `/` in it matches the full path instead.
 - The buttons next to the text box toggle **Match case**, **Match whole word** and **Use regular expression**. They apply to contents too, which are read as UTF-8 text. With a regular expression, `^name$` matches a whole name exactly.
 - **0x** searches the contents for hex bytes such as `56 42 4B 56` instead of text.
 - **Only in** limits the search to the folder selected in the tree and its subfolders.

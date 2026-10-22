@@ -35,6 +35,12 @@ namespace GUI.Controls
 
         protected override AccessibleObject CreateAccessibilityInstance() => new ToggleButtonAccessibleObject(this);
 
+        protected override void OnEnabledChanged(EventArgs e)
+        {
+            base.OnEnabledChanged(e);
+            UpdateColors();
+        }
+
         protected override void OnCreateControl()
         {
             base.OnCreateControl();
@@ -48,7 +54,7 @@ namespace GUI.Controls
                 return;
             }
 
-            BackColor = Checked ? Themer.CurrentThemeColors.Accent : Themer.CurrentThemeColors.Border;
+            BackColor = Checked && Enabled ? Themer.CurrentThemeColors.Accent : Themer.CurrentThemeColors.Border;
             Invalidate();
         }
 

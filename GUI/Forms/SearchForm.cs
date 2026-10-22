@@ -111,7 +111,7 @@ namespace GUI.Forms
             {
                 try
                 {
-                    _ = new Regex(request.Text);
+                    _ = BetterTreeView.CreateRegex(request.Text, request, Regex.InfiniteMatchTimeout);
                 }
                 catch (ArgumentException e)
                 {
@@ -280,15 +280,15 @@ namespace GUI.Forms
             errorLabel.ForeColor = Themer.CurrentThemeColors.Attention;
         }
 
-        /// <summary>
-        /// On form load, set the search textbox as the focused control.
-        /// </summary>
-        /// <param name="sender">Object which raised event.</param>
-        /// <param name="e">Event data.</param>
-        private void SearchForm_Load(object sender, EventArgs e)
+        protected override void OnVisibleChanged(EventArgs e)
         {
-            ActiveControl = findTextBox;
-            findTextBox.SelectAll();
+            base.OnVisibleChanged(e);
+
+            if (Visible)
+            {
+                ActiveControl = findTextBox;
+                findTextBox.SelectAll();
+            }
         }
     }
 }

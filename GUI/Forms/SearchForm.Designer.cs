@@ -258,7 +258,6 @@ namespace GUI.Forms
             ShowInTaskbar = false;
             StartPosition = System.Windows.Forms.FormStartPosition.CenterParent;
             Text = "Find";
-            Load += SearchForm_Load;
             ResumeLayout(false);
             PerformLayout();
         }

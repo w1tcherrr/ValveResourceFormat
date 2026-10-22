@@ -944,6 +944,7 @@ namespace GUI.Types.PackageViewer
 
             var isRoot = e.PkgNode == TreeView.mainTreeView.Root;
             var isFolder = e.PackageEntry is null;
+            var canSearchInFolder = !e.IsBackground && e.PkgNode is { Parent: not null };
 
             if (e.TreeNode is not null)
             {
@@ -961,11 +962,11 @@ namespace GUI.Types.PackageViewer
                     ?? (e.TreeNode?.Parent as BetterTreeNode)?.PkgNode
                     ?? (e.PackageEntry != null ? TreeView.FindFolderNode(e.PackageEntry.GetDirectoryPath()) : null);
 
-                Program.MainForm.ShowVpkEditingContextMenu(control, e.Location, isRoot, isFolder, hasItem: !e.IsBackground);
+                Program.MainForm.ShowVpkEditingContextMenu(control, e.Location, isRoot, isFolder, canSearchInFolder, hasItem: !e.IsBackground);
                 return;
             }
 
-            Program.MainForm.ShowVpkContextMenu(control, e.Location, isRoot, isFolder, TreeView.DeletedFilesRecovered, CanEdit);
+            Program.MainForm.ShowVpkContextMenu(control, e.Location, isRoot, isFolder, canSearchInFolder, TreeView.DeletedFilesRecovered, CanEdit);
         }
 
         public void Dispose()

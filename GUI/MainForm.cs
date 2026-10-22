@@ -1084,14 +1084,11 @@ namespace GUI
             searchForm.SetExtensions(package.mainTreeView.VrfGuiContext?.CurrentPackage?.Entries);
             searchForm.SetFolder(folder, onlyInFolder);
 
-            if (searchForm.ShowDialog() != DialogResult.OK)
-            {
-                return;
-            }
-
+            var result = searchForm.ShowDialog();
             var request = searchForm.Request;
+            searchForm.SetFolder(null, onlyInFolder: false);
 
-            if (request is not { Text: "", Folder: null, Extension: null, FilterKey: null })
+            if (result == DialogResult.OK && request is not { Text: "", Folder: null, Extension: null, FilterKey: null })
             {
                 package.SearchAndFillResults(request);
             }
