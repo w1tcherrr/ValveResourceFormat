@@ -12,7 +12,7 @@ Only Debug builds have the server, so build and run the GUI from source:
 dotnet run --project GUI -- --mcp
 ```
 
-`--mcp` listens on `http://127.0.0.1:13338/mcp`. `--mcp=<port>` selects a different port, so several viewers can run at the same time.
+`--mcp` listens on `http://127.0.0.1:13338/mcp`. `--mcp=<port>` selects a different port, so several viewers can run at the same time. `--theme=light` or `--theme=dark` overrides the theme for that run without changing the settings.
 
 The server speaks only MCP revision `2026-07-28`.
 

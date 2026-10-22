@@ -10,6 +10,7 @@ The goal is a powerful server that barely touches the rest of the viewer.
 - Prefer to do a job in the tool, from what the viewer already exposes, instead of adding a hook to viewer or renderer code. A hook needs a reason that only automation has, such as determinism or not blocking on a dialog. A bug fix that is not only for automation belongs in its own change.
 - The hooks outside this folder:
   - startup and window: `Program`/`MainForm`, no focus stealing, no IPC forwarding.
+  - the `--theme` switch in `Themer.InitializeTheme`.
   - opening tabs: tab-returning open methods, `ExportData.Loaded`.
   - log and errors: `Log` feeds `AutomationLog`, and `ErrorReport` sends dialogs to `ReportedErrors`.
   - `Settings.Save` is skipped.

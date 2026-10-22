@@ -69,3 +69,14 @@ WM_LBUTTONDOWN
 WM_LBUTTONDBLCLK
 COPYDATASTRUCT
 HWND_MESSAGE
+EnumThreadWindows
+GetCurrentThreadId
+GetKeyboardState
+MapVirtualKey
+PrintWindow
+SetKeyboardState
+WM_CHAR
+WM_KEYDOWN
+WM_KEYUP
+WM_SYSKEYDOWN
+WM_SYSKEYUP
