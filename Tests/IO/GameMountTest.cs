@@ -96,6 +96,7 @@ namespace Tests.IO
                     }
                     """);
                 await File.WriteAllTextAsync(Path.Join(mod, "notafolder.txt"), "file");
+                await File.WriteAllTextAsync(Path.Join(mod, "match.dem"), "demo");
                 await File.WriteAllBytesAsync(Path.Join(csgo, "pak01_dir.vpk"), []);
                 WritePackage(Path.Join(mod, "pak01_dir.vpk"), "scripts/mod.txt");
                 WritePackage(Path.Join(core, "pak01_dir.vpk"), "scripts/core.txt");
@@ -109,7 +110,7 @@ namespace Tests.IO
                     await Assert.That(loader.EnumerateSearchOrder().Select(source => Path.GetRelativePath(gameRoot.FullName, source.Package?.FilePath ?? source.Folder!).Replace('\\', '/')))
                         .IsEquivalentTo(["mymod/pak01_dir.vpk", "core/pak01_dir.vpk", "mymod", "csgo", "core"], CollectionOrdering.Matching);
                     await Assert.That(loader.EnumerateMountedFiles().Select(static file => file.Entry.GetFullPath()))
-                        .Contains("scripts/mod.txt").And.Contains("notafolder.txt").And.Contains("pak01_dir.vpk");
+                        .Contains("scripts/mod.txt").And.Contains("notafolder.txt").And.Contains("pak01_dir.vpk").And.DoesNotContain("match.dem");
                 }
             }
             finally

@@ -58,6 +58,12 @@ namespace ValveResourceFormat.IO
             "Game_AudioLanguage",
         };
 
+        // Loose files in game folders that are not game content: recordings, crash dumps, logs, binaries and caches
+        private static readonly HashSet<string> NonContentExtensions = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ".dem", ".dmp", ".mdmp", ".log", ".dll", ".exe", ".pdb", ".pyc", ".bak", ".sqlite3", ".soc", ".blob", ".iic", ".vcfg_lastclouded",
+        };
+
         // The engine mounts Game_LowViolence search paths only for low violence clients
         private static bool MountLowViolence => false;
 
@@ -880,8 +886,8 @@ namespace ValveResourceFormat.IO
 
         /// <summary>
         /// Lists every file in the packages and loose folders of <see cref="EnumerateSearchOrder"/>, in that order. A loose
-        /// file gets an entry without data, named by its path in the folder. The game's <c>bin</c> folders and the archives of
-        /// mounted packages are left out of loose folders.
+        /// file gets an entry without data, named by its path in the folder. The game's <c>bin</c> folders, the archives of
+        /// mounted packages, and loose files that are not game content, such as demo recordings, logs and crash dumps, are left out.
         /// </summary>
         /// <returns>
         /// Each file with the package or path on disk it is in, and the file that is found first at its path instead,
@@ -937,7 +943,9 @@ namespace ValveResourceFormat.IO
                     static (ref entry) => (entry.ToFullPath(), entry.Length),
                     new EnumerationOptions { RecurseSubdirectories = true })
                 {
-                    ShouldIncludePredicate = (ref entry) => !entry.IsDirectory && !(entry.Directory.Length == root.Length && IsArchive(entry.FileName, archives)),
+                    ShouldIncludePredicate = (ref entry) => !entry.IsDirectory
+                        && !NonContentExtensions.GetAlternateLookup<ReadOnlySpan<char>>().Contains(Path.GetExtension(entry.FileName))
+                        && !(entry.Directory.Length == root.Length && IsArchive(entry.FileName, archives)),
                     ShouldRecursePredicate = (ref entry) => !(entry.Directory.Length == root.Length && entry.FileName.Equals("bin", StringComparison.OrdinalIgnoreCase)),
                 };
 
