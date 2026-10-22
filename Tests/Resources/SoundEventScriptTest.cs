@@ -77,7 +77,7 @@ namespace Tests.Resources
 
             using (Assert.Multiple())
             {
-                await Assert.That(index.ContainsStack(stack)).IsTrue();
+                await Assert.That(index.GetStackFile(stack)).IsNotNull();
                 await Assert.That(fields.Single(f => f.Name == field).Field.GetStringProperty("data_type")).IsEqualTo(dataType);
                 await Assert.That(fields.Select(f => f.Stack).Distinct()).IsEquivalentTo([stack]);
             }
@@ -207,7 +207,7 @@ namespace Tests.Resources
             return index;
         }
 
-        private static List<(string Key, KVObject Value, string? Source)> ResolveKeys(SoundEventIndex index, string name) => index.Resolve(index.Find(name)!).Keys;
+        private static List<(string Key, KVObject Value, string? Source, string? Field)> ResolveKeys(SoundEventIndex index, string name) => index.Resolve(index.Find(name)!).Keys;
 
         [Test]
         public async Task StringBaseGivesTypeOnlyToUntypedEvents()
@@ -256,7 +256,7 @@ namespace Tests.Resources
             {
                 await Assert.That(untyped.Rejected).IsTrue();
                 await Assert.That(untyped.Keys.Select(r => r.Key)).DoesNotContain("type");
-                await Assert.That(mismatch.Rejected).IsFalse();
+                await Assert.That(mismatch.Rejected).IsTrue();
                 await Assert.That(mismatch.Problems).Count().IsEqualTo(1);
                 await Assert.That(mismatch.Keys.Select(r => r.Key)).IsEquivalentTo(["type", "x"]);
             }
@@ -282,7 +282,7 @@ namespace Tests.Resources
 
             using (Assert.Multiple())
             {
-                await Assert.That(keys.Where(r => r.Key == "volume").Select(r => r.Source)).IsEquivalentTo([null, "Reverb via reverb_field"]);
+                await Assert.That(keys.Where(r => r.Key == "volume").Select(r => (r.Source, r.Field))).IsEquivalentTo([(null, null), ("Reverb", "reverb_field")]);
                 await Assert.That(keys.Select(r => r.Key)).DoesNotContain("distance");
                 await Assert.That(problems).Count().IsEqualTo(1);
             }
@@ -359,6 +359,74 @@ namespace Tests.Resources
             finally
             {
                 Directory.Delete(Path.GetDirectoryName(Path.GetDirectoryName(gameFolder))!, recursive: true);
+            }
+        }
+
+        [Test]
+        public async Task CopyLeavesOutShadowedFiles()
+        {
+            var original = CreateIndex();
+            var copy = new SoundEventIndex(original, new HashSet<string>(["soundevents/weapons.vsndevts_c"]));
+            copy.AddEvents("addon/weapons.vsndevts_c", [("Shared", Event(("volume", 0.5f)))]);
+
+            using (Assert.Multiple())
+            {
+                await Assert.That(copy.Files).IsEquivalentTo(["soundevents/base.vsndevts_c", "addon/weapons.vsndevts_c"]);
+                await Assert.That(copy.Find("Weapon.Fire")).IsNull();
+                await Assert.That(copy.GetDefinitions("Shared").Select(d => d.File)).IsEquivalentTo(["soundevents/base.vsndevts_c", "addon/weapons.vsndevts_c"]);
+                await Assert.That(original.Find("Weapon.Fire")).IsNotNull();
+                await Assert.That(original.GetDefinitions("Shared")).Count().IsEqualTo(2);
+            }
+        }
+
+        [Test]
+        public async Task LoadsManifestFilesFirstThenTheAddonFileThenTheRest()
+        {
+            static Resource? NoManifest(string file) => null;
+
+            var order = SoundEventIndex.GetEventFilesInLoadOrder(NoManifest, ["soundevents/b.vsndevts", SoundEventIndex.AddonEventsFile, "soundevents/a.vsndevts"]);
+
+            await Assert.That(order).IsEquivalentTo([SoundEventIndex.AddonEventsFile, "soundevents/b.vsndevts", "soundevents/a.vsndevts"], TUnit.Assertions.Enums.CollectionOrdering.Matching);
+        }
+
+        [Test]
+        public async Task NamesScopedSubStackFieldsAfterTheirField()
+        {
+            var index = new SoundEventIndex();
+            index.AddStack("soundstacks/test.vsndstck_c", "parent", Stack(
+                ("track_1", Field("public_opvar", "track", ("use_public_opvar_scope", "true"))),
+                ("reverb", Field("public_opvar", "reverb_send"))));
+            index.AddStack("soundstacks/test.vsndstck_c", "track", Stack(("track_vsnd_files", Field("vsnd", string.Empty))));
+            index.AddStack("soundstacks/test.vsndstck_c", "reverb_send", Stack(("reverb_level", Field("float", "0.2"))));
+            index.AddEvents("soundevents/test.vsndevts_c",
+            [
+                ("Track", Event(("type", "track"), ("track_vsnd_files", "sounds/a.vsnd"))),
+                ("Scoped", Event(("type", "parent"), ("base", KVObject.Array([Fragment("Track", "track_1")])))),
+            ]);
+
+            var keys = index.Resolve(index.Find("Scoped")!);
+
+            using (Assert.Multiple())
+            {
+                await Assert.That(index.GetStackFields("parent").Select(f => f.Name)).IsEquivalentTo(["track_1", "reverb", "track_1.track_vsnd_files", "reverb_level"]);
+                await Assert.That(keys.Rejected).IsFalse();
+                await Assert.That(keys.Keys.Single(r => r.Key == "track_vsnd_files").Field).IsEqualTo("track_1");
+            }
+
+            static KVObject Field(string dataType, string value, params (string Key, KVObject Value)[] extra)
+                => Event([("data_type", dataType), ("value", value), .. extra]);
+
+            static KVObject Stack(params (string Name, KVObject Field)[] fields)
+            {
+                var variables = KVObject.Collection();
+
+                foreach (var (name, field) in fields)
+                {
+                    variables.Add(name, field);
+                }
+
+                var op = Event(("name", "public"), ("operator", "util_null"), ("operator_variables", variables));
+                return Event(("operators", KVObject.Array([op])));
             }
         }
 

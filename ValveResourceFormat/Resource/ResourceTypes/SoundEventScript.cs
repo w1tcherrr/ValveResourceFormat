@@ -22,7 +22,7 @@ namespace ValveResourceFormat.ResourceTypes
         { }
 
         /// <summary>
-        /// Gets the sound events in file order, each as a collection of its keys.
+        /// Gets the sound events in file order, each as a collection of its keys. Legacy events without a name are left out.
         /// </summary>
         /// <remarks>
         /// Legacy files store each event as text. Events written as KeyValues3 text are parsed as they are.
@@ -42,7 +42,10 @@ namespace ValveResourceFormat.ResourceTypes
             {
                 foreach (var legacyEvent in legacyEvents)
                 {
-                    result.Add((legacyEvent.GetStringProperty("m_SoundName"), ParseLegacyEvent(legacyEvent.GetStringProperty("m_OperatorsKV", string.Empty))));
+                    if (legacyEvent.GetStringProperty("m_SoundName") is { Length: > 0 } name)
+                    {
+                        result.Add((name, ParseLegacyEvent(legacyEvent.GetStringProperty("m_OperatorsKV", string.Empty))));
+                    }
                 }
 
                 return result;

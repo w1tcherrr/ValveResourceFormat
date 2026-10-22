@@ -5,18 +5,18 @@ using ValveResourceFormat.ResourceTypes;
 namespace ValveResourceFormat.Renderer.Audio;
 
 /// <summary>Stores sound event definitions loaded from soundevent (vsndevts) files.</summary>
-public sealed class SoundEventBank
+/// <param name="maxBaseVisits">How many base events an event may visit before it does not play, the game's
+/// <c>snd_sos_max_event_base_depth</c>, such as <see cref="GameFileLoader.SoundEventMaxBaseVisits"/>.</param>
+public sealed class SoundEventBank(int maxBaseVisits = SoundEventIndex.DefaultMaxBaseVisits)
 {
     // Sound event names are case-insensitive, so lookups here ignore case.
     private readonly Dictionary<string, KVObject> soundEvents = new(capacity: 32768, StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, SoundEventDefinition> definitions = new(capacity: 2048, StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> removed = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> rejected = new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>
-    /// Gets or sets how many base events an event may visit before it does not play, the game's
-    /// <c>snd_sos_max_event_base_depth</c>, such as <see cref="GameFileLoader.SoundEventMaxBaseVisits"/>.
-    /// </summary>
-    public int MaxBaseVisits { get; set; } = SoundEventIndex.DefaultMaxBaseVisits;
+    /// <summary>Gets how many base events an event may visit before it does not play.</summary>
+    public int MaxBaseVisits => maxBaseVisits;
 
     /// <summary>Gets the number of loaded sound event definitions.</summary>
     public int Count => soundEvents.Count;
@@ -28,6 +28,7 @@ public sealed class SoundEventBank
         {
             soundEvents[name] = soundEventData;
             definitions.Remove(name);
+            rejected.Remove(name);
         }
     }
 
@@ -38,6 +39,7 @@ public sealed class SoundEventBank
     {
         removed.Add(name);
         definitions.Remove(name);
+        rejected.Remove(name);
         return soundEvents.Remove(name);
     }
 
@@ -70,7 +72,7 @@ public sealed class SoundEventBank
             return definition;
         }
 
-        if (!soundEvents.TryGetValue(name, out var soundEvent))
+        if (rejected.Contains(name) || !soundEvents.TryGetValue(name, out var soundEvent))
         {
             return null;
         }
@@ -82,17 +84,18 @@ public sealed class SoundEventBank
             return definition;
         }
 
-        var (keys, _, rejected) = SoundEventIndex.Resolve(soundEvent, name => soundEvents.GetValueOrDefault(name), maxBaseVisits: MaxBaseVisits);
+        var (keys, _, isRejected) = SoundEventIndex.Resolve(soundEvent, name => soundEvents.GetValueOrDefault(name), maxBaseVisits: maxBaseVisits);
 
-        if (rejected)
+        if (isRejected)
         {
+            rejected.Add(name);
             return null;
         }
 
         var merged = KVObject.Collection();
 
         // Keys of a sub-stack can repeat the event's own key names, which come first
-        foreach (var (key, value, _) in keys)
+        foreach (var (key, value, _, _) in keys)
         {
             merged.TryAdd(key, value);
         }

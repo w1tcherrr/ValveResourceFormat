@@ -24,16 +24,6 @@ public sealed class SoundEventPlayer : IDisposable
     /// <summary>Gets the bank of loaded sound event definitions.</summary>
     public SoundEventBank Bank { get; private set; }
 
-    /// <summary>
-    /// Gets or sets how many base events an event may visit before it does not play, the game's
-    /// <c>snd_sos_max_event_base_depth</c>, such as <see cref="GameFileLoader.SoundEventMaxBaseVisits"/>.
-    /// </summary>
-    public int MaxBaseVisits
-    {
-        get => Bank.MaxBaseVisits;
-        set => Bank.MaxBaseVisits = value;
-    }
-
     /// <summary>Gets the bank of loaded scripted soundscape definitions (see <see cref="LoadSoundscapes"/>).</summary>
     public SoundscapeBank Soundscapes { get; private set; }
 
@@ -181,14 +171,19 @@ public sealed class SoundEventPlayer : IDisposable
     }
 
     /// <summary>Creates a sound event player. Takes ownership of <paramref name="device"/> and starts the mixing thread immediately.</summary>
-    public SoundEventPlayer(IFileLoader fileLoader, IAudioDevice device, ILogger? logger = null)
+    /// <param name="fileLoader">Loads the sound event files and sounds.</param>
+    /// <param name="device">The device to play on.</param>
+    /// <param name="logger">Logs what fails to load or play.</param>
+    /// <param name="maxBaseVisits">How many base events an event may visit before it does not play, the game's
+    /// <c>snd_sos_max_event_base_depth</c>, such as <see cref="GameFileLoader.SoundEventMaxBaseVisits"/>.</param>
+    public SoundEventPlayer(IFileLoader fileLoader, IAudioDevice device, ILogger? logger = null, int maxBaseVisits = SoundEventIndex.DefaultMaxBaseVisits)
     {
         this.fileLoader = fileLoader;
         this.device = device;
         this.logger = logger ?? NullLogger.Instance;
 
         SoundCache = new SoundCache(fileLoader, device.SampleRate, device.Channels, this.logger);
-        Bank = new SoundEventBank();
+        Bank = new SoundEventBank(maxBaseVisits);
         Soundscapes = new SoundscapeBank(Bank);
         mixer = new AudioMixer(this);
 
@@ -307,7 +302,7 @@ public sealed class SoundEventPlayer : IDisposable
     /// </summary>
     public Task LoadAsync(CancellationToken cancellationToken = default) => loading = Task.Run(() =>
     {
-        var bank = new SoundEventBank { MaxBaseVisits = MaxBaseVisits };
+        var bank = new SoundEventBank(Bank.MaxBaseVisits);
         var soundscapes = new SoundscapeBank(bank);
 
         LoadSoundEventsInto(bank, string.Empty, cancellationToken);

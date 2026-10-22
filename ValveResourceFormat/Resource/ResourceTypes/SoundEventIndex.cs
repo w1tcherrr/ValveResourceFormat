@@ -17,8 +17,9 @@ namespace ValveResourceFormat.ResourceTypes
     /// </summary>
     /// <remarks>
     /// When several files define an event of the same name, the file added last wins, as the engine replaces an event
-    /// that a later file defines again. The others are kept as further definitions. Events name other events in keys that differ per game, so an event reference is any
-    /// string value that names a known event, other than the event itself and the keys that name something else.
+    /// that a later file defines again. The others are kept as further definitions. Events name other events in keys
+    /// that differ per game, so an event reference is any string value that names a known event, other than the event
+    /// itself and the keys that name something else.
     /// </remarks>
     public sealed class SoundEventIndex
     {
@@ -41,14 +42,16 @@ namespace ValveResourceFormat.ResourceTypes
         private readonly List<string> files = [];
         private readonly Dictionary<string, List<(string File, KVObject Data)>> definitions = new(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, (string File, List<(string Name, KVObject Operator)> Operators)> stacks = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, (List<(string Name, KVObject Field, string Stack)> Fields, Dictionary<string, int> ByName)> stackFields
+            = new(StringComparer.OrdinalIgnoreCase);
         private Dictionary<string, List<(string Event, string Key)>>? referencedBy;
         private Dictionary<string, List<string>>? soundUsers;
 
         /// <summary>
-        /// Gets or sets how many base events an event may visit before the engine does not play it, which is the
-        /// game's <c>snd_sos_max_event_base_depth</c>, such as <see cref="GameFileLoader.SoundEventMaxBaseVisits"/>.
+        /// Gets how many base events an event may visit before the engine does not play it, which is the game's
+        /// <c>snd_sos_max_event_base_depth</c>, such as <see cref="GameFileLoader.SoundEventMaxBaseVisits"/>.
         /// </summary>
-        public int MaxBaseVisits { get; set; } = DefaultMaxBaseVisits;
+        public int MaxBaseVisits { get; init; } = DefaultMaxBaseVisits;
 
         /// <summary>
         /// Gets the sound event files in the order they were added.
@@ -73,10 +76,11 @@ namespace ValveResourceFormat.ResourceTypes
         /// <param name="eventFiles">Paths of the <c>vsndevts_c</c> files in the order the engine loads them, see
         /// <see cref="GetEventFilesInLoadOrder"/>. A later file wins.</param>
         /// <param name="stackFiles">Paths of the <c>vsndstck_c</c> files.</param>
+        /// <param name="maxBaseVisits">The game's <c>snd_sos_max_event_base_depth</c>, see <see cref="MaxBaseVisits"/>.</param>
         /// <param name="logger">Logs the files that fail to load.</param>
         /// <param name="cancellationToken">Cancels the load.</param>
         public static SoundEventIndex Build(Func<string, Resource?> loadFile, IReadOnlyList<string> eventFiles, IReadOnlyList<string> stackFiles,
-            ILogger? logger = null, CancellationToken cancellationToken = default)
+            int maxBaseVisits = DefaultMaxBaseVisits, ILogger? logger = null, CancellationToken cancellationToken = default)
         {
             var events = new IReadOnlyList<(string Name, KVObject Data)>?[eventFiles.Count];
             var options = new ParallelOptions { CancellationToken = cancellationToken };
@@ -94,7 +98,7 @@ namespace ValveResourceFormat.ResourceTypes
                 }
             });
 
-            var index = new SoundEventIndex();
+            var index = new SoundEventIndex { MaxBaseVisits = maxBaseVisits };
 
             for (var i = 0; i < eventFiles.Count; i++)
             {
@@ -249,6 +253,11 @@ namespace ValveResourceFormat.ResourceTypes
             }
 
             stacks.TryAdd(name, (fileName, operators));
+
+            lock (stackFields)
+            {
+                stackFields.Clear();
+            }
         }
 
         /// <summary>
@@ -327,11 +336,6 @@ namespace ValveResourceFormat.ResourceTypes
             => definitions.TryGetValue(name, out var list) ? list[^1].Data : null;
 
         /// <summary>
-        /// Gets whether a stack of this name was added.
-        /// </summary>
-        public bool ContainsStack(string name) => stacks.ContainsKey(name);
-
-        /// <summary>
         /// Gets the file of the resource that a stack was added from, or null when the stack is unknown.
         /// </summary>
         public string? GetStackFile(string name) => stacks.TryGetValue(name, out var stack) ? stack.File : null;
@@ -343,8 +347,9 @@ namespace ValveResourceFormat.ResourceTypes
         /// </summary>
         /// <param name="soundEvent">The event to resolve.</param>
         /// <param name="findEvent">Finds a base event by name, in place of <see cref="Find"/>.</param>
-        public (List<(string Key, KVObject Value, string? Source)> Keys, List<string> Problems, bool Rejected) Resolve(KVObject soundEvent, Func<string, KVObject?>? findEvent = null)
-            => Resolve(soundEvent, findEvent ?? Find, soundEvent.GetStringProperty("type") is { } type && ContainsStack(type) ? GetFieldDefault : null, MaxBaseVisits);
+        public (List<(string Key, KVObject Value, string? Source, string? Field)> Keys, List<string> Problems, bool Rejected) Resolve(
+            KVObject soundEvent, Func<string, KVObject?>? findEvent = null)
+            => Resolve(soundEvent, findEvent ?? Find, GetFieldDefault, MaxBaseVisits);
 
         /// <summary>
         /// Resolves the keys of an event with the keys it inherits through <c>base</c>, as the engine does.
@@ -355,26 +360,28 @@ namespace ValveResourceFormat.ResourceTypes
         /// The event's own keys win over later fragments, later fragments over earlier ones, and each base's own keys over
         /// the keys of its own bases. A string base gives its <c>type</c> to an event without one. An event with an array
         /// base needs its own type and never takes one from its fragments. A fragment without <c>field_name</c> must have
-        /// the event's type, otherwise it is skipped. A fragment with <c>field_name</c> must have the type that the field of
-        /// that name in the event's stack defaults to, and its keys apply to that field's sub-stack.
+        /// the event's type. A fragment with <c>field_name</c> must have the type that the <c>public_opvar</c> field of that
+        /// name in the event's stack names, and its keys apply to that field's sub-stack. The engine does not play an event
+        /// that breaks these rules.
         /// </para>
         /// <para>
-        /// The engine does not play an event whose tree visits more than <paramref name="maxBaseVisits"/> bases in total.
-        /// Such an event is still resolved in full, and reported as rejected. A base that is not loaded is skipped.
+        /// The engine also does not play an event whose tree visits more than <paramref name="maxBaseVisits"/> bases in
+        /// total, counting only the bases it keeps. Such an event is still resolved in full, and reported as rejected. A
+        /// base that is not loaded is skipped.
         /// </para>
         /// </remarks>
         /// <param name="soundEvent">The event to resolve.</param>
         /// <param name="findEvent">Finds a base event by name, or returns null when it is not loaded.</param>
-        /// <param name="findFieldDefault">Finds the default of a field of a stack, given the stack and the field. Without it,
-        /// fragments with a <c>field_name</c> are not checked.</param>
+        /// <param name="findFieldDefault">Finds the sub-stack that a <c>public_opvar</c> field of a stack names, given the
+        /// stack and the field, or returns null when it cannot tell. Fragments with a <c>field_name</c> are then not checked.</param>
         /// <param name="maxBaseVisits">How many base events the event may visit, the game's <c>snd_sos_max_event_base_depth</c>.</param>
-        /// <returns>Each key with its value and where it comes from: null for the event's own keys, otherwise the base event,
-        /// followed by " via " and the field for keys of a sub-stack. Also the problems the engine would have with the event,
-        /// and whether it rejects the event. The <c>base</c> key itself is left out.</returns>
-        public static (List<(string Key, KVObject Value, string? Source)> Keys, List<string> Problems, bool Rejected) Resolve(
+        /// <returns>Each key with its value, the base event it comes from (null for the event's own keys) and the field
+        /// whose sub-stack it applies to (null for the event's own stack). Also the problems the engine would have with
+        /// the event, and whether it does not play it. The <c>base</c> key itself is left out.</returns>
+        public static (List<(string Key, KVObject Value, string? Source, string? Field)> Keys, List<string> Problems, bool Rejected) Resolve(
             KVObject soundEvent, Func<string, KVObject?> findEvent, Func<string, string, string?>? findFieldDefault = null, int maxBaseVisits = DefaultMaxBaseVisits)
         {
-            var resolved = new List<(string Key, KVObject Value, string? Source)>();
+            var resolved = new List<(string Key, KVObject Value, string? Source, string? Field)>();
             var keys = new HashSet<(string? Field, string Key)>();
             var problems = new List<string>();
             var rejected = false;
@@ -403,7 +410,7 @@ namespace ValveResourceFormat.ResourceTypes
 
                     if (keys.Add((field, key.ToLowerInvariant())))
                     {
-                        resolved.Add((key, value, source == null ? null : field == null ? source : $"{source} via {field}"));
+                        resolved.Add((key, value, source, field));
                     }
                 }
 
@@ -416,7 +423,7 @@ namespace ValveResourceFormat.ResourceTypes
 
                 if (baseValue.ValueType == KVValueType.String)
                 {
-                    if (Visit((string)baseValue) is { } baseEvent)
+                    if (findEvent((string)baseValue) is { } baseEvent && Visit())
                     {
                         Merge(baseEvent, (string)baseValue, field, inheritType);
                     }
@@ -428,7 +435,7 @@ namespace ValveResourceFormat.ResourceTypes
 
                 if (type == null)
                 {
-                    problems.Add($"The engine rejects this event: {who} has an array base but no type of its own.");
+                    problems.Add($"The engine does not play this event: {who} has an array base but no type of its own.");
                     rejected = true;
                 }
 
@@ -439,43 +446,39 @@ namespace ValveResourceFormat.ResourceTypes
                     var name = fragments[i].GetStringProperty("event_name");
                     var fieldName = fragments[i].GetStringProperty("field_name");
 
-                    if (string.IsNullOrEmpty(name) || Visit(name) is not { } fragment)
+                    if (string.IsNullOrEmpty(name) || findEvent(name) is not { } fragment)
                     {
                         continue;
                     }
 
                     var fragmentType = GetType(fragment, findEvent);
+                    var expected = string.IsNullOrEmpty(fieldName) ? type : type != null ? findFieldDefault?.Invoke(type, fieldName) : null;
 
-                    if (string.IsNullOrEmpty(fieldName))
+                    if ((string.IsNullOrEmpty(fieldName) || expected != null) && !string.Equals(fragmentType, expected, StringComparison.OrdinalIgnoreCase))
                     {
-                        if (!string.Equals(fragmentType, type, StringComparison.OrdinalIgnoreCase))
-                        {
-                            problems.Add($"The engine skips base {name}: its type {fragmentType ?? "(none)"} is not the type {type ?? "(none)"} of {who}.");
-                            continue;
-                        }
-                    }
-                    else if (findFieldDefault != null && type != null
-                        && findFieldDefault(type, fieldName) is var expected && !string.Equals(fragmentType, expected, StringComparison.OrdinalIgnoreCase))
-                    {
-                        problems.Add(expected == null
-                            ? $"The engine skips base {name}: the stack {type} has no field {fieldName}."
-                            : $"The engine skips base {name}: field {fieldName} of the stack {type} takes type {expected}, but the base has type {fragmentType ?? "(none)"}.");
+                        problems.Add(string.IsNullOrEmpty(fieldName)
+                            ? $"The engine does not play this event: base {name} has type {fragmentType ?? "(none)"}, not the type {type ?? "(none)"} of {who}."
+                            : $"The engine does not play this event: base {name} has type {fragmentType ?? "(none)"}, but field {fieldName} of the stack {type} takes {expected}.");
+                        rejected = true;
                         continue;
                     }
 
-                    Merge(fragment, name, string.IsNullOrEmpty(fieldName) ? field : fieldName, inheritType: false);
+                    if (Visit())
+                    {
+                        Merge(fragment, name, string.IsNullOrEmpty(fieldName) ? field : fieldName, inheritType: false);
+                    }
                 }
             }
 
-            KVObject? Visit(string name)
+            bool Visit()
             {
-                if (visits >= MaxResolvedVisits || findEvent(name) is not { } baseEvent)
+                if (visits >= MaxResolvedVisits)
                 {
-                    return null;
+                    return false;
                 }
 
                 visits++;
-                return baseEvent;
+                return true;
             }
         }
 
@@ -501,15 +504,11 @@ namespace ValveResourceFormat.ResourceTypes
 
         private string? GetFieldDefault(string stack, string field)
         {
-            foreach (var (name, definition, _) in GetStackFields(stack))
-            {
-                if (name.Equals(field, StringComparison.OrdinalIgnoreCase))
-                {
-                    return definition.GetStringProperty("value");
-                }
-            }
+            var (fields, byName) = GetStackFieldMap(stack);
 
-            return null;
+            return byName.TryGetValue(field, out var i) && fields[i].Field.GetStringProperty("data_type") == "public_opvar"
+                ? fields[i].Field.GetStringProperty("value")
+                : null;
         }
 
         /// <summary>
@@ -604,14 +603,30 @@ namespace ValveResourceFormat.ResourceTypes
         /// <returns>Each field name, its definition with <c>data_type</c>, the default <c>value</c> and <c>_system_properties</c>,
         /// and the stack that declares it, which differs from <paramref name="stackName"/> for imported fields. The stack's
         /// own fields come first.</returns>
-        public List<(string Name, KVObject Field, string Stack)> GetStackFields(string stackName)
+        public IReadOnlyList<(string Name, KVObject Field, string Stack)> GetStackFields(string stackName) => GetStackFieldMap(stackName).Fields;
+
+        private (List<(string Name, KVObject Field, string Stack)> Fields, Dictionary<string, int> ByName) GetStackFieldMap(string stackName)
         {
+            lock (stackFields)
+            {
+                if (stackFields.TryGetValue(stackName, out var cached))
+                {
+                    return cached;
+                }
+            }
+
             var fields = new List<(string Name, KVObject Field, string Stack)>();
+            var byName = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             AddFields(stackName, imported: false, prefix: string.Empty);
 
-            return fields;
+            lock (stackFields)
+            {
+                stackFields[stackName] = (fields, byName);
+            }
+
+            return (fields, byName);
 
             void AddFields(string stack, bool imported, string prefix)
             {
@@ -643,10 +658,10 @@ namespace ValveResourceFormat.ResourceTypes
                         }
 
                         var name = prefix + fieldName;
-                        var existing = fields.FindIndex(f => f.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
 
-                        if (existing < 0)
+                        if (!byName.TryGetValue(name, out var existing))
                         {
+                            byName.Add(name, fields.Count);
                             fields.Add((name, field, stack));
                         }
                         else if (!imported && fields[existing].Stack == stack)
@@ -680,7 +695,11 @@ namespace ValveResourceFormat.ResourceTypes
             }
         }
 
-        private void IndexReferences()
+        /// <summary>
+        /// Builds the reverse references that <see cref="GetReferencedBy"/> and <see cref="GetEventsUsingSound"/> read now,
+        /// rather than on their first call.
+        /// </summary>
+        public void IndexReferences()
         {
             var events = new List<(string Key, string Event)>();
             var sounds = new List<(string Key, string Sound)>();
