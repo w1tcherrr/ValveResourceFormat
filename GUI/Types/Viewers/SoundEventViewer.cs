@@ -28,7 +28,7 @@ namespace GUI.Types.Viewers
     {
         private const string PreviewChannel = "sound_event_viewer";
 
-        private sealed record EventRow(string Name, string File, KVObject Data, string Type, float Duration, bool Duplicate, bool MissingBase, bool MissingSound, bool Playable);
+        private sealed record EventRow(string Name, string File, KVObject Data, string Type, float Duration, bool Duplicate, bool HasProblems, bool MissingBase, bool MissingSound, bool Playable);
 
         private enum ValueSource
         {
@@ -37,6 +37,9 @@ namespace GUI.Types.Viewers
             Default,
             Group,
         }
+
+        // Read by the engine when it parses the event, outside of its stack
+        private static readonly HashSet<string> EventKeys = new(["groups", "preload_vsnds", "memory_type"], StringComparer.OrdinalIgnoreCase);
 
         private static readonly ConditionalWeakTable<VrfGuiContext, Task<(SoundEventIndex Index, List<Captions> Captions)>> Indexes = [];
 
@@ -120,7 +123,7 @@ namespace GUI.Types.Viewers
 
             scopeBox = CreateFilterBox("Scope", ["This file", "All files"]);
             typeBox = CreateFilterBox("Type", ["All types"]);
-            statusBox = CreateFilterBox("Status", ["All events", "Duplicate names", "Missing base events", "Missing sounds", "Not playable here"]);
+            statusBox = CreateFilterBox("Status", ["All events", "Duplicate names", "Rejected or skipped bases", "Missing base events", "Missing sounds", "Not playable here"]);
             scopeBox.SelectedIndexChanged += (_, _) => OnScopeChanged();
 
             var filters = new TableLayoutPanel
@@ -351,7 +354,8 @@ namespace GUI.Types.Viewers
 
         private static (SoundEventIndex Index, List<Captions> Captions) BuildIndex(VrfGuiContext context)
         {
-            var eventFiles = context.EnumerateFiles("vsndevts_c").ToList();
+            var manifestFiles = SoundEventIndex.GetManifestFiles(context.FileLoaderNoCache, "soundevents/soundevents_manifest.vrman").Select(static file => file + GameFileLoader.CompiledFileSuffix);
+            List<string> eventFiles = [.. manifestFiles.Concat(context.EnumerateFiles("vsndevts_c")).Distinct(StringComparer.OrdinalIgnoreCase)];
             var stackFiles = context.EnumerateFiles("vsndstck_c").ToList();
             var index = SoundEventIndex.Build(context.FileLoaderNoCache, eventFiles, stackFiles);
             var captions = new List<Captions>();
@@ -493,7 +497,7 @@ namespace GUI.Types.Viewers
 
                 foreach (var (file, data) in definitions)
                 {
-                    var resolved = SoundEventIndex.Resolve(data, loadedIndex.Find);
+                    var (resolved, problems, _) = loadedIndex.Resolve(data);
                     var type = GetString(resolved, "type");
                     var duration = resolved.FirstOrDefault(static r => r.Key == "vsnd_duration").Value is { } durationValue && IsNumber(durationValue)
                         ? durationValue.ToSingle(CultureInfo.InvariantCulture)
@@ -512,7 +516,7 @@ namespace GUI.Types.Viewers
                         missingSound |= !exists;
                     }
 
-                    result.Add(new EventRow(name, file, data, type, duration, definitions.Count > 1, missingBase, missingSound, IsPlayable(type)));
+                    result.Add(new EventRow(name, file, data, type, duration, definitions.Count > 1, problems.Count > 0, missingBase, missingSound, IsPlayable(type)));
                 }
             }
 
@@ -611,9 +615,10 @@ namespace GUI.Types.Viewers
                 && status switch
                 {
                     1 => row.Duplicate,
-                    2 => row.MissingBase,
-                    3 => row.MissingSound,
-                    4 => !row.Playable,
+                    2 => row.HasProblems,
+                    3 => row.MissingBase,
+                    4 => row.MissingSound,
+                    5 => !row.Playable,
                     _ => true,
                 })];
 
@@ -788,10 +793,13 @@ namespace GUI.Types.Viewers
             if (definitions.Count > 1)
             {
                 var others = string.Join(", ", definitions.Where(d => d.File != row.File).Select(static d => d.File));
-                notices.Add(definitions[0].File == row.File
-                    ? $"Also defined in {others}, this definition is used."
-                    : $"Also defined in {others}. The definition in {definitions[0].File} is used, as it is found first.");
+                notices.Add(definitions[^1].File == row.File
+                    ? $"Also defined in {others}. This definition is used, as it loads last."
+                    : $"Also defined in {others}. The definition in {definitions[^1].File} is used, as it loads last.");
             }
+
+            var (resolved, problems, _) = index.Resolve(row.Data);
+            notices.AddRange(problems);
 
             if (!row.Playable)
             {
@@ -800,11 +808,10 @@ namespace GUI.Types.Viewers
                     : $"Events of type {row.Type} cannot be played here. Play its sounds below.");
             }
 
-            noticeLabel.Text = string.Join(" ", notices);
+            noticeLabel.Text = string.Join(Environment.NewLine, notices);
             noticeLabel.Visible = notices.Count > 0;
-            noticeLabel.ForeColor = Themer.CurrentThemeColors.ContrastSoft;
+            noticeLabel.ForeColor = problems.Count > 0 ? Themer.CurrentThemeColors.Attention : Themer.CurrentThemeColors.ContrastSoft;
 
-            var resolved = Resolve(row);
             var lineText = GetString(resolved, "line_text");
             var closedCaption = captions.Select(c => c[row.Name.ToLowerInvariant()]).FirstOrDefault(static c => c != null);
             string?[] captionLines =
@@ -832,9 +839,6 @@ namespace GUI.Types.Viewers
             ShowLinks(row);
         }
 
-        private List<(string Key, KVObject Value, string? Source)> Resolve(EventRow row)
-            => SoundEventIndex.Resolve(row.Data, index!.Find);
-
         private void ShowEmptyDetails()
         {
             titleLabel.Text = string.Empty;
@@ -856,17 +860,17 @@ namespace GUI.Types.Viewers
                 return;
             }
 
-            var resolved = Resolve(current);
-            var values = new Dictionary<string, (KVObject Value, string? Source)>(StringComparer.OrdinalIgnoreCase);
+            var resolved = index.Resolve(current.Data).Keys;
+            var values = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
-            foreach (var (key, value, source) in resolved)
+            for (var i = 0; i < resolved.Count; i++)
             {
-                values[key] = (value, source);
+                values.TryAdd(resolved[i].Key, i);
             }
 
             var fields = current.Type.Length > 0 ? index.GetStackFields(current.Type) : [];
-            var groups = new List<(string Name, List<(string Key, KVObject? Value, string Source, ValueSource Kind)> Rows)>();
-            var shown = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var groups = new List<(string Name, List<(string Key, KVObject? Value, string Source, ValueSource Kind, bool EditorHidden)> Rows)>();
+            var shown = new HashSet<int>();
 
             foreach (var (name, field, stack) in fields)
             {
@@ -879,22 +883,41 @@ namespace GUI.Types.Viewers
                     groups.Add((groupName, group));
                 }
 
-                if (values.TryGetValue(name, out var value))
+                var editorHidden = IsEditorHidden(field, resolved, values, fields);
+
+                if (values.ContainsKey(name))
                 {
-                    group.Add((name, value.Value, value.Source ?? string.Empty, value.Source == null ? ValueSource.Own : ValueSource.Inherited));
-                    shown.Add(name);
+                    for (var i = 0; i < resolved.Count; i++)
+                    {
+                        var (key, value, source) = resolved[i];
+
+                        if (key.Equals(name, StringComparison.OrdinalIgnoreCase) && shown.Add(i))
+                        {
+                            group.Add((name, value, source ?? string.Empty, source == null ? ValueSource.Own : ValueSource.Inherited, editorHidden));
+                        }
+                    }
                 }
-                else if (defaultsBox.Checked && IsFieldEnabled(field, values, fields))
+                else if (defaultsBox.Checked)
                 {
-                    group.Add((name, field.TryGetValue("value", out var defaultValue) ? defaultValue : null, $"default ({stack})", ValueSource.Default));
+                    var origin = stack.Equals(current.Type, StringComparison.OrdinalIgnoreCase) ? stack : $"{stack}, imported";
+                    group.Add((name, field.TryGetValue("value", out var defaultValue) ? defaultValue : null, $"default ({origin})", ValueSource.Default, editorHidden));
                 }
             }
 
-            var other = resolved.Where(r => !shown.Contains(r.Key) && r.Key != "type").Select(static r => (r.Key, (KVObject?)r.Value, r.Source ?? string.Empty, r.Source == null ? ValueSource.Own : ValueSource.Inherited)).ToList();
+            var unshown = resolved.Where((r, i) => !shown.Contains(i) && !r.Key.Equals("type", StringComparison.OrdinalIgnoreCase))
+                .Select(static r => (r.Key, (KVObject?)r.Value, r.Source ?? string.Empty, r.Source == null ? ValueSource.Own : ValueSource.Inherited, false))
+                .ToList();
+            var eventKeys = unshown.FindAll(static r => EventKeys.Contains(r.Key));
+            var other = unshown.FindAll(static r => !EventKeys.Contains(r.Key));
+
+            if (eventKeys.Count > 0)
+            {
+                groups.Add(("Event", eventKeys));
+            }
 
             if (other.Count > 0)
             {
-                groups.Add((fields.Count > 0 ? "Not in stack" : "Keys", other));
+                groups.Add((fields.Count > 0 ? "Not in stack, ignored by the engine" : "Keys", other));
             }
 
             propertyGrid.SuspendLayout();
@@ -915,7 +938,7 @@ namespace GUI.Types.Viewers
                 header.DefaultCellStyle.SelectionBackColor = Themer.CurrentThemeColors.App;
                 header.DefaultCellStyle.SelectionForeColor = Themer.CurrentThemeColors.Contrast;
 
-                foreach (var (key, value, source, kind) in groupRows)
+                foreach (var (key, value, source, kind, editorHidden) in groupRows)
                 {
                     var rowIndex = propertyGrid.Rows.Add(key, value == null ? string.Empty : FormatValue(value), source);
                     var gridRow = propertyGrid.Rows[rowIndex];
@@ -943,6 +966,12 @@ namespace GUI.Types.Viewers
                             gridRow.DefaultCellStyle.ForeColor = Themer.CurrentThemeColors.ContrastSoft;
                             break;
                     }
+
+                    if (editorHidden)
+                    {
+                        gridRow.DefaultCellStyle.ForeColor = Themer.CurrentThemeColors.Border;
+                        gridRow.Cells[0].ToolTipText = "The editor hides this field while the flag that enables it is off. It has no effect on the engine.";
+                    }
                 }
             }
 
@@ -950,24 +979,25 @@ namespace GUI.Types.Viewers
             propertyGrid.ClearSelection();
         }
 
-        private static bool IsFieldEnabled(KVObject field, Dictionary<string, (KVObject Value, string? Source)> values, List<(string Name, KVObject Field, string Stack)> fields)
+        private static bool IsEditorHidden(KVObject field, List<(string Key, KVObject Value, string? Source)> resolved, Dictionary<string, int> values,
+            List<(string Name, KVObject Field, string Stack)> fields)
         {
             var flag = field.GetSubCollection("_system_properties")?.GetStringProperty("display_edit_flag");
 
             if (string.IsNullOrEmpty(flag))
             {
-                return true;
+                return false;
             }
 
             var flagName = flag.StartsWith("public.", StringComparison.Ordinal) ? flag["public.".Length..] : flag;
 
-            if (values.TryGetValue(flagName, out var value))
+            if (values.TryGetValue(flagName, out var valueIndex))
             {
-                return IsTrue(value.Value);
+                return !IsTrue(resolved[valueIndex].Value);
             }
 
             var flagField = fields.Find(f => f.Name == flagName).Field;
-            return flagField == null || !flagField.TryGetValue("value", out var defaultValue) || IsTrue(defaultValue);
+            return flagField != null && flagField.TryGetValue("value", out var defaultValue) && !IsTrue(defaultValue);
         }
 
         private static bool IsTrue(KVObject value) => value.ValueType switch
@@ -1209,7 +1239,7 @@ namespace GUI.Types.Viewers
             var target = tag switch
             {
                 string name => name,
-                ValueSource.Inherited => (string)grid.Rows[rowIndex].Cells[2].Value!,
+                ValueSource.Inherited => ((string)grid.Rows[rowIndex].Cells[2].Value!).Split(" via ")[0],
                 _ => null,
             };
 

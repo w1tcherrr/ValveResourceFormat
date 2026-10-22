@@ -1047,49 +1047,7 @@ public sealed class SoundEventPlayer : IDisposable
         activeSoundscapeEvents.Clear();
     }
 
-    private IEnumerable<string> GetSoundEventFiles()
-    {
-        var visitedManifests = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        return CollectSoundEventFiles("soundevents/soundevents_manifest.vrman", visitedManifests);
-    }
-
-    /// <summary>
-    /// Manifests can reference other manifests (e.g. a top-level .vrman listing per-game .vrman
-    /// files, which in turn list the actual .vsndevts files), so entries are recursed into rather
-    /// than assumed to all be sound event files. Guards against cycles with <paramref name="visitedManifests"/>.
-    /// </summary>
-    private IEnumerable<string> CollectSoundEventFiles(string manifestFileName, HashSet<string> visitedManifests)
-    {
-        if (!visitedManifests.Add(manifestFileName))
-        {
-            yield break;
-        }
-
-        using var manifestResource = fileLoader.LoadFileCompiled(manifestFileName);
-
-        if (manifestResource?.DataBlock is not ResourceManifest manifest)
-        {
-            yield break;
-        }
-
-        foreach (var resourceGroup in manifest.Resources)
-        {
-            foreach (var fileName in resourceGroup)
-            {
-                if (fileName.EndsWith(".vrman", StringComparison.OrdinalIgnoreCase))
-                {
-                    foreach (var nestedFile in CollectSoundEventFiles(fileName, visitedManifests))
-                    {
-                        yield return nestedFile;
-                    }
-                }
-                else
-                {
-                    yield return fileName;
-                }
-            }
-        }
-    }
+    private List<string> GetSoundEventFiles() => SoundEventIndex.GetManifestFiles(fileLoader, "soundevents/soundevents_manifest.vrman");
 
     /// <summary>Stops the mixing thread and disposes the mixer and the audio device.</summary>
     public void Dispose()

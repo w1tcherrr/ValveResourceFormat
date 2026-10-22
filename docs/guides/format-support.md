@@ -356,11 +356,10 @@ duplicate stack names collapse to the last one. VMix DSP graphs are dumped but n
 interpreted.
 
 The sound event viewer lists the events of a file or of the whole game, with the keys each
-inherits through `base`, its stack's defaults and the events and sounds it links. Legacy
-events stored as KeyValues1 operator stacks are shown flattened to the modern layout, and
-which of two files defining the same event wins follows search order, not verified engine
-behaviour. Events play only for the stack types the renderer implements; the rest can only
-play their sounds one at a time.
+inherits through `base`, its stack's defaults and the events and sounds it links, and warns
+where the engine would reject an event or skip a base. Legacy events stored as KeyValues1
+operator stacks are shown mapped to the modern layout. Events play only for the stack types
+the renderer implements; the rest can only play their sounds one at a time.
 
 ## Choreo, Captions, and UI
 

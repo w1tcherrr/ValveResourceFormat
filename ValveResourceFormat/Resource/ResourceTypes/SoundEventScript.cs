@@ -1,4 +1,6 @@
+using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Text;
 using ValveKeyValue;
 using ValveResourceFormat.Serialization.KeyValues;
@@ -26,9 +28,10 @@ namespace ValveResourceFormat.ResourceTypes
         /// </summary>
         /// <remarks>
         /// Legacy files store each event as text. Events written as KeyValues3 text are parsed as they are.
-        /// Events written as KeyValues1 operator stacks are flattened to the modern layout: the referenced
-        /// stack becomes <c>type</c>, each operator variable becomes a key holding its value, and a value
-        /// listing several strings becomes an array.
+        /// Events written as KeyValues1 operator stacks are mapped to the modern layout as the engine does: the
+        /// <c>reference_stack</c> of <c>update_stack.reference_operator</c> becomes <c>type</c>, and the <c>value</c> of each of
+        /// its operator variables becomes a key of that name, a string or an array of strings when the value has sub-keys.
+        /// Everything else is dropped.
         /// </remarks>
         public IReadOnlyList<(string Name, KVObject Data)> Events => events ??= ReadEvents();
 
@@ -72,47 +75,35 @@ namespace ValveResourceFormat.ResourceTypes
                 return KeyValues3Serializer.Deserialize(stream);
             }
 
-            var operators = KeyValues1Serializer.DeserializeWithoutRoot(stream);
+            var referenceOperator = KeyValues1Serializer.DeserializeWithoutRoot(stream)
+                .GetSubCollection("operator_stacks")?.GetSubCollection("update_stack")?.GetSubCollection("reference_operator");
             var soundEvent = KVObject.Collection();
 
-            foreach (var stack in operators.GetSubCollection("operator_stacks") ?? KVObject.Collection())
+            if (referenceOperator == null)
             {
-                foreach (var op in stack.Value)
-                {
-                    if (op.Value.GetStringProperty("reference_stack") is { } referenceStack)
-                    {
-                        soundEvent.TryAdd("type", referenceStack);
-                    }
+                return soundEvent;
+            }
 
-                    foreach (var variable in op.Value.GetSubCollection("operator_variables") ?? KVObject.Collection())
-                    {
-                        if (variable.Value.TryGetValue("value", out var value))
-                        {
-                            soundEvent.TryAdd(variable.Key, FlattenStringList(value));
-                        }
-                    }
+            if (referenceOperator.GetStringProperty("reference_stack") is { } referenceStack)
+            {
+                soundEvent["type"] = referenceStack;
+            }
+
+            foreach (var (name, variable) in referenceOperator.GetSubCollection("operator_variables") ?? KVObject.Collection())
+            {
+                if (!variable.TryGetValue("value", out var value))
+                {
+                    continue;
                 }
+
+                soundEvent[name] = value.ValueType == KVValueType.Collection
+                    ? KVObject.Array(value.Values.Select(static item => (KVObject)ToText(item)))
+                    : ToText(value);
             }
 
             return soundEvent;
         }
 
-        private static KVObject FlattenStringList(KVObject value)
-        {
-            if (value.ValueType != KVValueType.Collection || value.Count == 0)
-            {
-                return value;
-            }
-
-            foreach (var child in value)
-            {
-                if (child.Value.ValueType != KVValueType.String)
-                {
-                    return value;
-                }
-            }
-
-            return KVObject.Array(value.Values);
-        }
+        private static string ToText(KVObject value) => value.ValueType == KVValueType.String ? (string)value : value.ToString(CultureInfo.InvariantCulture);
     }
 }

@@ -14,12 +14,13 @@ public sealed class SoundEventBank
     /// <summary>Gets the number of loaded sound event definitions.</summary>
     public int Count => soundEvents.Count;
 
-    /// <summary>Adds a single sound event definition. An existing definition with the same name is kept.</summary>
+    /// <summary>Adds a single sound event definition. It replaces an existing definition with the same name, as the engine does.</summary>
     public void AddSoundEvent(string name, KVObject soundEventData)
     {
         if (soundEventData != null)
         {
-            soundEvents.TryAdd(name, soundEventData);
+            soundEvents[name] = soundEventData;
+            definitions.Remove(name);
         }
     }
 
@@ -51,7 +52,10 @@ public sealed class SoundEventBank
         }
     }
 
-    /// <summary>Gets a sound event definition by name (case-insensitive), or null when unknown. Resolved and parsed once, then cached.</summary>
+    /// <summary>
+    /// Gets a sound event definition by name (case-insensitive), or null when unknown. Resolved and parsed once, then cached.
+    /// Events that visit more bases than the engine's default limit still play, as games can raise the limit.
+    /// </summary>
     public SoundEventDefinition? GetSoundEvent(string name)
     {
         if (definitions.TryGetValue(name, out var definition))
@@ -64,25 +68,24 @@ public sealed class SoundEventBank
             return null;
         }
 
-        definition = new SoundEventDefinition(name, ResolveBase(soundEvent));
-        definitions.Add(name, definition);
-        return definition;
-    }
-
-    private KVObject ResolveBase(KVObject soundEvent)
-    {
         if (!soundEvent.ContainsKey("base"))
         {
-            return soundEvent;
+            definition = new SoundEventDefinition(name, soundEvent);
+            definitions.Add(name, definition);
+            return definition;
         }
 
+        var (keys, _, _) = SoundEventIndex.Resolve(soundEvent, name => soundEvents.GetValueOrDefault(name));
         var merged = KVObject.Collection();
 
-        foreach (var (key, value, _) in SoundEventIndex.Resolve(soundEvent, name => soundEvents.GetValueOrDefault(name)))
+        // Keys of a sub-stack can repeat the event's own key names, which come first
+        foreach (var (key, value, _) in keys)
         {
-            merged.Add(key, value);
+            merged.TryAdd(key, value);
         }
 
-        return merged;
+        definition = new SoundEventDefinition(name, merged);
+        definitions.Add(name, definition);
+        return definition;
     }
 }
