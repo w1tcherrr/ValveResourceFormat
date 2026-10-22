@@ -1274,13 +1274,11 @@ namespace GUI.Types.Viewers
             }
 
             List<string> lines = [.. problems];
-            var collisions = row.Type.Length > 0 ? index.GetStackFieldCollisions(row.Type) : [];
-
-            foreach (var (_, field) in SoundEventIndex.GetBases(row.Data))
+            foreach (var (name, field) in SoundEventIndex.GetBases(row.Data))
             {
-                foreach (var collision in collisions.Where(c => field != null && IsInBlock(c.Blocks, field)))
+                foreach (var shifted in field != null && row.Type.Length > 0 ? index.GetShiftedBlockFields(row.Type, field) : [])
                 {
-                    lines.Add($"{collision.Stack} field {collision.Name} collides with the stack's own field, so the engine shifts this base's later values by one field.");
+                    lines.Add($"Field {shifted} of {field} is left out here, as this stack has a field of its name, so the engine shifts the later values of base {name} by one field.");
                 }
             }
 
