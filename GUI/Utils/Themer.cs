@@ -25,7 +25,7 @@ namespace GUI.Utils
             /// <summary>For borders meant to visually separate parts of the interface.</summary>
             public required Color Border { get; init; }
 
-            /// <summary>For the outline of input controls like text boxes, dropdowns and buttons.</summary>
+            /// <summary>For the outline that the app draws around text boxes and dropdowns.</summary>
             public required Color ControlBorder { get; init; }
 
             /// <summary>For any element which needs contrast from the background, like text</summary>
@@ -192,7 +192,12 @@ namespace GUI.Utils
             {
                 opt.BackColor = opt.Parent?.BackColor ?? CurrentThemeColors.AppMiddle;
             }
-            if (control is ComboBox combo)
+            if (control is ThemedComboBox themedCombo)
+            {
+                themedCombo.ForeColor = CurrentThemeColors.Contrast;
+                themedCombo.UpdateBackColor();
+            }
+            else if (control is ComboBox combo)
             {
                 combo.ForeColor = CurrentThemeColors.Contrast;
                 combo.BackColor = combo.Parent?.BackColor ?? CurrentThemeColors.AppMiddle;

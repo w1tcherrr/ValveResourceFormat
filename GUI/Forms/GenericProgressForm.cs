@@ -35,6 +35,11 @@ namespace GUI.Forms
         public bool WaitForWorkToStop { get; set; }
 
         /// <summary>
+        /// When set, Escape cancels the work as the Cancel button does, not only closes the dialog once the work is done.
+        /// </summary>
+        public bool CancelOnEscape { get; init; }
+
+        /// <summary>
         /// When cleared, the dialog can not be cancelled and closes once the work completes.
         /// </summary>
         public bool CanCancel
@@ -180,6 +185,11 @@ namespace GUI.Forms
         protected override void OnShown(EventArgs e)
         {
             baseTitle = Text;
+
+            if (CancelOnEscape && CanCancel)
+            {
+                CancelButton = cancelButton;
+            }
             startTimestamp = Stopwatch.GetTimestamp();
 
             // Show anything that was set before the handle existed

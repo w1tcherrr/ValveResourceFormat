@@ -1086,7 +1086,7 @@ namespace GUI
 
             var result = searchForm.ShowDialog();
             var request = searchForm.Request;
-            searchForm.SetFolder(null, onlyInFolder: false);
+            searchForm.ReleasePackage();
 
             if (result == DialogResult.OK && request is not { Text: "", Folder: null, Extension: null, FilterKey: null })
             {

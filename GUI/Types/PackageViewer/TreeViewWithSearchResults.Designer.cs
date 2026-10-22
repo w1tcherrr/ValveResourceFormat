@@ -176,12 +176,9 @@ namespace GUI.Types.PackageViewer
             //
             // searchStatusLabel
             //
-            searchStatusLabel.AutoEllipsis = true;
             searchStatusLabel.Dock = System.Windows.Forms.DockStyle.Fill;
             searchStatusLabel.Name = "searchStatusLabel";
             searchStatusLabel.TabIndex = 5;
-            searchStatusLabel.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
-            searchStatusLabel.UseMnemonic = false;
             // 
             // gridSizeSlider
             // 

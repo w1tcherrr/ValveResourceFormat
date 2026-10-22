@@ -125,6 +125,11 @@ namespace GUI.Types.PackageViewer
         {
             base.OnResize(e);
             AdjustColumnWidths();
+
+            if (Items.Count == 0 && EmptyText != null)
+            {
+                Invalidate();
+            }
         }
 
         internal List<ListViewItem> GetSelectedVirtualItems()
@@ -195,7 +200,7 @@ namespace GUI.Types.PackageViewer
                 e.Bounds.Left, e.Bounds.Bottom - 1,
                 e.Bounds.Right, e.Bounds.Bottom - 1);
 
-            if (e.ColumnIndex < Columns.Count - 1)
+            if (e.Header?.DisplayIndex < Columns.Count - 1)
             {
                 var pos = e.Bounds.Right - 2;
                 e.Graphics.DrawLine(borderPen,

@@ -17,13 +17,15 @@ namespace GUI.Forms
         internal static readonly StringComparer NumericComparer =
             StringComparer.Create(CultureInfo.InvariantCulture, CompareOptions.IgnoreCase | CompareOptions.NumericOrdering);
 
-        /// <summary>A dropdown item for a key, shown with how many files have it.</summary>
-        private record CountedEntry(string Key, int Count, string? Label = null)
+        /// <summary>A dropdown item for a key, shown with how many files have it, and for an asset info key the values it has.</summary>
+        private sealed class FilterEntry(string key, int count, Dictionary<string, int>? values = null, string? label = null)
         {
-            public sealed override string ToString() => string.Create(CultureInfo.InvariantCulture, $"{Label ?? Key} ({Count})");
-        }
+            public string Key => key;
+            public int Count => count;
+            public Dictionary<string, int>? Values => values;
 
-        private sealed record FilterKeyEntry(string Key, int Count, Dictionary<string, int> Values) : CountedEntry(Key, Count);
+            public override string ToString() => string.Create(CultureInfo.InvariantCulture, $"{label ?? key} ({count})");
+        }
 
         private const string AnyKey = "Any key";
         private const string AnyValue = "Any value";
@@ -33,15 +35,18 @@ namespace GUI.Forms
         private int lastPopulatedKeysHash;
         private VirtualPackageNode? folder;
         private Dictionary<string, List<PackageEntry>>? packageEntries;
-        private FilterKeyEntry? valuesKey;
+        private FilterEntry? valuesKey;
         private bool hasInputError;
+        private string? extensionChoice;
+        private string? keyChoice;
+        private string? valueChoice;
 
         private SearchTarget SelectedTarget => contentsRadioButton.Checked ? SearchTarget.Contents : pathRadioButton.Checked ? SearchTarget.Path : SearchTarget.Name;
 
-        private FilterKeyEntry? SelectedFilterKey => FindTypedItem(filterKeyComboBox) as FilterKeyEntry;
+        private FilterEntry? SelectedFilterKey => FindTypedItem(filterKeyComboBox) as FilterEntry;
 
         private string? SelectedFilterValue => filterValueComboBox.Enabled && filterValueComboBox.Text is { Length: > 0 } value && !value.Equals(AnyValue, StringComparison.OrdinalIgnoreCase)
-            ? (FindTypedItem(filterValueComboBox) as CountedEntry)?.Key ?? value
+            ? (FindTypedItem(filterValueComboBox) as FilterEntry)?.Key ?? value
             : null;
 
         /// <summary>
@@ -55,7 +60,7 @@ namespace GUI.Forms
             regexToggle.Checked,
             hexBytesToggle.Checked && SelectedTarget == SearchTarget.Contents,
             onlyInFolderCheckBox.Checked ? folder : null,
-            (extensionComboBox.SelectedItem as CountedEntry)?.Key,
+            (extensionComboBox.SelectedItem as FilterEntry)?.Key,
             SelectedFilterKey?.Key,
             SelectedFilterKey != null ? SelectedFilterValue : null);
 
@@ -122,8 +127,8 @@ namespace GUI.Forms
                 return ($"Asset info: no key named \"{filterKeyComboBox.Text}\"", filterKeyComboBox);
             }
 
-            if (SelectedFilterKey is { } key && SelectedFilterValue is { } value
-                && FindTypedItem(filterValueComboBox) == null && key.Values.Count < TreeViewWithSearchResults.MaxSearchDataValues)
+            if (SelectedFilterKey is { Values: { } values } key && SelectedFilterValue is { } value
+                && FindTypedItem(filterValueComboBox) == null && values.Count < TreeViewWithSearchResults.MaxSearchDataValues)
             {
                 return ($"Asset info: no value \"{value}\" for {key.Key}", filterValueComboBox);
             }
@@ -208,7 +213,7 @@ namespace GUI.Forms
             }
 
             return comboBox.Items.Cast<object>().FirstOrDefault(item => string.Equals(comboBox.GetItemText(item), text, StringComparison.OrdinalIgnoreCase)
-                || (item is CountedEntry entry && string.Equals(entry.Key, text, StringComparison.OrdinalIgnoreCase)));
+                || (item is FilterEntry entry && string.Equals(entry.Key, text, StringComparison.OrdinalIgnoreCase)));
         }
 
         private void FindTextBoxPanel_Paint(object? sender, PaintEventArgs e)
@@ -258,8 +263,8 @@ namespace GUI.Forms
         /// </summary>
         private void UpdateExtensions()
         {
-            var selected = (extensionComboBox.SelectedItem as CountedEntry)?.Key;
-            var counts = new SortedDictionary<string, int>(NumericComparer);
+            var selected = (extensionComboBox.SelectedItem as FilterEntry)?.Key ?? extensionChoice;
+            var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
             if (onlyInFolderCheckBox.Checked && folder != null)
             {
@@ -278,14 +283,14 @@ namespace GUI.Forms
             extensionComboBox.Items.Add("Any extension");
             extensionComboBox.SelectedIndex = 0;
 
-            foreach (var (extension, count) in counts)
+            foreach (var (extension, count) in counts.OrderBy(static count => count.Key, NumericComparer))
             {
                 if (count == 0)
                 {
                     continue;
                 }
 
-                var index = extensionComboBox.Items.Add(new CountedEntry(extension, count, extension == " " ? "No extension" : null));
+                var index = extensionComboBox.Items.Add(new FilterEntry(extension, count, label: extension == " " ? "No extension" : null));
 
                 if (selected != null && NumericComparer.Equals(extension, selected))
                 {
@@ -294,9 +299,14 @@ namespace GUI.Forms
             }
 
             extensionComboBox.EndUpdate();
+
+            if (packageEntries != null)
+            {
+                extensionChoice = null;
+            }
         }
 
-        private static void CountExtensions(VirtualPackageNode node, SortedDictionary<string, int> counts)
+        private static void CountExtensions(VirtualPackageNode node, Dictionary<string, int> counts)
         {
             foreach (var file in node.Files)
             {
@@ -322,12 +332,31 @@ namespace GUI.Forms
             folderPathLabel.Invalidate();
             toolTip.SetToolTip(folderPathLabel, folder != null ? PackageViewer.GetFolderPath(folder) : null);
 
-            if (onlyInFolder)
+            if (onlyInFolder && !onlyInFolderCheckBox.Checked)
             {
                 onlyInFolderCheckBox.Checked = true;
             }
+            else
+            {
+                UpdateExtensions();
+            }
+        }
 
-            UpdateExtensions();
+        /// <summary>
+        /// Lets go of the package the dialog was opened for, keeping the chosen extension and asset info filter for the next time.
+        /// </summary>
+        public void ReleasePackage()
+        {
+            extensionChoice = (extensionComboBox.SelectedItem as FilterEntry)?.Key;
+            keyChoice = SelectedFilterKey?.Key;
+            valueChoice = SelectedFilterValue;
+
+            packageEntries = null;
+            SetFolder(null, onlyInFolder: false);
+
+            filterLoadVersion++;
+            lastPopulatedKeysHash = 0;
+            SetFilterKeyItems(["No asset info"], enabled: false);
         }
 
         private void FolderPathLabel_Paint(object? sender, PaintEventArgs e)
@@ -391,7 +420,20 @@ namespace GUI.Forms
                 return;
             }
 
-            SetFilterKeyItems([AnyKey, .. keys.OrderBy(kv => kv.Key, NumericComparer).Select(kv => new FilterKeyEntry(kv.Key, kv.Value.Count, kv.Value.Values))], enabled: true);
+            SetFilterKeyItems([AnyKey, .. keys.OrderBy(kv => kv.Key, NumericComparer).Select(kv => new FilterEntry(kv.Key, kv.Value.Count, kv.Value.Values))], enabled: true);
+
+            if (filterKeyComboBox.Items.OfType<FilterEntry>().FirstOrDefault(entry => entry.Key == keyChoice) is { } key)
+            {
+                filterKeyComboBox.SelectedItem = key;
+
+                if (valueChoice != null)
+                {
+                    filterValueComboBox.Text = valueChoice;
+                }
+            }
+
+            keyChoice = null;
+            valueChoice = null;
         }
 
         private void SetFilterKeyItems(object[] items, bool enabled)
@@ -423,9 +465,9 @@ namespace GUI.Forms
             filterValueComboBox.Items.Clear();
             filterValueComboBox.Items.Add(AnyValue);
 
-            if (entry != null)
+            if (entry?.Values is { } values)
             {
-                filterValueComboBox.Items.AddRange([.. entry.Values.OrderBy(static value => value.Key, NumericComparer).Select(static value => new CountedEntry(value.Key, value.Value))]);
+                filterValueComboBox.Items.AddRange([.. values.OrderBy(static value => value.Key, NumericComparer).Select(static value => new FilterEntry(value.Key, value.Value))]);
             }
 
             filterValueComboBox.SelectedIndex = 0;

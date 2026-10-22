@@ -65,8 +65,7 @@ public class ThemedComboBox : ComboBox
         UpdateBackColor();
     }
 
-    /// <summary>Gives a box that can be typed in the background of a text box, and a list the background behind it.</summary>
-    private void UpdateBackColor()
+    internal void UpdateBackColor()
         => BackColor = DropDownStyle == ComboBoxStyle.DropDown ? Themer.CurrentThemeColors.AppMiddle : Parent?.BackColor ?? Themer.CurrentThemeColors.AppMiddle;
 
     protected override void WndProc(ref Message m)
@@ -81,10 +80,26 @@ public class ThemedComboBox : ComboBox
         }
 
         using var graphics = Graphics.FromHwnd(Handle);
-        using var borderPen = new Pen(HasError ? Themer.CurrentThemeColors.Attention : Themer.CurrentThemeColors.ControlBorder);
+        var borderColor = HasError ? Themer.CurrentThemeColors.Attention
+            : Focused && DropDownStyle == ComboBoxStyle.DropDownList ? Themer.CurrentThemeColors.Accent
+            : Themer.CurrentThemeColors.ControlBorder;
+
+        using var borderPen = new Pen(borderColor);
         using var innerPen = new Pen(BackColor);
         graphics.DrawRectangle(borderPen, 0, 0, Width - 1, Height - 1);
         graphics.DrawRectangle(innerPen, 1, 1, Width - 3, Height - 3);
+    }
+
+    protected override void OnGotFocus(EventArgs e)
+    {
+        base.OnGotFocus(e);
+        Invalidate();
+    }
+
+    protected override void OnLostFocus(EventArgs e)
+    {
+        base.OnLostFocus(e);
+        Invalidate();
     }
 
     protected override void OnResize(EventArgs e)
@@ -112,26 +127,11 @@ public class ThemedComboBox : ComboBox
 
         e.DrawBackground();
 
-        var isHighlighted = (e.State & DrawItemState.Selected) == DrawItemState.Selected && (e.State & DrawItemState.ComboBoxEdit) == 0;
-        var backColor = isHighlighted ? HighlightColor : DropDownBackColor;
-
-        var text = string.Empty;
-
         var themedComboBoxItem = Items[e.Index] as ThemedComboBoxItem;
-
-        if (themedComboBoxItem == null)
-        {
-            text = GetItemText(Items[e.Index]) ?? string.Empty;
-        }
-        else
-        {
-            text = themedComboBoxItem.Text;
-
-            if (themedComboBoxItem.IsHeader)
-            {
-                backColor = HeaderColor;
-            }
-        }
+        var text = themedComboBoxItem?.Text ?? GetItemText(Items[e.Index]) ?? string.Empty;
+        var isHeader = themedComboBoxItem is { IsHeader: true };
+        var isHighlighted = !isHeader && (e.State & DrawItemState.Selected) == DrawItemState.Selected && (e.State & DrawItemState.ComboBoxEdit) == 0;
+        var backColor = isHeader ? HeaderColor : isHighlighted ? HighlightColor : DropDownBackColor;
 
         var foreColor = !Enabled ? Themer.CurrentThemeColors.ContrastSoft : isHighlighted ? Color.Black : DropDownForeColor;
 

@@ -8,6 +8,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using System.Windows.Forms.Automation;
 using GUI.Controls;
 using GUI.Forms;
 using GUI.Types.PackageViewer.ThumbnailRenderers;
@@ -85,13 +86,13 @@ namespace GUI.Types.PackageViewer
 
         private Dictionary<string, Dictionary<string, string>>? AssetSearchData;
         private string? searchStatus;
-        private Dictionary<string, (int Count, Dictionary<string, int> Values)>? SearchDataKeys;
+        private (SearchRequest Request, bool Cancelled, int UnsearchedFiles)? displayedSearch;
+        private Task<Dictionary<string, (int Count, Dictionary<string, int> Values)>?>? searchDataKeysTask;
 
         /// <summary>
         /// The most values of one searchable user data key that are listed, a key with more lists only the first ones found.
         /// </summary>
         internal const int MaxSearchDataValues = 100;
-        private bool SearchDataBuilt;
 
         public event EventHandler<PackageEntry>? OpenPackageEntry;
         public event EventHandler<PackageContextMenuEventArgs>? OpenContextMenu;
@@ -147,6 +148,8 @@ namespace GUI.Types.PackageViewer
 
             mainListView.VirtualMode = true;
             mainListView.ShowItemToolTips = true;
+            searchStatusLabel.Paint += SearchStatusLabel_Paint;
+            searchStatusLabel.Resize += (_, _) => searchStatusLabel.Invalidate();
             mainListView.VirtualItems = ListViewItems;
             mainListView.RetrieveVirtualItem += MainListView_RetrieveVirtualItem;
 
@@ -269,8 +272,6 @@ namespace GUI.Types.PackageViewer
             mainSplitContainer.BackColor = Themer.CurrentThemeColors.AppMiddle;
             tableLayoutPanel2.BackColor = Themer.CurrentThemeColors.AppSoft;
             gridSizeSlider.BackColor = Themer.CurrentThemeColors.AppSoft;
-            searchStatusLabel.Paint += SearchStatusLabel_Paint;
-            searchStatusLabel.Resize += (_, _) => searchStatusLabel.Invalidate();
 
             Themer.ThemeControl(gridRadioButton);
             Themer.ThemeControl(listRadioButton);
@@ -396,6 +397,7 @@ namespace GUI.Types.PackageViewer
                 UpdateSearchTextBoxToCurrentPath(pkgNode);
             }
 
+            displayedSearch = null;
             ShowSearchResultsState(null);
             RecordNavigation(new FolderNavigationEntry(pkgNode));
         }
@@ -690,7 +692,13 @@ namespace GUI.Types.PackageViewer
                         item.Text = entry.GetFileName();
                         item.SubItems[2].Text = entry.TypeName;
                         item.SubItems[3].Text = entry.GetDirectoryPath();
+                        item.ToolTipText = entry.GetFullPath();
                     }
+                }
+
+                if (displayedSearch is { } search)
+                {
+                    ShowSearchResultsState(DescribeSearch(search.Request, ListViewItems.Count, search.Cancelled, search.UnsearchedFiles), mainListView.EmptyText);
                 }
 
                 mainListView.VirtualListSize = ListViewItems.Count;
@@ -1456,6 +1464,7 @@ namespace GUI.Types.PackageViewer
             DisplayMainListView();
             MainListView_DisplayNodes(node, updatePath: false);
             UpdateSearchTextBoxToCurrentPath(request.Folder ?? node);
+            displayedSearch = (request, cancelled, unsearchedFiles);
 
             var isFiltered = request is not { Folder: null, Extension: null, FilterKey: null };
             ShowSearchResultsState(DescribeSearch(request, results.Count, cancelled, unsearchedFiles), isFiltered ? "No matching files. Clear a filter or search the whole package." : "No matching files");
@@ -1473,6 +1482,11 @@ namespace GUI.Types.PackageViewer
             searchStatus = description;
             searchStatusLabel.Invalidate();
             searchStatusLabel.AccessibleName = description;
+
+            if (description != null)
+            {
+                searchStatusLabel.AccessibilityObject.RaiseAutomationNotification(AutomationNotificationKind.Other, AutomationNotificationProcessing.MostRecent, description);
+            }
             mainListView.EmptyText = emptyText;
             mainListView.SharedFlexibleColumn = description != null ? FolderColumn : -1;
 
@@ -2111,32 +2125,18 @@ namespace GUI.Types.PackageViewer
 
         /// <summary>
         /// Returns a task that resolves to the <see cref="ValveResourceFormat.ToolsAssetInfo.ToolsAssetInfo.File.SearchableUserData"/> filter keys.
-        /// If already cached, returns a completed task. Otherwise loads on a background thread.
+        /// The first call starts loading it on a background thread, later calls get the same task.
         /// </summary>
         internal Task<Dictionary<string, (int Count, Dictionary<string, int> Values)>?> GetSearchDataKeysAsync()
-        {
-            if (SearchDataBuilt)
-            {
-                return Task.FromResult(SearchDataKeys);
-            }
-
-            return Task.Run(GetSearchDataKeys);
-        }
+            => searchDataKeysTask ??= Task.Run(GetSearchDataKeys);
 
         /// <summary>
         /// Lazily loads the tools asset info and builds the <see cref="ValveResourceFormat.ToolsAssetInfo.ToolsAssetInfo.File.SearchableUserData"/> index.
         /// Returns the filter keys of the files in the package with how many files have each, and their values with how many files have each, or null if no data.
         /// The tools asset info sits next to the package and covers the whole game, so files that are not in this package are left out.
         /// </summary>
-        internal Dictionary<string, (int Count, Dictionary<string, int> Values)>? GetSearchDataKeys()
+        private Dictionary<string, (int Count, Dictionary<string, int> Values)>? GetSearchDataKeys()
         {
-            if (SearchDataBuilt)
-            {
-                return SearchDataKeys;
-            }
-
-            SearchDataBuilt = true;
-
             var vrfGuiContext = mainTreeView?.VrfGuiContext;
             if (vrfGuiContext?.CurrentPackage is not { } package)
             {
@@ -2180,13 +2180,14 @@ namespace GUI.Types.PackageViewer
                 assetSearchData[filePath] = converted;
             }
 
-            if (searchDataKeys.Count > 0)
+            if (searchDataKeys.Count == 0)
             {
-                AssetSearchData = assetSearchData;
-                SearchDataKeys = searchDataKeys;
+                return null;
             }
 
-            return SearchDataKeys;
+            AssetSearchData = assetSearchData;
+
+            return searchDataKeys;
         }
 
         private bool MatchesAssetFilter(PackageEntry entry, string filterKey, string? filterValue)
@@ -2216,7 +2217,7 @@ namespace GUI.Types.PackageViewer
                 return false;
             }
 
-            return filterValue == null || value == filterValue;
+            return filterValue == null || string.Equals(value, filterValue, StringComparison.OrdinalIgnoreCase);
         }
 
         private void MainListView_Disposed(object? sender, EventArgs e)

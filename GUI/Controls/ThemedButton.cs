@@ -111,7 +111,7 @@ namespace GUI.Controls
             if (Focused && ShowFocusCues)
             {
                 var accent = Themer.CurrentThemeColors.Accent;
-                using var focusPen = new Pen(backColor.ToArgb() == accent.ToArgb() ? Themer.CurrentThemeColors.Contrast : accent, this.AdjustForDPI(2));
+                using var focusPen = new Pen(BackColor.ToArgb() == accent.ToArgb() ? Color.Black : accent, this.AdjustForDPI(2));
                 focusPen.Alignment = PenAlignment.Inset;
                 pevent.Graphics.DrawPath(focusPen, roundedRect);
             }

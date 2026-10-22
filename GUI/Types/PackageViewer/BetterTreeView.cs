@@ -173,6 +173,7 @@ namespace GUI.Types.PackageViewer
             {
                 Text = "Searching file contents…",
                 WaitForWorkToStop = true,
+                CancelOnEscape = true,
             };
             progressDialog.OnProcess = cancellationToken =>
             {
