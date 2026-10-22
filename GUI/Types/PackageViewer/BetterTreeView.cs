@@ -170,6 +170,7 @@ namespace GUI.Types.PackageViewer
             var skippedEntries = 0;
             var unreadableEntries = 0;
             var tooLargeEntries = 0;
+            var unsearchedPackages = 0;
             var cancelled = false;
 
             if (VrfGuiContext is not { } context)
@@ -206,22 +207,39 @@ namespace GUI.Types.PackageViewer
                 }
             }
 
-            bool IsFileOnDiskMatch(PackageEntry entry, string pathOnDisk)
+            bool IsFileOnDiskMatch(PackageEntry entry, string pathOnDisk, CancellationToken cancellationToken)
             {
+                using var stream = File.OpenRead(pathOnDisk);
+
                 if (IsSearchedAsCompiled(entry))
                 {
                     try
                     {
-                        using var stream = File.OpenRead(pathOnDisk);
                         return Resource.AnySearchableBytes(stream, data => Matches(entry, data));
                     }
                     catch (Exception e) when (e is UnexpectedMagicException or InvalidDataException or EndOfStreamException or ArgumentOutOfRangeException)
                     {
-                        return Matches(entry, File.ReadAllBytes(pathOnDisk));
+                        stream.Position = 0;
                     }
                 }
 
-                return Matches(entry, File.ReadAllBytes(pathOnDisk));
+                if (regex != null)
+                {
+                    var data = new byte[stream.Length];
+                    stream.ReadExactly(data);
+                    return Matches(entry, data);
+                }
+
+                var buffer = ArrayPool<byte>.Shared.Rent(Math.Max(ScanBufferSize, pattern.Length));
+
+                try
+                {
+                    return ContainsInLargeEntry(stream, 0, stream.Length, buffer, pattern, firstByte, cancellationToken);
+                }
+                finally
+                {
+                    ArrayPool<byte>.Shared.Return(buffer);
+                }
             }
 
             using var progressDialog = new GenericProgressForm
@@ -247,17 +265,25 @@ namespace GUI.Types.PackageViewer
             {
                 Log.Info(nameof(BetterTreeView), "Pattern search");
 
+                var filesOnDisk = new List<(PackageEntry Entry, string Path)>();
+
                 foreach (var files in packages)
                 {
                     if (files.Key.PathOnDisk is { } pathOnDisk)
                     {
-                        cancellationToken.ThrowIfCancellationRequested();
-
                         var entry = files.First().Entry;
 
-                        if (entry.Length > 0 && (regex == null || entry.Length <= MaxTextSearchLength || IsSearchedAsCompiled(entry)) && IsFileOnDiskMatch(entry, pathOnDisk))
+                        if (entry.TypeName.Equals("vpk", StringComparison.OrdinalIgnoreCase))
                         {
-                            results.Add(entry);
+                            unsearchedPackages++;
+                        }
+                        else if (regex != null && entry.Length > MaxTextSearchLength && !IsSearchedAsCompiled(entry))
+                        {
+                            tooLargeEntries++;
+                        }
+                        else if (entry.Length > 0)
+                        {
+                            filesOnDisk.Add((entry, pathOnDisk));
                         }
                     }
                     else if (files.Key.Package is { } package)
@@ -265,6 +291,24 @@ namespace GUI.Types.PackageViewer
                         SearchPackage(package, [.. files.Select(static file => file.Entry)], cancellationToken);
                     }
                 }
+
+                Parallel.ForEach(
+                    filesOnDisk,
+                    new ParallelOptions
+                    {
+                        MaxDegreeOfParallelism = Environment.ProcessorCount,
+                        CancellationToken = cancellationToken,
+                    },
+                    file =>
+                    {
+                        if (IsFileOnDiskMatch(file.Entry, file.Path, cancellationToken))
+                        {
+                            lock (results)
+                            {
+                                results.Add(file.Entry);
+                            }
+                        }
+                    });
 
                 var found = string.Create(CultureInfo.InvariantCulture, $"Found {results.Count} matches");
                 Log.Info(nameof(BetterTreeView), found);
@@ -425,7 +469,19 @@ namespace GUI.Types.PackageViewer
                 unsearched.Add(string.Create(CultureInfo.InvariantCulture, $"{tooLargeEntries:N0} {(tooLargeEntries == 1 ? "file" : "files")} over {MaxTextSearchLength / 1024 / 1024} MB"));
             }
 
-            return (results, cancelled, unsearched.Count > 0 ? string.Join(" and ", unsearched) + " not searched" : null);
+            if (unsearchedPackages > 0)
+            {
+                unsearched.Add(string.Create(CultureInfo.InvariantCulture, $"{unsearchedPackages:N0} {(unsearchedPackages == 1 ? "package" : "packages")}"));
+            }
+
+            var unsearchedText = unsearched.Count > 0 ? string.Join(" and ", unsearched) + " not searched" : null;
+
+            if (unsearchedPackages > 0)
+            {
+                unsearchedText += ", open them to search inside";
+            }
+
+            return (results, cancelled, unsearchedText);
         }
 
         private static bool IsTextMatch(Regex regex, PackageEntry entry, ReadOnlySpan<byte> data, ref int skippedEntries)
