@@ -885,7 +885,8 @@ namespace ValveResourceFormat.IO
         }
 
         /// <summary>
-        /// Lists every file in the packages and loose folders of <see cref="EnumerateSearchOrder"/>, in that order. A loose
+        /// Mounts the shader packages of every platform, then lists every file in the packages and loose folders of
+        /// <see cref="EnumerateSearchOrder"/>, in that order. A loose
         /// file gets an entry without data, named by its path in the folder. The game's <c>bin</c> folders, the archives of
         /// mounted packages, and loose files that are not game content, such as demo recordings, logs and crash dumps, are left out.
         /// </summary>
@@ -895,7 +896,7 @@ namespace ValveResourceFormat.IO
         /// </returns>
         public IEnumerable<(PackageEntry Entry, Package? Package, string? PathOnDisk, PackageEntry? OverriddenBy)> EnumerateMountedFiles()
         {
-            MountShaderPackages();
+            MountShaderPackages(allPlatforms: true);
 
             var searched = new List<(Package? Package, Dictionary<string, PackageEntry>? LooseFiles)>();
 
@@ -1704,23 +1705,23 @@ namespace ValveResourceFormat.IO
             return Path.GetFullPath(path);
         }
 
-        private void MountShaderPackages()
+        private void MountShaderPackages(bool allPlatforms = false)
         {
             lock (CachedShadersLock)
             {
-                if (!ShaderPackagesScanned)
+                if (!ShaderPackagesScanned || allPlatforms)
                 {
                     ShaderPackagesScanned = true;
-                    FindAndLoadShaderPackages();
+                    FindAndLoadShaderPackages(allPlatforms);
                 }
             }
         }
 
         /// <summary>
         /// Mounts the shader package of one platform from every game folder that has it, as the engine does, the first
-        /// platform that any game folder has.
+        /// platform that any game folder has, or the packages of every platform.
         /// </summary>
-        private void FindAndLoadShaderPackages()
+        private void FindAndLoadShaderPackages(bool allPlatforms)
         {
             for (var platformType = (VcsPlatformType)0; platformType < VcsPlatformType.Undetermined; platformType++)
             {
@@ -1732,7 +1733,7 @@ namespace ValveResourceFormat.IO
                     AddGamePackageToSearch(vpk);
                 }
 
-                if (vpks.Count > 0)
+                if (vpks.Count > 0 && !allPlatforms)
                 {
                     return;
                 }
