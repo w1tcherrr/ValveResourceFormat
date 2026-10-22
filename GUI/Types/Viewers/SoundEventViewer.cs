@@ -1161,6 +1161,16 @@ namespace GUI.Types.Viewers
             }
 
             List<string> lines = [.. problems];
+            var collisions = row.Type.Length > 0 ? index.GetStackFieldCollisions(row.Type) : [];
+
+            foreach (var (_, field) in SoundEventIndex.GetBases(row.Data))
+            {
+                foreach (var collision in collisions.Where(c => field != null
+                    && (c.Block.Equals(field, StringComparison.OrdinalIgnoreCase) || c.Block.EndsWith($".{field}", StringComparison.OrdinalIgnoreCase))))
+                {
+                    lines.Add($"{collision.Stack} field {collision.Name} collides with the stack's own field, so the engine shifts this base's later values by one field.");
+                }
+            }
             lines.AddRange(SoundEventIndex.GetBases(row.Data).Where(b => index.Find(b.Name) == null)
                 .Select(static b => $"Base {b.Name} is not loaded, so the keys it would give are missing."));
             var hasProblems = lines.Count > 0;
@@ -1346,21 +1356,12 @@ namespace GUI.Types.Viewers
                 }
             }
 
-            // A key of a block sets the field of that name in the block, or else, as the event's own keys do, the stack's
-            // own field of that name, or else the first field of that name
-            int FindTargetField(string key, string? block)
-            {
-                var target = block == null ? -1 : FindField(f => f.Block != null
+            // A key of a block sets the field of that name in the block, an event's own key the one field of that name
+            int FindTargetField(string key, string? block) => block == null
+                ? FindField(f => f.Name.Equals(key, StringComparison.OrdinalIgnoreCase))
+                : FindField(f => f.Block != null
                     && (f.Block.Equals(block, StringComparison.OrdinalIgnoreCase) || f.Block.EndsWith($".{block}", StringComparison.OrdinalIgnoreCase))
                     && (f.Name.Equals(key, StringComparison.OrdinalIgnoreCase) || f.Name.EndsWith($".{key}", StringComparison.OrdinalIgnoreCase)));
-
-                if (target < 0)
-                {
-                    target = FindField(f => f.Block == null && f.Name.Equals(key, StringComparison.OrdinalIgnoreCase));
-                }
-
-                return target >= 0 ? target : FindField(f => f.Name.Equals(key, StringComparison.OrdinalIgnoreCase));
-            }
 
             int FindField(Func<(string Name, KVObject Field, string Stack, string? Block), bool> match)
             {
