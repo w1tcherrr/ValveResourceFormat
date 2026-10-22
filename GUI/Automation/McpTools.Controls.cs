@@ -24,12 +24,31 @@ internal sealed partial class McpTools
 
     [Tool("List the controls in a tab's sidebar and toolbar, top to bottom, each with its kind, group and state. Kinds are checkbox, toggle, dropdown, list (a checked list such as world layers or mesh groups), slider (0 to 1), and number (with its range). The others are vector (such as a material or animation graph parameter), button and text. The render mode dropdown is in the Toolbar group.")]
     private static List<object> ListControls(GLBaseControl viewer, [Description("Include the items of dropdowns and lists. An animation list can have hundreds.")] bool items = false)
-        => SidebarControls(viewer).Select(control => DescribeControl(control, items)).ToList();
+        => SidebarControls(viewer.UiControl).Select(control => DescribeControl(control, items)).ToList();
 
     [Tool("Change sidebar or toolbar controls in order, as a user would. Stops at the first change that fails and keeps the changes before it. A choice that moves the camera, such as a map camera, moves it at once. Returns each changed control once.", Redraws = true)]
     private static List<object> SetControls(
         GLBaseControl viewer,
         [Description("'name' is the label from list_controls. Give 'group' only when two controls have the same label. 'item' is the list item to check. 'value' is true or false for a checkbox, toggle or list item, and the item text or index for a dropdown. It is a number for a slider or number, and a number array for a vector. Omit 'value' to press a button.")] List<ControlChange> changes)
+    {
+        var scene = viewer as GLSceneViewer;
+        var location = scene?.Input.Camera.Location;
+        var angles = scene?.Input.Camera.GetQAngle();
+        try
+        {
+            return ApplyControls(viewer.UiControl, changes, details: false);
+        }
+        finally
+        {
+            if (scene != null && (scene.Input.Camera.Location != location || scene.Input.Camera.GetQAngle() != angles))
+            {
+                scene.Input.SaveCameraForTransition(transitionDuration: 0f);
+            }
+        }
+    }
+
+    /// <summary>Applies changes in order, stopping at the first that fails, and describes each changed control once.</summary>
+    private static List<object> ApplyControls(Control? root, List<ControlChange> changes, bool details)
     {
         var changed = new List<SidebarControl>();
 
@@ -39,7 +58,7 @@ internal sealed partial class McpTools
 
             try
             {
-                control = ApplyControl(viewer, changes[i]);
+                control = ApplyControl(root, changes[i]);
             }
             catch (Exception e) when (e is ToolException or ArgumentException)
             {
@@ -53,10 +72,10 @@ internal sealed partial class McpTools
         }
 
         // A checked list item is reported through the list, so the list comes back with its items
-        return changed.Select(static control => DescribeControl(control, items: control.Control is CheckedListBox)).ToList();
+        return changed.Select(control => DescribeControl(control, items: control.Control is CheckedListBox, details)).ToList();
     }
 
-    private static SidebarControl ApplyControl(GLBaseControl viewer, ControlChange change)
+    private static SidebarControl ApplyControl(Control? root, ControlChange change)
     {
         var (name, group, item, value) = change;
 
@@ -65,15 +84,15 @@ internal sealed partial class McpTools
             throw new ArgumentException("Every change needs a control 'name'.");
         }
 
-        var controls = SidebarControls(viewer);
-        var matches = controls.Where(control => control.Label.Equals(name, StringComparison.OrdinalIgnoreCase)
+        var controls = SidebarControls(root);
+        var matches = controls.Where(control => (control.Label.Equals(name, StringComparison.OrdinalIgnoreCase) || control.Control.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
             && (group == null || string.Equals(control.Group, group, StringComparison.OrdinalIgnoreCase))).ToList();
 
         if (matches.Count == 0)
         {
             var inGroup = group == null ? null : $" in group '{group}'";
             var changeable = controls.Where(static control => control.Control is not Label).Select(static control => control.Label).Distinct();
-            throw new ToolException($"No control named '{name}'{inGroup}. This tab has: {string.Join(", ", changeable)}.");
+            throw new ToolException($"No control named '{name}'{inGroup}. The controls are: {string.Join(", ", changeable)}.");
         }
 
         // A hidden control with the same name does not count
@@ -111,10 +130,6 @@ internal sealed partial class McpTools
                 throw new ArgumentException($"'value' must be {expected} for '{name}'.");
             }
         }
-
-        var scene = viewer as GLSceneViewer;
-        var location = scene?.Input.Camera.Location;
-        var angles = scene?.Input.Camera.GetQAngle();
 
         switch (control.Control)
         {
@@ -192,7 +207,7 @@ internal sealed partial class McpTools
                 break;
 
             case ThemedToggleButton toggle:
-                if (toggle.Checked != Value<bool>("true or false"))
+                if (value == null || toggle.Checked != Value<bool>("true or false"))
                 {
                     toggle.PerformClick();
                 }
@@ -203,19 +218,28 @@ internal sealed partial class McpTools
                 button.PerformClick();
                 break;
 
+            case RadioButton radio:
+                if (value != null && !Value<bool>("true"))
+                {
+                    throw new ArgumentException($"'{name}' is cleared by selecting another option.");
+                }
+
+                radio.PerformClick();
+                break;
+
+            case TextBoxBase textBox:
+                textBox.Text = Value<string>("a string");
+                break;
+
             default:
                 throw new ToolException($"'{name}' is read-only text.");
-        }
-
-        if (scene != null && (scene.Input.Camera.Location != location || scene.Input.Camera.GetQAngle() != angles))
-        {
-            scene.Input.SaveCameraForTransition(transitionDuration: 0f);
         }
 
         return control;
     }
 
-    private static object DescribeControl(SidebarControl control, bool items)
+    /// <param name="details">Add what a dialog's controls need: the control's own name, its text, tab index and focus.</param>
+    private static object DescribeControl(SidebarControl control, bool items, bool details = false)
     {
         var input = control.Control;
 
@@ -223,17 +247,22 @@ internal sealed partial class McpTools
         {
             Kind = KindOf(input),
             control.Label,
+            Name = details && input.Name != control.Label ? input.Name : null,
             control.Group,
             Value = ValueOf(input),
+            Text = details && input is not (TextBoxBase or ListControl) && input.Text != control.Label ? input.Text : null,
             Items = items ? ListItems(input) : null,
             Disabled = Flag(!input.Enabled),
             Hidden = Flag(!input.Visible),
+            TabIndex = details ? input.TabIndex : (int?)null,
+            Focused = Flag(details && input == FocusedControl(input.FindForm())),
         };
     }
 
     private static string KindOf(Control input) => input switch
     {
         CheckBox => "checkbox",
+        RadioButton => "radio",
         CheckedListBox => "list",
         ComboBox => "dropdown",
         Slider => "slider",
@@ -241,20 +270,36 @@ internal sealed partial class McpTools
         PropertyRow => "vector",
         ThemedToggleButton => "toggle",
         Button => "button",
+        TextBoxBase => "textbox",
         _ => "text",
     };
 
     private static object? ValueOf(Control input) => input switch
     {
         CheckBox checkBox => checkBox.Checked,
+        RadioButton radio => radio.Checked,
         ComboBox comboBox when comboBox.SelectedIndex >= 0 => ItemText(comboBox, comboBox.Items[comboBox.SelectedIndex]),
         Slider slider => slider.Value,
         ThemedFloatNumeric number => new { number.Value, Min = Bound(number.MinValue), Max = Bound(number.MaxValue) },
         ThemedIntNumeric number => new { number.Value, Min = number.MinValue, Max = number.MaxValue },
         PropertyRow vector => vector.Editors.Cast<ThemedFloatNumeric>().Select(static number => number.Value).ToArray(),
         ThemedToggleButton toggle => toggle.Checked,
+        TextBoxBase textBox => textBox.Text,
         _ => null,
     };
+
+    /// <summary>The innermost active control of a form, which gets its keys, or the form itself when none is active.</summary>
+    private static Control? FocusedControl(Form? form)
+    {
+        Control? focused = form;
+
+        while (focused is ContainerControl { ActiveControl: { } active })
+        {
+            focused = active;
+        }
+
+        return focused;
+    }
 
     /// <summary>The items of a dropdown or checked list, or null for any other control.</summary>
     private static object? ListItems(Control input) => input switch
@@ -325,18 +370,23 @@ internal sealed partial class McpTools
         return index;
     }
 
-    /// <summary>Every control a user can see in the sidebar, top to bottom.</summary>
-    private static List<SidebarControl> SidebarControls(GLBaseControl viewer)
+    /// <summary>Every control a user can see in a sidebar or window, top to bottom.</summary>
+    private static List<SidebarControl> SidebarControls(Control? root)
     {
         var controls = new List<SidebarControl>();
 
         void Walk(Control parent, string? group)
         {
-            // Every control is docked to the top and brought to the front as it is added, so each
-            // collection holds them bottom to top
-            var children = parent is TableLayoutPanel table
-                ? parent.Controls.Cast<Control>().OrderBy(child => table.GetRow(child)).ThenBy(child => table.GetColumn(child))
-                : parent.Controls.Cast<Control>().Reverse();
+            var all = parent.Controls.Cast<Control>();
+
+            // A sidebar docks every control to the top and brings it to the front as it is added, so its
+            // collections hold them bottom to top. Controls placed by hand go in tab order.
+            var children = parent switch
+            {
+                TableLayoutPanel table => all.OrderBy(child => table.GetRow(child)).ThenBy(child => table.GetColumn(child)),
+                _ when all.All(static child => child.Dock == DockStyle.None) => all.OrderBy(static child => child.TabIndex),
+                _ => all.Reverse(),
+            };
 
             // A row without a name takes the name of the row above it, as the fields of a vector do
             var rowName = string.Empty;
@@ -372,13 +422,20 @@ internal sealed partial class McpTools
                 }
 
                 // Other buttons and labels use their text as the name, but a label that only repeats the name of an input beside it is skipped
-                if (child is Button or Label && child.Text.Length > 0)
+                if (child is ButtonBase or Label && child.Text.Length > 0)
                 {
-                    if (child is Button || !HasInputNamed(parent, child.Text))
+                    if (child is ButtonBase || !HasInputNamed(parent, child.Text))
                     {
                         controls.Add(new SidebarControl(child, child.Text.ReplaceLineEndings(", "), group));
                     }
 
+                    continue;
+                }
+
+                // A dialog's input without a caption goes by its control name
+                if (child is TextBoxBase or ListControl && child.Name.Length > 0)
+                {
+                    controls.Add(new SidebarControl(child, child.Name, group));
                     continue;
                 }
 
@@ -398,9 +455,9 @@ internal sealed partial class McpTools
             }
         }
 
-        if (viewer.UiControl != null)
+        if (root != null)
         {
-            Walk(viewer.UiControl, null);
+            Walk(root, null);
         }
 
         return controls;

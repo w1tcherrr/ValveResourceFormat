@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
+using GUI.Utils;
 
 namespace GUI.Automation;
 
@@ -15,6 +16,9 @@ internal static class Automation
     /// <summary>Port the server listens on, or null when it is not running.</summary>
     private static int? Port;
 
+    /// <summary>The theme from <c>--theme=light</c> or <c>--theme=dark</c>, which replaces the configured one for this run, or null.</summary>
+    public static Themer.AppTheme? Theme { get; private set; }
+
 #if DEBUG
     /// <summary>Whether this process was started to be driven by an agent.</summary>
     public static bool IsEnabled => Port != null;
@@ -24,15 +28,26 @@ internal static class Automation
 #endif
 
     /// <summary>
-    /// Removes <c>--mcp</c> or <c>--mcp=port</c> from <paramref name="args"/> before anything else
-    /// reads them. The switch is then never forwarded to another instance or opened as a file.
+    /// Removes <c>--mcp</c>, <c>--mcp=port</c> and <c>--theme=name</c> from <paramref name="args"/> before
+    /// anything else reads them. The switches are then never forwarded to another instance or opened as files.
     /// </summary>
     public static void TakeSwitch(ref string[] args)
     {
-        static bool IsSwitch(string arg) => arg == "--mcp" || arg.StartsWith("--mcp=", StringComparison.Ordinal);
+        static bool IsSwitch(string arg) => arg == "--mcp" || arg.StartsWith("--mcp=", StringComparison.Ordinal) || arg.StartsWith("--theme=", StringComparison.Ordinal);
 
         foreach (var arg in Array.FindAll(args, IsSwitch))
         {
+            if (arg.StartsWith("--theme=", StringComparison.Ordinal))
+            {
+                if (!Enum.TryParse<Themer.AppTheme>(arg["--theme=".Length..], ignoreCase: true, out var theme) || theme is not (Themer.AppTheme.Light or Themer.AppTheme.Dark))
+                {
+                    Fail($"Invalid theme in '{arg}', use light or dark.");
+                }
+
+                Theme = theme;
+                continue;
+            }
+
             if (arg == "--mcp")
             {
                 Port = DefaultPort;
@@ -50,9 +65,9 @@ internal static class Automation
         args = Array.FindAll(args, static arg => !IsSwitch(arg));
 
 #if !DEBUG
-        if (Port != null)
+        if (Port != null || Theme != null)
         {
-            Fail("--mcp is only available in debug builds.");
+            Fail("--mcp and --theme are only available in debug builds.");
         }
 #endif
     }

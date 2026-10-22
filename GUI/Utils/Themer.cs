@@ -103,7 +103,7 @@ namespace GUI.Utils
 
         public static void InitializeTheme()
         {
-            var theme = (AppTheme)Settings.Config.Theme;
+            var theme = Automation.Automation.Theme ?? (AppTheme)Settings.Config.Theme;
 
             if (theme == AppTheme.System || !Enum.IsDefined<AppTheme>(theme))
             {

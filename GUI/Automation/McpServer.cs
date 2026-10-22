@@ -24,7 +24,7 @@ internal sealed class McpServer : IDisposable
     private const string Meta = "io.modelcontextprotocol/";
 
     private const string Instructions = """
-        Drives the Source 2 Viewer window. The tools open files, move the camera, change sidebar controls, and inspect entities, models and particles. They also pick, trace, read the log and render stats, and take screenshots.
+        Drives the Source 2 Viewer window. The tools open files, move the camera, change sidebar controls, and inspect entities, models and particles. They also pick, trace, read the log and render stats, take screenshots, and drive package tabs and dialogs such as search.
         A successful call replies with compact JSON that omits null and empty fields. A failed call replies with plain text and isError.
         Positions are [x, y, z] in world units. Angles are [pitch, yaw, roll] in degrees, with pitch positive downwards.
         Tools that take 'tab' default to the active tab and wait for a tab that is still loading. Pass the id from open_file or get_status, since the user can switch tabs.
