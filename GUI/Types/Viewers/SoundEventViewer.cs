@@ -2593,8 +2593,79 @@ namespace GUI.Types.Viewers
                 StandardTab = true;
                 ShowCellToolTips = true;
                 AccessibleName = name;
-                RowTemplate.Height = this.AdjustForDPI(24);
+                RowTemplate = new GridRow { Height = this.AdjustForDPI(24) };
                 ColumnHeadersHeight = this.AdjustForDPI(26);
+            }
+
+            /// <summary>
+            /// For a virtual grid, gives accessibility clients such as screen readers the column headers and the displayed
+            /// rows only. The default object makes them step through every row, at a cost that grows with the square of the
+            /// row count and holds the UI thread for minutes on a large list.
+            /// </summary>
+            protected override AccessibleObject CreateAccessibilityInstance()
+                => VirtualMode ? new DisplayedRowsAccessibleObject(this) : base.CreateAccessibilityInstance();
+
+            /// <summary>Gets the displayed rows of a virtual grid as the range of their indices.</summary>
+            private (int First, int Count) GetDisplayedRows()
+            {
+                var first = FirstDisplayedScrollingRowIndex;
+                return first < 0 ? (0, 0) : (first, Math.Min(DisplayedRowCount(includePartialRow: true), RowCount - first));
+            }
+
+            private sealed class DisplayedRowsAccessibleObject(Grid grid) : DataGridViewAccessibleObject(grid)
+            {
+                private int HeaderCount => grid.ColumnHeadersVisible ? 1 : 0;
+
+                public override int GetChildCount() => HeaderCount + grid.GetDisplayedRows().Count;
+
+                public override AccessibleObject? GetChild(int index)
+                {
+                    if (index < HeaderCount)
+                    {
+                        return index < 0 ? null : base.GetChild(index);
+                    }
+
+                    var (first, count) = grid.GetDisplayedRows();
+                    index -= HeaderCount;
+
+                    return index < count ? grid.Rows[first + index].AccessibilityObject : null;
+                }
+            }
+
+            /// <summary>A row whose accessibility object steps only to the displayed rows of a virtual grid.</summary>
+            private sealed class GridRow : DataGridViewRow
+            {
+                protected override AccessibleObject CreateAccessibilityInstance() => new RowAccessibleObject(this);
+
+                private sealed class RowAccessibleObject(DataGridViewRow row) : DataGridViewRowAccessibleObject(row)
+                {
+                    public override AccessibleObject? Navigate(AccessibleNavigation navigationDirection)
+                    {
+                        if (Owner?.DataGridView is not Grid { VirtualMode: true } grid)
+                        {
+                            return base.Navigate(navigationDirection);
+                        }
+
+                        var step = navigationDirection switch
+                        {
+                            AccessibleNavigation.Next or AccessibleNavigation.Down => 1,
+                            AccessibleNavigation.Previous or AccessibleNavigation.Up => -1,
+                            _ => 0,
+                        };
+
+                        if (step == 0)
+                        {
+                            return base.Navigate(navigationDirection);
+                        }
+
+                        var (first, count) = grid.GetDisplayedRows();
+                        var position = Owner.Index - first + step;
+
+                        return position >= 0 && position < count ? grid.AccessibilityObject.GetChild(grid.ColumnHeadersVisible ? position + 1 : position)
+                            : position == -1 && grid.ColumnHeadersVisible ? grid.AccessibilityObject.GetChild(0)
+                            : null;
+                    }
+                }
             }
 
             private object? FindLinkAt(int rowIndex, int columnIndex, Point location)
