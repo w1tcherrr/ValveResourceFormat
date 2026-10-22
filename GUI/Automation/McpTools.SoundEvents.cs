@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.Globalization;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -19,7 +20,7 @@ namespace GUI.Automation;
 internal sealed partial class McpTools
 {
     [Tool("Filter the event list of a sound event tab as a user would, and return the matching events in list order. The details pane does not change. 'search' matches the event name or type. Returns 'next_offset' when more events match.", Redraws = true)]
-    private async Task<object> ListSoundEvents(
+    private static async Task<object> ListSoundEvents(
         TabPage tab,
         [Description("Text to type into the search box, or an empty string to clear it.")] string? search = null,
         [Description("List the events of every file of the game instead of only this file.")] bool? allFiles = null,
@@ -82,10 +83,11 @@ internal sealed partial class McpTools
                 var cells = grid.Rows[i].Cells;
                 events.Add(new
                 {
-                    Name = cells[0].Value,
-                    Type = cells[1].Value,
-                    Duration = cells[2].Value,
-                    File = cells[3].Value,
+                    Name = cells[1].Value,
+                    Type = cells[2].Value,
+                    Duration = cells[3].Value is string { Length: > 0 } duration ? duration : null,
+                    File = cells[4].ToolTipText is { Length: > 0 } file ? file : null,
+                    Warning = cells[0].Value is string { Length: > 0 } ? cells[0].ToolTipText : null,
                 });
             }
 
@@ -106,6 +108,7 @@ internal sealed partial class McpTools
         [Description("A button to press after showing the event: play_event, stop, back, forward, copy_name or open_file. play_sound plays the sound at 'sound' in the sounds list.")] string? action = null,
         [Description("Index in the sounds list for play_sound.")][Range(0, int.MaxValue)] int sound = 0,
         [Description("Whether to show properties that only show a stack default, as the checkbox does. Leave it out to keep the checkbox as it is.")] bool? showDefaults = null,
+        [Description("The tab to select below the properties: sounds, references or used_by.")] string? detailsTab = null,
         CancellationToken cancellationToken = default)
     {
         await WaitForSoundEvents(tab, cancellationToken).ConfigureAwait(false);
@@ -129,6 +132,17 @@ internal sealed partial class McpTools
                 Named<CheckBox>(viewer, "Show stack defaults").Checked = showDefaults.Value;
             }
 
+            if (detailsTab != null)
+            {
+                viewer.ShowLinksTab(detailsTab switch
+                {
+                    "sounds" => 0,
+                    "references" => 1,
+                    "used_by" => 2,
+                    _ => throw new ToolException($"Unknown details tab '{detailsTab}'. The tabs are sounds, references and used_by."),
+                });
+            }
+
             switch (action)
             {
                 case null:
@@ -141,11 +155,7 @@ internal sealed partial class McpTools
                         throw new ToolException(string.Create(CultureInfo.InvariantCulture, $"The event has {sounds.RowCount} sounds."));
                     }
 
-                    if (sounds.Parent is TabPage { Parent: TabControl linkTabs } soundsPage)
-                    {
-                        linkTabs.SelectedTab = soundsPage;
-                    }
-
+                    viewer.ShowLinksTab(0);
                     sounds.CurrentCell = sounds.Rows[sound].Cells[0];
 
                     if (!viewer.PlaySound(sound, autoPlay: true))
@@ -172,7 +182,7 @@ internal sealed partial class McpTools
     }
 
     [Tool("List the sound events that play the sound of a vsnd tab, as its SOUND tab shows them, with the file that defines each.")]
-    private async Task<object> ListSoundUsers(TabPage tab, CancellationToken cancellationToken = default)
+    private static async Task<object> ListSoundUsers(TabPage tab, CancellationToken cancellationToken = default)
     {
         if (await OnUi(() => tab.Tag as ExportData, cancellationToken).ConfigureAwait(false) is { } data)
         {
@@ -184,7 +194,7 @@ internal sealed partial class McpTools
             var users = await OnUi(() =>
             {
                 var grid = Named<DataGridView>(tab, "Used by events");
-                return grid.RowCount == 0 ? null : GridRows(grid, linksOnly: true);
+                return grid.AccessibleDescription == "Finding events that use this sound..." ? null : GridRows(grid);
             }, cancellationToken).ConfigureAwait(false);
 
             if (users != null || waited > LoadTimeout)
@@ -261,7 +271,7 @@ internal sealed partial class McpTools
                 Value = cells[1].ToolTipText.Length > 0 ? cells[1].ToolTipText : cells[1].Value,
                 Kind = row.Tag?.ToString()?.ToLowerInvariant(),
                 Source = cells[2].Value is string { Length: > 0 } source ? source : null,
-                Curve = Flag(cells[1].Tag != null),
+                Curve = Flag(cells[1].Tag is ITuple),
             });
         }
 
@@ -272,12 +282,15 @@ internal sealed partial class McpTools
             Event = Text("Event"),
             Stack = Text("Stack"),
             File = Text("File"),
+            Base = Text("Base"),
             Notice = Text("Notice"),
             Caption = Text("Caption"),
             CanPlay = Named<ThemedButton>(viewer, "Play event").Enabled,
             CanGoBack = Flag(Named<ThemedButton>(viewer, "Back").Enabled),
             CanGoForward = Flag(Named<ThemedButton>(viewer, "Forward").Enabled),
+            CanStop = Flag(Named<ThemedButton>(viewer, "Stop").Enabled),
             SoundPanel = Flag(Named<Panel>(viewer, "Sound player").Visible),
+            DetailsTab = Named<TabControl>(viewer, "Links").SelectedTab?.Text,
             Properties = groups,
             Sounds = GridRows(Named<DataGridView>(viewer, "Sounds")),
             References = GridRows(Named<DataGridView>(viewer, "References")),
@@ -285,19 +298,12 @@ internal sealed partial class McpTools
         };
     }
 
-    /// <param name="grid">The grid to read.</param>
-    /// <param name="linksOnly">Leave out rows that link to nothing, such as a note that the list is empty.</param>
-    private static List<Dictionary<string, object?>> GridRows(DataGridView grid, bool linksOnly = false)
+    private static List<Dictionary<string, object?>> GridRows(DataGridView grid)
     {
         var rows = new List<Dictionary<string, object?>>();
 
         foreach (DataGridViewRow row in grid.Rows)
         {
-            if (linksOnly && row.Tag == null)
-            {
-                continue;
-            }
-
             var cells = new Dictionary<string, object?>();
 
             foreach (DataGridViewCell cell in row.Cells)

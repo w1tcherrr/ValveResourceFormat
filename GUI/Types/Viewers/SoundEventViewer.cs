@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using GUI.Controls;
@@ -24,9 +25,10 @@ namespace GUI.Types.Viewers
     /// Lists the sound events of a file or of the whole game, and shows the selected event with the keys it
     /// resolves to, grouped by its stack, its sounds, the events it references and the events that use it.
     /// </summary>
-    internal sealed class SoundEventViewer : UserControl
+    internal sealed partial class SoundEventViewer : UserControl
     {
         private const string PreviewChannel = "sound_event_viewer";
+        private const TextFormatFlags SegmentFlags = TextFormatFlags.NoPadding | TextFormatFlags.SingleLine | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix;
 
         private sealed class EventRow(string name, string file, KVObject data, string type, float duration, bool duplicate, bool hasProblems, bool rejected, bool missingBase)
         {
@@ -41,6 +43,7 @@ namespace GUI.Types.Viewers
             public bool Rejected { get; } = rejected;
             public bool Playable => !Rejected && SoundEvent.IsSupportedType(Type);
             public bool MissingSound { get; set; }
+            public bool HasWarning => HasProblems || MissingBase || MissingSound;
         }
 
         private enum ValueSource
@@ -51,8 +54,10 @@ namespace GUI.Types.Viewers
             Group,
         }
 
-        // Read by the engine when it parses the event, outside of its stack
-        private static readonly HashSet<string> EventKeys = new(["groups", "preload_vsnds", "memory_type"], StringComparer.OrdinalIgnoreCase);
+        // Held by the event outside of its stack: read by the engine when it parses the event, or written by the compiler
+        private static readonly HashSet<string> EventKeys = new(["groups", "preload_vsnds", "memory_type", "vsnd_duration"], StringComparer.OrdinalIgnoreCase);
+
+        private static Color LinkColor => Themer.CurrentThemeColors.ColorMode == SystemColorMode.Dark ? Color.FromArgb(99, 161, 255) : Color.FromArgb(0, 102, 204);
 
         private static readonly Dictionary<string, (Task<(SoundEventIndex Index, List<ValveResourceFormat.ClosedCaptions.ClosedCaptions> Captions)> Task, HashSet<VrfGuiContext> Roots)> GameIndexes
             = new(StringComparer.OrdinalIgnoreCase);
@@ -70,12 +75,15 @@ namespace GUI.Types.Viewers
         private List<EventRow> filteredRows = [];
         private bool? soundsChecked;
         private EventRow? current;
+        private string captionText = string.Empty;
         private readonly List<(string Name, string File)> backHistory = [];
         private readonly List<(string Name, string File)> forwardHistory = [];
         private readonly List<string?> typeFilters = [null];
-        private int sortColumn;
+        private int sortColumn = 1;
         private bool sortDescending;
         private bool updating;
+        private bool listSplitMoved;
+        private bool detailsSplitMoved;
 
         private SoundEventPlayer? player;
         private SoundEvent? playing;
@@ -89,6 +97,7 @@ namespace GUI.Types.Viewers
         private readonly Font titleFont;
         private readonly Font boldFont;
         private readonly Font italicFont;
+        private readonly Font groupFont;
         private readonly ToolTip toolTip = new();
 
 #pragma warning disable CA2213 // Added to Controls, which disposes them
@@ -97,6 +106,7 @@ namespace GUI.Types.Viewers
         private readonly ThemedComboBox typeBox;
         private readonly ThemedComboBox statusBox;
         private readonly Label countLabel;
+        private readonly LinkLabel noMatchLink;
         private readonly Grid eventGrid;
 
         private readonly ThemedButton backButton;
@@ -108,13 +118,17 @@ namespace GUI.Types.Viewers
         private readonly Label titleLabel;
         private readonly LinkLabel typeLink;
         private readonly LinkLabel fileLink;
-        private readonly Label noticeLabel;
+        private readonly LinkLabel baseLink;
+        private readonly LinkLabel noticeLabel;
         private readonly Label captionLabel;
         private readonly CheckBox defaultsBox;
         private readonly Grid propertyGrid;
         private readonly TabPage soundsPage;
         private readonly TabPage referencesPage;
         private readonly TabPage usedByPage;
+        private readonly ThemedTabControl linkTabs;
+        private readonly SplitContainer listSplit;
+        private readonly SplitContainer detailsSplit;
         private readonly Grid soundGrid;
         private readonly Grid referenceGrid;
         private readonly Grid usedByGrid;
@@ -131,6 +145,7 @@ namespace GUI.Types.Viewers
             titleFont = new Font(Font.FontFamily, Font.Size * 1.5f, FontStyle.Bold);
             boldFont = new Font(Font, FontStyle.Bold);
             italicFont = new Font(Font, FontStyle.Italic);
+            groupFont = new Font("Segoe UI Semibold", Font.Size);
 
             searchBox = new SearchBox
             {
@@ -151,7 +166,7 @@ namespace GUI.Types.Viewers
                 Dock = DockStyle.Top,
                 AutoSize = true,
                 ColumnCount = 3,
-                Padding = new Padding(0, 4, 0, 0),
+                Padding = new Padding(0, 4, 0, 4),
             };
             filters.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
             filters.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 40));
@@ -170,13 +185,27 @@ namespace GUI.Types.Viewers
                 AccessibleName = "Count",
             };
 
+            noMatchLink = CreateLink("No events match");
+            noMatchLink.Dock = DockStyle.Top;
+            noMatchLink.Padding = new Padding(4, 8, 0, 8);
+            noMatchLink.Text = "No events match. Clear filters";
+            noMatchLink.LinkArea = new LinkArea("No events match. ".Length, "Clear filters".Length);
+            noMatchLink.Visible = false;
+            noMatchLink.LinkClicked += (_, _) => ClearFilters();
+
             eventGrid = new Grid("Events") { VirtualMode = true, CopiesCell = false };
+            eventGrid.Columns.Add(CreateColumn(string.Empty, 1));
             eventGrid.Columns.Add(CreateColumn("Name", 55));
             eventGrid.Columns.Add(CreateColumn("Type", 30));
             eventGrid.Columns.Add(CreateColumn("Duration", 15));
             eventGrid.Columns.Add(CreateColumn("File", 35));
-            eventGrid.Columns[3].Visible = false;
-            eventGrid.Columns[2].DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleRight;
+            eventGrid.Columns[0].AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
+            eventGrid.Columns[0].Width = this.AdjustForDPI(22);
+            eventGrid.Columns[0].DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+            eventGrid.Columns[0].DefaultCellStyle.ForeColor = Themer.CurrentThemeColors.Attention;
+            eventGrid.Columns[3].DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleRight;
+            eventGrid.Columns[3].DefaultCellStyle.Padding = new Padding(0, 0, this.AdjustForDPI(16), 0);
+            eventGrid.Columns[4].Visible = false;
 
             foreach (DataGridViewColumn column in eventGrid.Columns)
             {
@@ -184,12 +213,15 @@ namespace GUI.Types.Viewers
             }
 
             eventGrid.CellValueNeeded += OnEventCellValueNeeded;
+            eventGrid.CellFormatting += OnEventCellFormatting;
+            eventGrid.CellToolTipTextNeeded += OnEventCellToolTipTextNeeded;
             eventGrid.SelectionChanged += OnEventSelectionChanged;
             eventGrid.ColumnHeaderMouseClick += OnEventColumnHeaderClick;
             eventGrid.Activated += (_, _) => PlayEvent();
 
             var leftPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(4) };
             leftPanel.Controls.Add(eventGrid);
+            leftPanel.Controls.Add(noMatchLink);
             leftPanel.Controls.Add(countLabel);
             leftPanel.Controls.Add(filters);
             leftPanel.Controls.Add(searchBox);
@@ -199,7 +231,8 @@ namespace GUI.Types.Viewers
             playButton = CreateToolButton("AudioPlay", "Play event", "Play event (Space)", (_, _) => PlayEvent());
             stopButton = CreateToolButton("RendererStop", "Stop", "Stop (Esc)", (_, _) => StopPlayback());
             copyButton = CreateToolButton("CopyName", "Copy name", "Copy name (Ctrl+C in the list)", (_, _) => CopyName());
-            openButton = CreateToolButton("File", "Open file", "Open the file that defines this event", (_, _) => OpenDefiningFile());
+            openButton = CreateToolButton("Open", "Open file", "Open the file that defines this event", (_, _) => OpenDefiningFile());
+            copyButton.Margin = copyButton.Margin with { Left = this.AdjustForDPI(16) };
 
             titleLabel = new Label
             {
@@ -240,11 +273,13 @@ namespace GUI.Types.Viewers
             typeLink.LinkClicked += (_, _) => OpenStackFile();
             fileLink = CreateLink("File");
             fileLink.LinkClicked += (_, _) => OpenDefiningFile();
+            baseLink = CreateLink("Base");
+            baseLink.DisabledLinkColor = Themer.CurrentThemeColors.Attention;
+            baseLink.LinkClicked += (_, e) => FollowLink((string)e.Link!.LinkData!);
 
             defaultsBox = new CheckBox
             {
                 Text = "Show stack defaults",
-                Checked = true,
                 AutoSize = true,
                 Anchor = AnchorStyles.Right,
                 AccessibleName = "Show stack defaults",
@@ -256,7 +291,7 @@ namespace GUI.Types.Viewers
                 Dock = DockStyle.Top,
                 AutoSize = true,
                 ColumnCount = 3,
-                RowCount = 1,
+                RowCount = 2,
             };
             subtitle.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             subtitle.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -264,34 +299,73 @@ namespace GUI.Types.Viewers
             subtitle.Controls.Add(typeLink, 0, 0);
             subtitle.Controls.Add(fileLink, 1, 0);
             subtitle.Controls.Add(defaultsBox, 2, 0);
+            subtitle.Controls.Add(baseLink, 0, 1);
+            subtitle.SetColumnSpan(baseLink, 3);
 
-            noticeLabel = CreateInfoLabel("Notice");
-            captionLabel = CreateInfoLabel("Caption");
+            noticeLabel = CreateLink("Notice");
+            noticeLabel.Dock = DockStyle.Top;
+            noticeLabel.MaximumSize = new Size(4000, 0);
+            noticeLabel.Padding = new Padding(0, 2, 0, 4);
+            noticeLabel.LinkClicked += (_, e) => ShowEvent(current!.Name, (string)e.Link!.LinkData!);
 
-            propertyGrid = new Grid("Properties");
+            captionLabel = new Label
+            {
+                Dock = DockStyle.Top,
+                AutoSize = true,
+                MaximumSize = new Size(4000, 0),
+                Padding = new Padding(this.AdjustForDPI(12), this.AdjustForDPI(4), 0, this.AdjustForDPI(4)),
+                UseMnemonic = false,
+                AccessibleName = "Caption",
+            };
+            captionLabel.Paint += (_, e) =>
+            {
+                using var bar = new SolidBrush(Themer.CurrentThemeColors.Accent);
+                e.Graphics.FillRectangle(bar, 0, this.AdjustForDPI(2), this.AdjustForDPI(3), captionLabel.Height - this.AdjustForDPI(4));
+            };
+
+            propertyGrid = new Grid("Properties") { EmptyText = "This event has no keys" };
             propertyGrid.Columns.Add(CreateColumn("Property", 30));
-            propertyGrid.Columns.Add(CreateColumn("Value", 45));
-            propertyGrid.Columns.Add(CreateColumn("Source", 25));
+            propertyGrid.Columns.Add(CreateColumn("Value", 50));
+            propertyGrid.Columns.Add(CreateColumn("Source", 20));
+            propertyGrid.Columns[2].AutoSizeMode = DataGridViewAutoSizeColumnMode.AllCellsExceptHeader;
+            propertyGrid.Columns[2].MinimumWidth = this.AdjustForDPI(90);
             propertyGrid.CellPainting += OnPropertyCellPainting;
+            propertyGrid.FindLink = FindPropertyLink;
 
-            soundGrid = new Grid("Sounds");
-            soundGrid.Columns.Add(CreateColumn("Sound", 60));
-            soundGrid.Columns.Add(CreateColumn("Key", 25));
-            soundGrid.Columns.Add(CreateColumn("Status", 15));
+            soundGrid = new Grid("Sounds") { LinkColumn = 0, EmptyText = "This event names no sounds" };
+            soundGrid.Columns.Add(CreateColumn("Sound", 70));
+            soundGrid.Columns.Add(CreateColumn("Key", 30));
+            soundGrid.Columns.Add(CreateColumn("Status", 10));
             soundGrid.SelectionChanged += OnSoundSelectionChanged;
 
-            referenceGrid = new Grid("References");
-            referenceGrid.Columns.Add(CreateColumn("Event", 60));
-            referenceGrid.Columns.Add(CreateColumn("Key", 25));
-            referenceGrid.Columns.Add(CreateColumn("Status", 15));
+            referenceGrid = new Grid("References") { LinkColumn = 0, EmptyText = "This event names no other events" };
+            referenceGrid.Columns.Add(CreateColumn("Event", 70));
+            referenceGrid.Columns.Add(CreateColumn("Key", 30));
+            referenceGrid.Columns.Add(CreateColumn("Status", 10));
 
-            usedByGrid = new Grid("Used by");
-            usedByGrid.Columns.Add(CreateColumn("Event", 65));
-            usedByGrid.Columns.Add(CreateColumn("Key", 35));
+            usedByGrid = new Grid("Used by") { LinkColumn = 0, EmptyText = "No event names this event" };
+            usedByGrid.Columns.Add(CreateColumn("Event", 60));
+            usedByGrid.Columns.Add(CreateColumn("Key", 10));
+            usedByGrid.Columns.Add(CreateColumn("File", 40));
+
+            foreach (var grid in new[] { soundGrid, referenceGrid, usedByGrid })
+            {
+                grid.Columns[0].DefaultCellStyle.ForeColor = LinkColor;
+
+                foreach (DataGridViewColumn column in grid.Columns)
+                {
+                    if (column.HeaderText is "Key" or "Status")
+                    {
+                        column.AutoSizeMode = DataGridViewAutoSizeColumnMode.AllCells;
+                        column.MinimumWidth = this.AdjustForDPI(60);
+                    }
+                }
+            }
 
             foreach (var grid in new[] { propertyGrid, soundGrid, referenceGrid, usedByGrid })
             {
                 grid.Activated += OnGridRowActivated;
+                grid.LinkClicked += (_, target) => FollowLink(target);
             }
 
             audioHost = new Panel
@@ -310,16 +384,17 @@ namespace GUI.Types.Viewers
             usedByPage = new ThemedTabPage("Used by");
             usedByPage.Controls.Add(usedByGrid);
 
-            var linkTabs = new ThemedTabControl { Dock = DockStyle.Fill };
+            linkTabs = new ThemedTabControl { Dock = DockStyle.Fill, AccessibleName = "Links" };
             linkTabs.TabPages.Add(soundsPage);
             linkTabs.TabPages.Add(referencesPage);
             linkTabs.TabPages.Add(usedByPage);
 
-            var detailsSplit = new SplitContainer
+            detailsSplit = new SplitContainer
             {
                 Dock = DockStyle.Fill,
                 Orientation = Orientation.Horizontal,
                 SplitterWidth = this.AdjustForDPI(6),
+                FixedPanel = FixedPanel.Panel2,
             };
             detailsSplit.Panel1.Controls.Add(propertyGrid);
             detailsSplit.Panel2.Controls.Add(linkTabs);
@@ -331,33 +406,52 @@ namespace GUI.Types.Viewers
             rightPanel.Controls.Add(subtitle);
             rightPanel.Controls.Add(toolbar);
 
-            var split = new SplitContainer
+            listSplit = new SplitContainer
             {
                 Dock = DockStyle.Fill,
                 SplitterWidth = this.AdjustForDPI(6),
+                FixedPanel = FixedPanel.Panel1,
             };
-            split.Panel1.Controls.Add(leftPanel);
-            split.Panel2.Controls.Add(rightPanel);
-            Controls.Add(split);
+            listSplit.Panel1.Controls.Add(leftPanel);
+            listSplit.Panel2.Controls.Add(rightPanel);
+            Controls.Add(listSplit);
 
-            Layout += OnFirstLayout;
-
-            void OnFirstLayout(object? sender, LayoutEventArgs e)
-            {
-                if (Width <= 0)
-                {
-                    return;
-                }
-
-                Layout -= OnFirstLayout;
-                split.SplitterDistance = Width * 2 / 5;
-                detailsSplit.SplitterDistance = detailsSplit.Height * 3 / 5;
-            }
+            listSplit.SplitterMoving += (_, _) => listSplitMoved = true;
+            detailsSplit.SplitterMoving += (_, _) => detailsSplitMoved = true;
+            listSplit.SizeChanged += (_, _) => PlaceSplitters();
+            detailsSplit.SizeChanged += (_, _) => PlaceSplitters();
 
             playerTimer.Tick += OnPlayerTick;
 
             ShowEmptyDetails();
             loading = LoadAsync();
+        }
+
+        /// <summary>
+        /// Gives the event list 35% of the width and at least 380 pixels, and the links below the properties a fixed height
+        /// that grows by the player's while it shows, until the user moves that splitter.
+        /// </summary>
+        private void PlaceSplitters()
+        {
+            if (!listSplitMoved && listSplit.Width > 0)
+            {
+                var distance = Math.Max(this.AdjustForDPI(380), listSplit.Width * 35 / 100);
+
+                if (distance < listSplit.Width - listSplit.SplitterWidth - listSplit.Panel2MinSize)
+                {
+                    listSplit.SplitterDistance = distance;
+                }
+            }
+
+            if (!detailsSplitMoved && detailsSplit.Height > 0)
+            {
+                var distance = detailsSplit.Height - detailsSplit.SplitterWidth - this.AdjustForDPI(220) - (audioPanel != null ? audioHost.Height : 0);
+
+                if (distance > detailsSplit.Panel1MinSize)
+                {
+                    detailsSplit.SplitterDistance = distance;
+                }
+            }
         }
 
         /// <summary>
@@ -571,17 +665,15 @@ namespace GUI.Types.Viewers
             var grid = new Grid("Used by events")
             {
                 Dock = DockStyle.Bottom,
+                LinkColumn = 0,
+                EmptyText = "Finding events that use this sound...",
             };
             grid.Height = grid.AdjustForDPI(150);
             grid.Columns.Add(CreateColumn("Used by event", 55));
             grid.Columns.Add(CreateColumn("File", 45));
-            grid.Activated += (_, rowIndex) =>
-            {
-                if (grid.Rows[rowIndex].Tag is (string name, string file))
-                {
-                    _ = OpenEventAsync(context, file, name);
-                }
-            };
+            grid.Columns[0].DefaultCellStyle.ForeColor = LinkColor;
+            grid.Activated += (_, rowIndex) => Open(grid.Rows[rowIndex].Tag);
+            grid.LinkClicked += (_, target) => Open(target);
 
             _ = FillAsync();
 
@@ -598,18 +690,15 @@ namespace GUI.Types.Viewers
                         return;
                     }
 
-                    foreach (var name in index.GetEventsUsingSound(GetIndexPath(context)))
+                    foreach (var name in index.GetEventsUsingSound(GetIndexPath(context)).Order(StringComparer.OrdinalIgnoreCase))
                     {
                         var file = index.GetDefinitions(name)[^1].File;
-                        var rowIndex = grid.Rows.Add(name, file);
-                        grid.Rows[rowIndex].Tag = (name, file);
+                        var row = grid.Rows[grid.Rows.Add(name, ShortFileName(file))];
+                        row.Tag = (name, file);
+                        row.Cells[1].ToolTipText = file;
                     }
 
-                    if (grid.RowCount == 0)
-                    {
-                        grid.Rows.Add("No sound event plays this sound", string.Empty);
-                    }
-
+                    grid.EmptyText = "No sound event plays this sound";
                     grid.CurrentCell = null;
                     grid.ClearSelection();
                 }
@@ -618,6 +707,23 @@ namespace GUI.Types.Viewers
                     Log.Error(nameof(SoundEventViewer), $"Failed to index sound events for \"{context.DisplayPath}\": {e}");
                 }
             }
+
+            void Open(object? target)
+            {
+                if (target is (string name, string file))
+                {
+                    _ = OpenEventAsync(context, file, name);
+                }
+            }
+        }
+
+        /// <summary>The path of a sound event file inside <c>soundevents/</c>, without its extension.</summary>
+        private static string ShortFileName(string file)
+        {
+            var name = file.StartsWith("soundevents/", StringComparison.OrdinalIgnoreCase) ? file["soundevents/".Length..] : file;
+            return name.EndsWith(".vsndevts_c", StringComparison.OrdinalIgnoreCase) ? name[..^".vsndevts_c".Length]
+                : name.EndsWith(".vsndevts", StringComparison.OrdinalIgnoreCase) ? name[..^".vsndevts".Length]
+                : name;
         }
 
         private async Task LoadAsync()
@@ -749,7 +855,18 @@ namespace GUI.Types.Viewers
             typeBox.EndUpdate();
             updating = false;
 
-            eventGrid.Columns[3].Visible = scopeBox.SelectedIndex == 1;
+            eventGrid.Columns[3].Visible = ScopedRows().Any(static r => r.Duration >= 0f);
+            eventGrid.Columns[4].Visible = scopeBox.SelectedIndex == 1;
+            ApplyFilter();
+        }
+
+        private void ClearFilters()
+        {
+            updating = true;
+            searchBox.Text = string.Empty;
+            typeBox.SelectedIndex = 0;
+            statusBox.SelectedIndex = 0;
+            updating = false;
             ApplyFilter();
         }
 
@@ -797,6 +914,7 @@ namespace GUI.Types.Viewers
             countLabel.Text = filteredRows.Count == total
                 ? string.Create(CultureInfo.InvariantCulture, $"{total:N0} events")
                 : string.Create(CultureInfo.InvariantCulture, $"{filteredRows.Count:N0} of {total:N0} events");
+            noMatchLink.Visible = filteredRows.Count == 0;
 
             RefreshEventGrid();
         }
@@ -805,9 +923,10 @@ namespace GUI.Types.Viewers
         {
             Comparison<EventRow> comparison = sortColumn switch
             {
-                1 => static (a, b) => StringComparer.OrdinalIgnoreCase.Compare(a.Type, b.Type),
-                2 => static (a, b) => a.Duration.CompareTo(b.Duration),
-                3 => static (a, b) => StringComparer.OrdinalIgnoreCase.Compare(a.File, b.File),
+                0 => static (a, b) => b.HasWarning.CompareTo(a.HasWarning),
+                2 => static (a, b) => StringComparer.OrdinalIgnoreCase.Compare(a.Type, b.Type),
+                3 => static (a, b) => a.Duration.CompareTo(b.Duration),
+                4 => static (a, b) => StringComparer.OrdinalIgnoreCase.Compare(a.File, b.File),
                 _ => static (a, b) => StringComparer.OrdinalIgnoreCase.Compare(a.Name, b.Name),
             };
 
@@ -851,10 +970,49 @@ namespace GUI.Types.Viewers
 
             e.Value = e.ColumnIndex switch
             {
-                0 => row.Name,
-                1 => row.Type,
-                2 => row.Duration >= 0f ? row.Duration.ToString("0.00 s", CultureInfo.InvariantCulture) : string.Empty,
-                _ => row.File,
+                0 => row.HasWarning ? "⚠" : string.Empty,
+                1 => row.Name,
+                2 => row.Type.Length > 0 ? row.Type : "(no type)",
+                3 => row.Duration >= 0f ? row.Duration.ToString("0.00 s", CultureInfo.InvariantCulture) : string.Empty,
+                _ => ShortFileName(row.File),
+            };
+        }
+
+        private void OnEventCellFormatting(object? sender, DataGridViewCellFormattingEventArgs e)
+        {
+            if (e.RowIndex >= filteredRows.Count || e.CellStyle == null)
+            {
+                return;
+            }
+
+            var row = filteredRows[e.RowIndex];
+
+            if ((e.ColumnIndex == 1 && !row.Playable) || (e.ColumnIndex == 2 && row.Type.Length == 0))
+            {
+                e.CellStyle.ForeColor = Themer.CurrentThemeColors.ContrastSoft;
+            }
+        }
+
+        private void OnEventCellToolTipTextNeeded(object? sender, DataGridViewCellToolTipTextNeededEventArgs e)
+        {
+            if (e.RowIndex < 0 || e.RowIndex >= filteredRows.Count)
+            {
+                return;
+            }
+
+            var row = filteredRows[e.RowIndex];
+
+            e.ToolTipText = e.ColumnIndex switch
+            {
+                0 => string.Join(Environment.NewLine, new[]
+                {
+                    row.Rejected ? "The engine does not play this event." : row.HasProblems ? "The engine skips some of its bases." : null,
+                    row.MissingBase ? "A base event is not loaded." : null,
+                    row.MissingSound ? "A sound it names is not shipped." : null,
+                }.OfType<string>()),
+                1 when !row.Playable => row.Rejected ? "The engine does not play this event" : "This event cannot be played here",
+                4 => row.File,
+                _ => string.Empty,
             };
         }
 
@@ -909,6 +1067,9 @@ namespace GUI.Types.Viewers
             return true;
         }
 
+        /// <summary>Selects one of the tabs below the properties: 0 for sounds, 1 for references and 2 for the events that use this one.</summary>
+        public void ShowLinksTab(int tabIndex) => linkTabs.SelectedIndex = tabIndex;
+
         private void SelectCurrentInList()
         {
             var rowIndex = current == null ? -1 : filteredRows.IndexOf(current);
@@ -918,7 +1079,14 @@ namespace GUI.Types.Viewers
 
             if (rowIndex >= 0)
             {
-                eventGrid.CurrentCell = eventGrid.Rows[rowIndex].Cells[0];
+                var visible = eventGrid.DisplayedRowCount(includePartialRow: false);
+
+                if (rowIndex < eventGrid.FirstDisplayedScrollingRowIndex || rowIndex >= eventGrid.FirstDisplayedScrollingRowIndex + visible)
+                {
+                    eventGrid.FirstDisplayedScrollingRowIndex = Math.Max(0, rowIndex - visible / 2);
+                }
+
+                eventGrid.CurrentCell = eventGrid.Rows[rowIndex].Cells[1];
                 eventGrid.Rows[rowIndex].Selected = true;
             }
 
@@ -959,62 +1127,179 @@ namespace GUI.Types.Viewers
 
             current = row;
 
+            if (scopeBox.SelectedIndex == 0 && !row.File.Equals(fileName, StringComparison.OrdinalIgnoreCase))
+            {
+                scopeBox.SelectedIndex = 1;
+            }
+
             titleLabel.Text = row.Name;
             toolTip.SetToolTip(titleLabel, row.Name);
-            typeLink.Text = row.Type.Length > 0 ? row.Type : "(no type)";
-            typeLink.Links[0].Enabled = index!.GetStackFile(row.Type) != null;
-            fileLink.Text = row.File;
+            SetLink(typeLink, "Stack: ", row.Type.Length > 0 ? row.Type : "(no type)", index!.GetStackFile(row.Type) != null);
+            SetLink(fileLink, "File: ", row.File, enabled: true);
+            ShowBases(row);
 
-            var notices = new List<string>();
+            var (resolved, problems, _) = index.Resolve(row.Data);
+            var notice = new StringBuilder();
+            var noticeLinks = new List<(int Start, int Length, string File)>();
             List<string> definitionFiles = [.. index.GetDefinitions(row.Name).Select(static d => d.File)];
 
             if (definitionFiles.Count > 1)
             {
-                var others = string.Join(", ", definitionFiles.Where(f => f != row.File));
-                notices.Add(definitionFiles[^1] == row.File
-                    ? $"Also defined in {others}. This definition is used, as it loads last."
-                    : $"Also defined in {others}. The definition in {definitionFiles[^1]} is used, as it loads last.");
+                notice.Append("Also defined in ");
+
+                foreach (var file in definitionFiles.Where(f => f != row.File))
+                {
+                    notice.Append(noticeLinks.Count > 0 ? ", " : string.Empty);
+                    noticeLinks.Add((notice.Length, file.Length, file));
+                    notice.Append(file);
+                }
+
+                notice.Append(definitionFiles[^1] == row.File
+                    ? ". This definition is used, as it loads last."
+                    : $". The definition in {definitionFiles[^1]} is used, as it loads last.");
             }
 
-            var (resolved, problems, _) = index.Resolve(row.Data);
-            notices.AddRange(problems);
+            List<string> lines = [.. problems];
+            lines.AddRange(SoundEventIndex.GetBases(row.Data).Where(b => index.Find(b.Name) == null)
+                .Select(static b => $"Base {b.Name} is not loaded, so the keys it would give are missing."));
+            var hasProblems = lines.Count > 0;
+            var playsSounds = resolved.Any(r => GetLinks(r.Key, r.Value).Count > 0);
 
             if (!row.Playable && !row.Rejected)
             {
-                notices.Add(row.Type.Length == 0
+                lines.Add(row.Type.Length == 0
                     ? "Has no type, so it cannot be played as an event."
-                    : $"Events of type {row.Type} cannot be played here. Play its sounds below.");
+                    : index.GetSoundReferences(row.Data).Count > 0
+                        ? $"Events of type {row.Type} cannot be played here. Play its sounds below."
+                        : $"Events of type {row.Type} cannot be played here.");
             }
 
-            noticeLabel.Text = string.Join(Environment.NewLine, notices);
-            noticeLabel.Visible = notices.Count > 0;
-            noticeLabel.ForeColor = problems.Count > 0 ? Themer.CurrentThemeColors.Attention : Themer.CurrentThemeColors.ContrastSoft;
+            foreach (var line in lines)
+            {
+                notice.Append(notice.Length > 0 ? Environment.NewLine : string.Empty).Append(line);
+            }
 
-            var lineText = GetString(resolved, "line_text");
+            noticeLabel.Text = notice.ToString();
+            noticeLabel.Links.Clear();
+
+            foreach (var (start, length, file) in noticeLinks)
+            {
+                noticeLabel.Links.Add(start, length, file);
+            }
+
+            noticeLabel.Visible = notice.Length > 0;
+            noticeLabel.ForeColor = hasProblems ? Themer.CurrentThemeColors.Attention : Themer.CurrentThemeColors.ContrastSoft;
+
             var closedCaption = captions.Select(c => c[row.Name.ToLowerInvariant()]).FirstOrDefault(static c => c != null);
-            string?[] captionLines =
-            [
-                lineText.Length > 0 ? $"Line text: {lineText}" : null,
-                closedCaption != null ? $"Closed caption: {closedCaption.Text}" : null,
-            ];
-            var caption = string.Join(Environment.NewLine, captionLines.OfType<string>());
-
-            captionLabel.Text = caption;
-            captionLabel.Visible = caption.Length > 0;
+            captionText = CaptionMarkupRegex().Replace(closedCaption?.Text ?? GetString(resolved, "line_text"), string.Empty).Trim();
+            captionLabel.Text = captionText;
+            captionLabel.Visible = captionText.Length > 0;
             captionLabel.ForeColor = Themer.CurrentThemeColors.Contrast;
-            captionLabel.Font = italicFont;
 
-            playButton.Enabled = row.Playable;
-            toolTip.SetToolTip(playButton, row.Playable ? "Play event (Space)" : "This event cannot be played here");
+            playButton.Enabled = row.Playable && playsSounds;
+            toolTip.SetToolTip(playButton, !row.Playable ? "This event cannot be played here" : !playsSounds ? "This event plays no sounds" : "Play event (Space)");
             backButton.Enabled = backHistory.Count > 0;
             forwardButton.Enabled = forwardHistory.Count > 0;
             copyButton.Enabled = true;
             openButton.Enabled = true;
-            typeLink.LinkColor = Themer.CurrentThemeColors.Accent;
-            fileLink.LinkColor = Themer.CurrentThemeColors.Accent;
 
             ShowProperties();
             ShowLinks(row);
+        }
+
+        private static void SetLink(LinkLabel label, string prefix, string text, bool enabled)
+        {
+            label.Text = prefix + text;
+            label.LinkArea = new LinkArea(prefix.Length, text.Length);
+            label.Links[0].Enabled = enabled;
+        }
+
+        /// <summary>
+        /// Shows the chain of bases, following a single string base down to its own bases. Fragments of an array base are
+        /// listed with the field they apply to, and end the chain.
+        /// </summary>
+        private void ShowBases(EventRow row)
+        {
+            var text = new StringBuilder("Base: ");
+            var links = new List<(int Start, int Length, string Name, bool Loaded)>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { row.Name };
+            var bases = SoundEventIndex.GetBases(row.Data);
+
+            while (bases.Count > 0)
+            {
+                text.Append(links.Count > 0 ? " > " : string.Empty);
+
+                for (var i = 0; i < bases.Count; i++)
+                {
+                    var (name, field) = bases[i];
+                    text.Append(i > 0 ? ", " : string.Empty);
+                    links.Add((text.Length, name.Length, name, index!.Find(name) != null));
+                    text.Append(name);
+
+                    if (field != null)
+                    {
+                        text.Append(" (for ").Append(field).Append(')');
+                    }
+                }
+
+                if (bases.Count > 1 || bases[0].Field != null || !seen.Add(bases[0].Name) || index!.Find(bases[0].Name) is not { } baseEvent)
+                {
+                    break;
+                }
+
+                bases = SoundEventIndex.GetBases(baseEvent);
+            }
+
+            baseLink.Text = text.ToString();
+            baseLink.Links.Clear();
+
+            foreach (var (start, length, name, loaded) in links)
+            {
+                baseLink.Links.Add(start, length, name).Enabled = loaded;
+            }
+
+            baseLink.Visible = links.Count > 0;
+        }
+
+        /// <summary>Gets the sounds and the known events that a key's value names.</summary>
+        private List<string> GetLinks(string key, KVObject value)
+        {
+            var holder = KVObject.Collection();
+            holder.Add(key, value);
+
+            return [.. index!.GetSoundReferences(holder).Select(static r => r.Sound), .. index.GetEventReferences(current!.Name, holder).Select(static r => r.Event)];
+        }
+
+        private void FollowLink(object target)
+        {
+            switch (target)
+            {
+                case string sound when sound.EndsWith(".vsnd", StringComparison.OrdinalIgnoreCase):
+                    var soundRow = soundGrid.Rows.Cast<DataGridViewRow>().FirstOrDefault(r => sound.Equals(r.Tag as string, StringComparison.OrdinalIgnoreCase));
+
+                    if (soundRow == null)
+                    {
+                        Resource.OpenExternalReference(guiContext, sound);
+                        break;
+                    }
+
+                    linkTabs.SelectedTab = soundsPage;
+
+                    if (soundGrid.CurrentRow != soundRow)
+                    {
+                        soundGrid.CurrentCell = soundRow.Cells[0];
+                    }
+                    else if (audioPanel == null)
+                    {
+                        PlaySound(soundRow.Index, autoPlay: false);
+                    }
+
+                    break;
+
+                case string name:
+                    ShowEvent(name);
+                    break;
+            }
         }
 
         private void ShowEmptyDetails()
@@ -1022,6 +1307,7 @@ namespace GUI.Types.Viewers
             titleLabel.Text = string.Empty;
             typeLink.Text = string.Empty;
             fileLink.Text = string.Empty;
+            baseLink.Visible = false;
             noticeLabel.Visible = false;
             captionLabel.Visible = false;
 
@@ -1065,6 +1351,13 @@ namespace GUI.Types.Viewers
             }
 
             var shown = new HashSet<int>();
+            var captionLine = resolved.FindIndex(r => r.Key.Equals("line_text", StringComparison.OrdinalIgnoreCase) && r.Field == null
+                && r.Value.ValueType == KVValueType.String && CaptionMarkupRegex().Replace((string)r.Value, string.Empty).Trim() == captionText);
+
+            if (captionLine >= 0)
+            {
+                shown.Add(captionLine);
+            }
 
             List<(string Key, KVObject? Value, string Source, ValueSource Kind, bool Curve)> Group(string name)
             {
@@ -1089,17 +1382,20 @@ namespace GUI.Types.Viewers
             foreach (var (name, field, stack) in fields)
             {
                 var group = Group(field.GetSubCollection("_system_properties")?.GetStringProperty("property_group") is { Length: > 0 } propertyGroup ? propertyGroup : "General");
-                var curve = field.GetStringProperty("data_type") == "float6";
+                var dataType = field.GetStringProperty("data_type");
+                var curve = dataType == "float6";
 
                 if (byFieldName.TryGetValue(name, out var i))
                 {
-                    group.Add(Row(i, name, curve));
-                    shown.Add(i);
+                    if (shown.Add(i))
+                    {
+                        group.Add(Row(i, name, curve));
+                    }
                 }
-                else if (defaultsBox.Checked)
+                else if (defaultsBox.Checked && dataType != "public_opvar")
                 {
-                    var origin = stack.Equals(current.Type, StringComparison.OrdinalIgnoreCase) ? stack : $"{stack}, imported";
-                    group.Add((name, field.TryGetValue("value", out var defaultValue) ? defaultValue : null, $"default ({origin})", ValueSource.Default, curve));
+                    var source = stack.Equals(current.Type, StringComparison.OrdinalIgnoreCase) ? "default" : $"default (imported from {stack})";
+                    group.Add((name, field.TryGetValue("value", out var defaultValue) ? defaultValue : null, source, ValueSource.Default, curve));
                 }
             }
 
@@ -1114,10 +1410,14 @@ namespace GUI.Types.Viewers
 
                 var groupName = subStack != null && fieldNames.ContainsKey(subStack) ? subStack
                     : EventKeys.Contains(key) ? "Event"
-                    : fields.Count > 0 ? "Not in stack, ignored by the engine" : "Keys";
+                    : fields.Count > 0 ? "Not read by this stack" : "Keys";
                 var curve = subStack != null && fieldNames.TryGetValue(key, out var field) && field.GetStringProperty("data_type") == "float6";
                 Group(groupName).Add(Row(i, key, curve));
             }
+
+            var values = groups.SelectMany(static g => g.Rows).Where(static r => r.Value != null)
+                .DistinctBy(static r => r.Key, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(static r => r.Key, static r => r.Value!, StringComparer.OrdinalIgnoreCase);
 
             propertyGrid.SuspendLayout();
             propertyGrid.Rows.Clear();
@@ -1131,23 +1431,25 @@ namespace GUI.Types.Viewers
 
                 var header = propertyGrid.Rows[propertyGrid.Rows.Add(groupName, string.Empty, string.Empty)];
                 header.Tag = ValueSource.Group;
-                header.DefaultCellStyle.Font = boldFont;
-                header.DefaultCellStyle.BackColor = Themer.CurrentThemeColors.App;
-                header.DefaultCellStyle.SelectionBackColor = Themer.CurrentThemeColors.App;
-                header.DefaultCellStyle.SelectionForeColor = Themer.CurrentThemeColors.Contrast;
+                header.Height = this.AdjustForDPI(30);
 
                 foreach (var (key, value, source, kind, isCurve) in groupRows)
                 {
-                    var gridRow = propertyGrid.Rows[propertyGrid.Rows.Add(key, value == null ? string.Empty : FormatValue(value), source)];
+                    var text = value == null ? string.Empty : kind == ValueSource.Default ? FormatDefault(value) : FormatValue(value);
+                    var gridRow = propertyGrid.Rows[propertyGrid.Rows.Add(key, text, source)];
                     gridRow.Tag = kind;
+                    gridRow.Cells[1].ToolTipText = value == null ? string.Empty : kind == ValueSource.Default ? text : FormatValue(value, maxLength: 4000);
 
-                    if (isCurve && value != null && ParseCurve(value) is { } curve)
+                    if (isCurve && value != null && ParseCurve(value) is var (curve, keyPoints))
                     {
-                        gridRow.Cells[1].Tag = curve;
+                        var dimmed = values.TryGetValue($"use_{key}", out var flag) && !IsTrue(flag);
+                        gridRow.Cells[1].Tag = (curve, keyPoints, dimmed);
                         gridRow.Height = this.AdjustForDPI(44);
                     }
-
-                    gridRow.Cells[1].ToolTipText = value == null ? string.Empty : FormatValue(value, maxLength: 4000);
+                    else if (value != null && kind != ValueSource.Default && GetLinks(key, value) is { Count: > 0 } links)
+                    {
+                        gridRow.Cells[1].Tag = GetSegments(value, links);
+                    }
 
                     switch (kind)
                     {
@@ -1155,8 +1457,8 @@ namespace GUI.Types.Viewers
                             gridRow.Cells[1].Style.Font = boldFont;
                             break;
                         case ValueSource.Inherited:
-                            gridRow.Cells[2].Style.ForeColor = Themer.CurrentThemeColors.Accent;
-                            gridRow.Cells[2].ToolTipText = $"Inherited from {source}, double-click to show it";
+                            gridRow.Cells[2].Style.ForeColor = LinkColor;
+                            gridRow.Cells[2].ToolTipText = $"Inherited from {source}";
                             break;
                         case ValueSource.Default:
                             gridRow.DefaultCellStyle.Font = italicFont;
@@ -1169,6 +1471,89 @@ namespace GUI.Types.Viewers
             propertyGrid.ResumeLayout();
             propertyGrid.ClearSelection();
         }
+
+        private static bool IsTrue(KVObject value) => value.ValueType switch
+        {
+            KVValueType.Boolean => (bool)value,
+            KVValueType.String => (string)value is not ("false" or "0" or ""),
+            _ => !IsNumber(value) || value.ToDouble(CultureInfo.InvariantCulture) != 0,
+        };
+
+        /// <summary>Formats a stack default, which holds numbers as text with six decimals, like the event's own numbers.</summary>
+        private static string FormatDefault(KVObject value)
+            => value.ValueType == KVValueType.String && double.TryParse((string)value, NumberStyles.Float, CultureInfo.InvariantCulture, out var number)
+                ? number.ToString("0.######", CultureInfo.InvariantCulture)
+                : FormatValue(value);
+
+        /// <summary>Splits a value that names sounds or events into its text and the names to link.</summary>
+        private static List<(string Text, bool Link)> GetSegments(KVObject value, List<string> links)
+        {
+            var segments = new List<(string Text, bool Link)>();
+            var items = value.ValueType == KVValueType.Array ? value.Values.ToList() : [value];
+
+            if (value.ValueType == KVValueType.Array)
+            {
+                segments.Add(("[", false));
+            }
+
+            for (var i = 0; i < items.Count; i++)
+            {
+                if (i > 0)
+                {
+                    segments.Add((", ", false));
+                }
+
+                var text = FormatValue(items[i]);
+                segments.Add((text, items[i].ValueType == KVValueType.String && links.Contains(text)));
+            }
+
+            if (value.ValueType == KVValueType.Array)
+            {
+                segments.Add(("]", false));
+            }
+
+            return segments;
+        }
+
+        private IEnumerable<(Rectangle Bounds, string Text, bool Link)> LayoutSegments(List<(string Text, bool Link)> segments, Rectangle cell, Font font)
+        {
+            var x = cell.Left + this.AdjustForDPI(2);
+
+            foreach (var (text, link) in segments)
+            {
+                if (x >= cell.Right)
+                {
+                    yield break;
+                }
+
+                var width = System.Windows.Forms.TextRenderer.MeasureText(text, font, Size.Empty, SegmentFlags).Width;
+                yield return (new Rectangle(x, cell.Top, Math.Min(width, cell.Right - x), cell.Height), text, link);
+                x += width;
+            }
+        }
+
+        private string? FindPropertyLink(int rowIndex, int columnIndex, Point location)
+        {
+            var row = propertyGrid.Rows[rowIndex];
+
+            if (columnIndex == 2 && row.Tag is ValueSource.Inherited)
+            {
+                return ((string)row.Cells[2].Value!).Split(" via ")[0];
+            }
+
+            if (columnIndex != 1 || row.Cells[1].Tag is not List<(string Text, bool Link)> segments)
+            {
+                return null;
+            }
+
+            var cell = propertyGrid.GetCellDisplayRectangle(1, rowIndex, cutOverflow: false);
+            var font = row.Cells[1].InheritedStyle.Font ?? propertyGrid.Font;
+
+            return LayoutSegments(segments, new Rectangle(Point.Empty, cell.Size), font).FirstOrDefault(s => s.Link && s.Bounds.Contains(location)).Text;
+        }
+
+        [GeneratedRegex("<[^<>]*>")]
+        private static partial Regex CaptionMarkupRegex();
 
         private static bool IsNumber(KVObject value) => value.ValueType is KVValueType.FloatingPoint or KVValueType.FloatingPoint64
             or KVValueType.Int16 or KVValueType.Int32 or KVValueType.Int64 or KVValueType.UInt16 or KVValueType.UInt32 or KVValueType.UInt64;
@@ -1245,9 +1630,10 @@ namespace GUI.Types.Viewers
         /// Reads a float6 curve, either compiled as an array of points or written as a stack default that holds each point
         /// as text. Returns null for anything else.
         /// </summary>
-        private static SoundEventCurve? ParseCurve(KVObject value)
+        private static (SoundEventCurve Curve, PointF[] Keys)? ParseCurve(KVObject value)
         {
             var points = KVObject.Array();
+            var keys = new List<PointF>();
 
             foreach (var point in value.ValueType is KVValueType.Array or KVValueType.Collection ? value.Values : [])
             {
@@ -1264,6 +1650,7 @@ namespace GUI.Types.Viewers
                 }
 
                 points.Add(KVObject.Array(numbers.Select(static n => (KVObject)n)));
+                keys.Add(new PointF(numbers[0], numbers[1]));
             }
 
             if (points.Count == 0)
@@ -1273,7 +1660,7 @@ namespace GUI.Types.Viewers
 
             var holder = KVObject.Collection();
             holder.Add("curve", points);
-            return SoundEventCurve.Parse(holder, "curve");
+            return SoundEventCurve.Parse(holder, "curve") is { } curve ? (curve, [.. keys]) : null;
 
             static float[]? ParseNumbers(string text)
             {
@@ -1294,56 +1681,120 @@ namespace GUI.Types.Viewers
 
         private void OnPropertyCellPainting(object? sender, DataGridViewCellPaintingEventArgs e)
         {
-            if (e.RowIndex < 0 || e.ColumnIndex != 1 || e.Graphics == null || propertyGrid.Rows[e.RowIndex].Cells[1].Tag is not SoundEventCurve curve)
+            if (e.RowIndex < 0 || e.Graphics == null || e.CellStyle == null)
             {
                 return;
             }
 
-            e.Paint(e.CellBounds, DataGridViewPaintParts.Background | DataGridViewPaintParts.Border | DataGridViewPaintParts.SelectionBackground);
+            var row = propertyGrid.Rows[e.RowIndex];
 
+            if (row.Tag is ValueSource.Group)
+            {
+                using var back = new SolidBrush(Themer.CurrentThemeColors.App);
+                using var border = new Pen(Themer.CurrentThemeColors.Border);
+                e.Graphics.FillRectangle(back, e.CellBounds);
+                e.Graphics.DrawLine(border, e.CellBounds.Left, e.CellBounds.Top, e.CellBounds.Right, e.CellBounds.Top);
+
+                if (e.ColumnIndex == 0)
+                {
+                    var text = Rectangle.FromLTRB(e.CellBounds.Left + this.AdjustForDPI(4), e.CellBounds.Top, e.CellBounds.Right, e.CellBounds.Bottom - this.AdjustForDPI(4));
+                    System.Windows.Forms.TextRenderer.DrawText(e.Graphics, (string?)e.Value, groupFont, text, Themer.CurrentThemeColors.ContrastSoft,
+                        TextFormatFlags.Left | TextFormatFlags.Bottom | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+                }
+
+                e.Handled = true;
+                return;
+            }
+
+            if (e.ColumnIndex != 1)
+            {
+                return;
+            }
+
+            var selected = (e.State & DataGridViewElementStates.Selected) != 0;
+            var font = e.CellStyle.Font ?? propertyGrid.Font;
+
+            switch (row.Cells[1].Tag)
+            {
+                case List<(string Text, bool Link)> segments:
+                    e.Paint(e.CellBounds, DataGridViewPaintParts.Background | DataGridViewPaintParts.SelectionBackground);
+
+                    foreach (var (bounds, text, link) in LayoutSegments(segments, e.CellBounds, font))
+                    {
+                        var color = selected ? e.CellStyle.SelectionForeColor : link ? LinkColor : e.CellStyle.ForeColor;
+                        System.Windows.Forms.TextRenderer.DrawText(e.Graphics, text, font, bounds, color, SegmentFlags);
+                    }
+
+                    e.Handled = true;
+                    break;
+
+                case (SoundEventCurve curve, PointF[] keys, bool dimmed):
+                    e.Paint(e.CellBounds, DataGridViewPaintParts.Background | DataGridViewPaintParts.SelectionBackground);
+                    DrawCurve(e.Graphics, e.CellBounds, curve, keys, dimmed, font);
+                    e.Handled = true;
+                    break;
+            }
+        }
+
+        private void DrawCurve(Graphics graphics, Rectangle cell, SoundEventCurve curve, PointF[] keys, bool dimmed, Font font)
+        {
             var padding = this.AdjustForDPI(4);
-            var plot = Rectangle.Inflate(e.CellBounds, -padding, -padding);
+            var plot = Rectangle.Inflate(cell, -padding, -padding);
             var labelWidth = Math.Min(plot.Width / 2, this.AdjustForDPI(150));
             var labelArea = new Rectangle(plot.Right - labelWidth, plot.Top, labelWidth, plot.Height);
             plot.Width -= labelWidth + padding;
+
             var samples = Math.Max(2, plot.Width / 2);
             var minX = curve.MinX;
             var maxX = Math.Max(curve.MaxX, minX + 0.0001f);
-            var points = new PointF[samples];
-            var minY = float.MaxValue;
-            var maxY = float.MinValue;
+            var values = new float[samples];
 
             for (var i = 0; i < samples; i++)
             {
-                var y = curve.Evaluate(float.Lerp(minX, maxX, i / (samples - 1f)));
-                minY = MathF.Min(minY, y);
-                maxY = MathF.Max(maxY, y);
-                points[i] = new PointF(i, y);
+                values[i] = curve.Evaluate(float.Lerp(minX, maxX, i / (samples - 1f)));
             }
 
-            if (maxY - minY < 0.0001f)
+            var minY = MathF.Min(values.Min(), keys.Min(static k => k.Y));
+            var maxY = MathF.Max(values.Max(), keys.Max(static k => k.Y));
+            var constant = maxY - minY <= MathF.Max(0.0001f, 0.01f * MathF.Max(MathF.Abs(minY), MathF.Abs(maxY)));
+            var color = dimmed ? Themer.CurrentThemeColors.ContrastSoft : Themer.CurrentThemeColors.Accent;
+
+            float ToX(float x) => plot.Left + (x - minX) / (maxX - minX) * plot.Width;
+            float ToY(float y) => constant ? plot.Top + plot.Height / 2f : plot.Bottom - (y - minY) / (maxY - minY) * plot.Height;
+
+            using var framePen = new Pen(Themer.CurrentThemeColors.Border);
+            using var curvePen = new Pen(color, this.AdjustForDPI(2));
+            using var dotBrush = new SolidBrush(color);
+
+            var state = graphics.Save();
+            graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            graphics.DrawRectangle(framePen, plot);
+
+            if (!constant && minY < 0f && maxY > 0f)
             {
-                minY -= 0.5f;
-                maxY += 0.5f;
+                using var baselinePen = new Pen(Themer.CurrentThemeColors.Border) { DashStyle = DashStyle.Dash };
+                graphics.DrawLine(baselinePen, plot.Left, ToY(0f), plot.Right, ToY(0f));
             }
 
-            for (var i = 0; i < samples; i++)
+            graphics.DrawLines(curvePen, [.. values.Select((y, i) => new PointF(plot.Left + i * plot.Width / (samples - 1f), ToY(y)))]);
+
+            var radius = this.AdjustForDPI(2.5f);
+
+            foreach (var key in keys)
             {
-                points[i] = new PointF(plot.Left + points[i].X * plot.Width / (samples - 1f), plot.Bottom - (points[i].Y - minY) / (maxY - minY) * plot.Height);
+                graphics.FillEllipse(dotBrush, ToX(key.X) - radius, ToY(key.Y) - radius, radius * 2, radius * 2);
             }
 
-            using var axisPen = new Pen(Themer.CurrentThemeColors.Border);
-            using var curvePen = new Pen(Themer.CurrentThemeColors.Accent, this.AdjustForDPI(2));
-
-            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-            e.Graphics.DrawRectangle(axisPen, plot);
-            e.Graphics.DrawLines(curvePen, points);
-
-            var range = string.Create(CultureInfo.InvariantCulture, $"x {minX:0.##} to {maxX:0.##}{Environment.NewLine}y {minY:0.##} to {maxY:0.##}");
-            System.Windows.Forms.TextRenderer.DrawText(e.Graphics, range, Font, labelArea, Themer.CurrentThemeColors.ContrastSoft, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
-
-            e.Handled = true;
+            var range = constant
+                ? $"constant {FormatNumber((minY + maxY) / 2f, "G2")}"
+                : $"x {FormatNumber(minX)} to {FormatNumber(maxX)}{Environment.NewLine}y {FormatNumber(minY)} to {FormatNumber(maxY)}";
+            graphics.Restore(state);
+            System.Windows.Forms.TextRenderer.DrawText(graphics, range, font, labelArea, Themer.CurrentThemeColors.ContrastSoft,
+                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
         }
+
+        private static string FormatNumber(float value, string format = "G3")
+            => value.ToString(MathF.Abs(value) >= 1000f ? "0" : format, CultureInfo.InvariantCulture);
 
         private void ShowLinks(EventRow row)
         {
@@ -1378,9 +1829,12 @@ namespace GUI.Types.Viewers
 
             usedByGrid.Rows.Clear();
 
-            foreach (var (user, key) in index.GetReferencedBy(row.Name))
+            foreach (var (user, key) in index.GetReferencedBy(row.Name).OrderBy(static u => u.Event, StringComparer.OrdinalIgnoreCase))
             {
-                usedByGrid.Rows[usedByGrid.Rows.Add(user, key)].Tag = user;
+                var file = index.GetDefinitions(user)[^1].File;
+                var userRow = usedByGrid.Rows[usedByGrid.Rows.Add(user, key, ShortFileName(file))];
+                userRow.Tag = user;
+                userRow.Cells[2].ToolTipText = file;
             }
 
             soundsPage.Text = string.Create(CultureInfo.InvariantCulture, $"Sounds ({soundGrid.RowCount})");
@@ -1432,6 +1886,7 @@ namespace GUI.Types.Viewers
         /// <returns>Whether the sound could be loaded.</returns>
         public bool PlaySound(int rowIndex, bool autoPlay)
         {
+            ReleasePlayer();
             StopSound();
 
             if (rowIndex < 0 || rowIndex >= soundGrid.RowCount || soundGrid.Rows[rowIndex].Tag is not string sound)
@@ -1467,6 +1922,7 @@ namespace GUI.Types.Viewers
                 Log.Error(nameof(SoundEventViewer), $"Failed to play \"{sound}\": {e}");
             }
 
+            UpdatePlaybackState();
             return audioPanel != null;
         }
 
@@ -1477,6 +1933,13 @@ namespace GUI.Types.Viewers
             audioPanel = null;
             soundResource?.Dispose();
             soundResource = null;
+            UpdatePlaybackState();
+        }
+
+        private void UpdatePlaybackState()
+        {
+            stopButton.Enabled = player != null || audioPanel != null;
+            PlaceSplitters();
         }
 
         /// <summary>Plays the shown event through the renderer's sound event player, without spatialization.</summary>
@@ -1488,6 +1951,7 @@ namespace GUI.Types.Viewers
             }
 
             ReleasePlayer();
+            StopSound();
 
             try
             {
@@ -1520,7 +1984,7 @@ namespace GUI.Types.Viewers
             }
 
             playerTimer.Start();
-            stopButton.Enabled = true;
+            UpdatePlaybackState();
         }
 
         private void OnPlayerTick(object? sender, EventArgs e)
@@ -1556,7 +2020,7 @@ namespace GUI.Types.Viewers
             playing = null;
             player?.Dispose();
             player = null;
-            stopButton.Enabled = false;
+            UpdatePlaybackState();
         }
 
         protected override void OnVisibleChanged(EventArgs e)
@@ -1658,11 +2122,15 @@ namespace GUI.Types.Viewers
                     GoForward();
                     return true;
 
+                case Keys.Escape when searchBox.Focused && searchBox.TextLength > 0:
+                    searchBox.Clear();
+                    return true;
+
                 case Keys.Escape:
                     StopPlayback();
                     return true;
 
-                case Keys.Space when eventGrid.Focused:
+                case Keys.Space when !searchBox.Focused:
                     PlayEvent();
                     return true;
 
@@ -1746,18 +2214,13 @@ namespace GUI.Types.Viewers
         private static LinkLabel CreateLink(string name) => new()
         {
             AutoSize = true,
-            Margin = new Padding(0, 2, 12, 2),
+            Margin = new Padding(0, 2, 16, 2),
             UseMnemonic = false,
-            AccessibleName = name,
-        };
-
-        private static Label CreateInfoLabel(string name) => new()
-        {
-            Dock = DockStyle.Top,
-            AutoSize = true,
-            MaximumSize = new Size(4000, 0),
-            Padding = new Padding(0, 2, 0, 4),
-            UseMnemonic = false,
+            LinkBehavior = LinkBehavior.HoverUnderline,
+            LinkColor = LinkColor,
+            ActiveLinkColor = LinkColor,
+            VisitedLinkColor = LinkColor,
+            DisabledLinkColor = Themer.CurrentThemeColors.ContrastSoft,
             AccessibleName = name,
         };
 
@@ -1782,6 +2245,7 @@ namespace GUI.Types.Viewers
                 titleFont.Dispose();
                 boldFont.Dispose();
                 italicFont.Dispose();
+                groupFont.Dispose();
             }
 
             base.Dispose(disposing);
@@ -1808,14 +2272,33 @@ namespace GUI.Types.Viewers
         }
 
         /// <summary>
-        /// A read only grid that selects whole rows, raises <see cref="Activated"/> on double-click or Enter, and copies the
-        /// current cell with Ctrl+C.
+        /// A read only grid that selects whole rows, raises <see cref="Activated"/> on double-click or Enter, raises
+        /// <see cref="LinkClicked"/> when a link is clicked, and copies the current cell with Ctrl+C.
         /// </summary>
         private sealed class Grid : DataGridView
         {
             public event EventHandler<int>? Activated;
 
+            public event EventHandler<object>? LinkClicked;
+
             public bool CopiesCell { get; init; } = true;
+
+            /// <summary>A column whose cells link to the <see cref="DataGridViewRow.Tag"/> of their row.</summary>
+            public int LinkColumn { get; init; } = -1;
+
+            /// <summary>Finds what a point in a cell links to, given the row, the column and the point in the cell.</summary>
+            public Func<int, int, Point, object?>? FindLink { get; set; }
+
+            /// <summary>Text shown in place of the rows while there are none.</summary>
+            public string EmptyText
+            {
+                get => AccessibleDescription ?? string.Empty;
+                set
+                {
+                    AccessibleDescription = value;
+                    Invalidate();
+                }
+            }
 
             public Grid(string name)
             {
@@ -1839,11 +2322,68 @@ namespace GUI.Types.Viewers
                 ColumnHeadersHeight = this.AdjustForDPI(26);
             }
 
-            protected override void OnCurrentCellChanged(EventArgs e)
+            private object? FindLinkAt(int rowIndex, int columnIndex, Point location)
             {
-                base.OnCurrentCellChanged(e);
+                if (rowIndex < 0 || columnIndex < 0)
+                {
+                    return null;
+                }
 
-                ColumnHeadersDefaultCellStyle.SelectionBackColor = ColumnHeadersDefaultCellStyle.BackColor;
+                return FindLink != null ? FindLink(rowIndex, columnIndex, location) : columnIndex == LinkColumn ? Rows[rowIndex].Tag : null;
+            }
+
+            protected override void OnHandleCreated(EventArgs e)
+            {
+                base.OnHandleCreated(e);
+
+                CurrentCell = null;
+            }
+
+            protected override void OnCellPainting(DataGridViewCellPaintingEventArgs e)
+            {
+                if (e.RowIndex < 0 && e.CellStyle != null)
+                {
+                    e.CellStyle.SelectionBackColor = e.CellStyle.BackColor;
+                    e.CellStyle.SelectionForeColor = e.CellStyle.ForeColor;
+                }
+
+                base.OnCellPainting(e);
+            }
+
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                base.OnPaint(e);
+
+                if (RowCount == 0 && EmptyText.Length > 0)
+                {
+                    var area = Rectangle.FromLTRB(this.AdjustForDPI(6), ColumnHeadersHeight + this.AdjustForDPI(6), ClientSize.Width, ClientSize.Height);
+                    System.Windows.Forms.TextRenderer.DrawText(e.Graphics, EmptyText, Font, area, Themer.CurrentThemeColors.ContrastSoft,
+                        TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
+                }
+            }
+
+            protected override void OnCellMouseMove(DataGridViewCellMouseEventArgs e)
+            {
+                base.OnCellMouseMove(e);
+
+                Cursor = FindLinkAt(e.RowIndex, e.ColumnIndex, e.Location) != null ? Cursors.Hand : Cursors.Default;
+            }
+
+            protected override void OnMouseLeave(EventArgs e)
+            {
+                base.OnMouseLeave(e);
+
+                Cursor = Cursors.Default;
+            }
+
+            protected override void OnCellMouseClick(DataGridViewCellMouseEventArgs e)
+            {
+                base.OnCellMouseClick(e);
+
+                if (e.Button == MouseButtons.Left && FindLinkAt(e.RowIndex, e.ColumnIndex, e.Location) is { } target)
+                {
+                    LinkClicked?.Invoke(this, target);
+                }
             }
 
             protected override void OnCellDoubleClick(DataGridViewCellEventArgs e)
