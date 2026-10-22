@@ -108,6 +108,14 @@ namespace GUI.Controls
             borderPen.Alignment = PenAlignment.Inset;
             pevent.Graphics.DrawPath(borderPen, roundedRect);
 
+            if (Focused && ShowFocusCues)
+            {
+                var accent = Themer.CurrentThemeColors.Accent;
+                using var focusPen = new Pen(backColor.ToArgb() == accent.ToArgb() ? Themer.CurrentThemeColors.Contrast : accent, this.AdjustForDPI(2));
+                focusPen.Alignment = PenAlignment.Inset;
+                pevent.Graphics.DrawPath(focusPen, roundedRect);
+            }
+
             TextRenderer.DrawText(pevent.Graphics, Text, Font, ClientRectangle, foreColor, LabelFormatFlags);
 
             if (Image != null)

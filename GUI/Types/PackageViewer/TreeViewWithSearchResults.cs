@@ -140,6 +140,7 @@ namespace GUI.Types.PackageViewer
             }
 
             mainListView.VirtualMode = true;
+            mainListView.ShowItemToolTips = true;
             mainListView.VirtualItems = ListViewItems;
             mainListView.RetrieveVirtualItem += MainListView_RetrieveVirtualItem;
 
@@ -262,6 +263,7 @@ namespace GUI.Types.PackageViewer
             mainSplitContainer.BackColor = Themer.CurrentThemeColors.AppMiddle;
             tableLayoutPanel2.BackColor = Themer.CurrentThemeColors.AppSoft;
             gridSizeSlider.BackColor = Themer.CurrentThemeColors.AppSoft;
+            searchStatusLabel.ForeColor = Themer.CurrentThemeColors.ContrastSoft;
 
             Themer.ThemeControl(gridRadioButton);
             Themer.ThemeControl(listRadioButton);
@@ -387,6 +389,7 @@ namespace GUI.Types.PackageViewer
                 UpdateSearchTextBoxToCurrentPath(pkgNode);
             }
 
+            ShowSearchResultsState(null);
             RecordNavigation(new FolderNavigationEntry(pkgNode));
         }
 
@@ -679,6 +682,7 @@ namespace GUI.Types.PackageViewer
                     {
                         item.Text = entry.GetFileName();
                         item.SubItems[2].Text = entry.TypeName;
+                        item.SubItems[3].Text = entry.GetDirectoryPath();
                     }
                 }
 
@@ -1444,6 +1448,79 @@ namespace GUI.Types.PackageViewer
 
             DisplayMainListView();
             MainListView_DisplayNodes(node, updatePath: false);
+            UpdateSearchTextBoxToCurrentPath(request.Folder ?? node);
+            ShowSearchResultsState(DescribeSearch(request, results.Count));
+        }
+
+        /// <summary>
+        /// Shows the description of the search whose results are listed, with a Folder column, or hides them for <see langword="null"/>.
+        /// </summary>
+        private void ShowSearchResultsState(string? description)
+        {
+            const int FolderColumn = 3;
+
+            searchStatusLabel.Text = description;
+            mainListView.EmptyText = description;
+            mainListView.SharedFlexibleColumn = description != null ? FolderColumn : -1;
+
+            if (description != null && mainListView.Columns.Count == FolderColumn)
+            {
+                mainListView.Columns.Add("Folder");
+            }
+            else if (description == null && mainListView.Columns.Count > FolderColumn)
+            {
+                mainListView.Columns.RemoveAt(FolderColumn);
+
+                if (mainListView.ListViewItemSorter is ListViewColumnSorter { SortColumn: >= FolderColumn } sorter)
+                {
+                    sorter.SortColumn = 0;
+                }
+            }
+
+            mainListView.AdjustColumnWidths();
+        }
+
+        private static string DescribeSearch(SearchRequest request, int count)
+        {
+            var description = new StringBuilder(count switch
+            {
+                0 => "No files",
+                1 => "1 file",
+                _ => string.Create(CultureInfo.InvariantCulture, $"{count} files"),
+            });
+
+            if (request.Text.Length > 0)
+            {
+                description.Append(request switch
+                {
+                    { HexBytes: true } => $" containing the bytes {request.Text}",
+                    { Target: SearchTarget.Contents } => $" containing \"{request.Text}\"",
+                    { Target: SearchTarget.Path } => $" with \"{request.Text}\" in the path",
+                    _ => $" named \"{request.Text}\"",
+                });
+            }
+
+            if (request.Extension != null)
+            {
+                description.Append(" of type ").Append(request.Extension);
+            }
+
+            if (request.FilterKey != null)
+            {
+                description.Append(" with asset info ").Append(request.FilterKey);
+
+                if (request.FilterValue != null)
+                {
+                    description.Append(" = ").Append(request.FilterValue);
+                }
+            }
+
+            if (request.Folder != null)
+            {
+                description.Append(" in ").Append(PackageViewer.GetFolderPath(request.Folder));
+            }
+
+            return description.ToString();
         }
 
         private void MainListView_ColumnClick(object? sender, ColumnClickEventArgs e)
@@ -1674,6 +1751,8 @@ namespace GUI.Types.PackageViewer
 
             item.SubItems.Add(HumanReadableByteSizeFormatter.Format(file.TotalLength));
             item.SubItems.Add(file.TypeName);
+            item.SubItems.Add(file.GetDirectoryPath());
+            item.ToolTipText = file.GetFullPath();
 
             ListViewItems.Add(item);
         }

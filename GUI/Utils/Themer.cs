@@ -25,6 +25,9 @@ namespace GUI.Utils
             /// <summary>For borders meant to visually separate parts of the interface.</summary>
             public required Color Border { get; init; }
 
+            /// <summary>For the outline of input controls like text boxes, dropdowns and buttons.</summary>
+            public required Color ControlBorder { get; init; }
+
             /// <summary>For any element which needs contrast from the background, like text</summary>
             public required Color Contrast { get; init; }
             /// <summary>For any element which needs contrast but doesn't have to be as visible, like inactive text or scrollbars</summary>
@@ -63,6 +66,7 @@ namespace GUI.Utils
             AppSoft = Color.FromArgb(44, 49, 61),
 
             Border = Color.FromArgb(51, 57, 74),
+            ControlBorder = Color.FromArgb(83, 92, 119),
 
             Contrast = Color.White,
             ContrastSoft = Color.FromArgb(158, 159, 164),
@@ -84,6 +88,7 @@ namespace GUI.Utils
             AppSoft = Color.FromArgb(251, 251, 251),
 
             Border = Color.FromArgb(188, 188, 188),
+            ControlBorder = Color.FromArgb(124, 124, 124),
 
             Contrast = Color.Black,
             ContrastSoft = Color.FromArgb(80, 80, 80),

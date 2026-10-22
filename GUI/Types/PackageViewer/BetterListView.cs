@@ -12,6 +12,20 @@ namespace GUI.Types.PackageViewer
         public Color Highlight { get; set; } = Color.White;
         public VrfGuiContext? VrfGuiContext { get; set; }
         internal List<ListViewItem>? VirtualItems { get; set; }
+
+        /// <summary>Gets or sets a column that shares the flexible width with the first column, or -1 for none.</summary>
+        internal int SharedFlexibleColumn { get; set; } = -1;
+
+        /// <summary>Gets or sets the text drawn in place of the items while the list is empty.</summary>
+        internal string? EmptyText
+        {
+            get;
+            set
+            {
+                field = value;
+                Invalidate();
+            }
+        }
         private bool isAdjustingColumns;
         public event ScrollEventHandler? Scroll;
 
@@ -31,6 +45,7 @@ namespace GUI.Types.PackageViewer
         protected override void WndProc(ref Message m)
         {
             const int WM_LBUTTONDOWN = 0x0201;
+            const int WM_PAINT = 0x000F;
 
             // On Shift+click, range-select from the anchor in reading order instead of the native 2D region.
             if (m.Msg == WM_LBUTTONDOWN
@@ -43,6 +58,16 @@ namespace GUI.Types.PackageViewer
             }
 
             base.WndProc(ref m);
+
+            if (m.Msg == WM_PAINT && Items.Count == 0 && !string.IsNullOrEmpty(EmptyText))
+            {
+                using var graphics = CreateGraphics();
+                var top = this.AdjustForDPI(View == View.Details ? 40 : 16);
+                var bounds = new Rectangle(0, top, ClientSize.Width, ClientSize.Height - top);
+                TextRenderer.DrawText(graphics, EmptyText, Font, bounds, Themer.CurrentThemeColors.ContrastSoft,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
+            }
+
             if (m.Msg == PInvoke.WM_VSCROLL)
             {
                 OnScroll(new ScrollEventArgs((ScrollEventType)(m.WParam.ToInt32() & 0xffff), 0));
@@ -132,19 +157,22 @@ namespace GUI.Types.PackageViewer
                 var availableWidth = ClientSize.Width;
                 var fixedColumnsWidth = 0;
 
+                var sharedColumn = SharedFlexibleColumn < Columns.Count ? SharedFlexibleColumn : -1;
+                var flexibleColumns = sharedColumn >= 0 ? 2 : 1;
+
                 for (var i = 0; i < Columns.Count; i++)
                 {
-                    if (i != flexibleColumnIndex)
+                    if (i != flexibleColumnIndex && i != sharedColumn)
                     {
                         fixedColumnsWidth += scaledFixedWidth;
                     }
                 }
 
-                var flexibleWidth = Math.Max(availableWidth - fixedColumnsWidth, scaledFixedWidth);
+                var flexibleWidth = Math.Max((availableWidth - fixedColumnsWidth) / flexibleColumns, scaledFixedWidth);
 
                 for (var i = 0; i < Columns.Count; i++)
                 {
-                    var targetWidth = i == flexibleColumnIndex ? flexibleWidth : scaledFixedWidth;
+                    var targetWidth = i == flexibleColumnIndex || i == sharedColumn ? flexibleWidth : scaledFixedWidth;
 
                     if (Columns[i].Width != targetWidth)
                     {

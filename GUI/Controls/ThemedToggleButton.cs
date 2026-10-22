@@ -1,3 +1,4 @@
+using System.Drawing;
 using System.Windows.Forms;
 using GUI.Utils;
 
@@ -54,7 +55,9 @@ namespace GUI.Controls
                 return;
             }
 
-            BackColor = Checked && Enabled ? Themer.CurrentThemeColors.Accent : Themer.CurrentThemeColors.Border;
+            var pressed = Checked && Enabled;
+            BackColor = pressed ? Themer.CurrentThemeColors.Accent : Themer.CurrentThemeColors.Border;
+            ForeColor = pressed ? Color.Black : Themer.CurrentThemeColors.Contrast;
             Invalidate();
         }
 

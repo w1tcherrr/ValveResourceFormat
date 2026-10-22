@@ -96,11 +96,13 @@ namespace GUI.Types.PackageViewer
             return candidates;
         }
 
+        internal const string WholeWordPrefix = @"(?<!\w)(?:";
+
         internal static Regex CreateRegex(string pattern, SearchRequest request, TimeSpan matchTimeout)
         {
             if (request.WholeWord)
             {
-                pattern = string.Concat(@"(?<!\w)(?:", pattern, @")(?!\w)");
+                pattern = string.Concat(WholeWordPrefix, pattern, @")(?!\w)");
             }
 
             var options = RegexOptions.CultureInvariant | RegexOptions.Multiline | (request.MatchCase ? RegexOptions.None : RegexOptions.IgnoreCase);
@@ -112,7 +114,7 @@ namespace GUI.Types.PackageViewer
         {
             foreach (var entry in node.Files)
             {
-                if (extension == null || entry.TypeName == extension)
+                if (extension == null || string.Equals(entry.TypeName, extension, StringComparison.OrdinalIgnoreCase))
                 {
                     files.Add(entry);
                 }

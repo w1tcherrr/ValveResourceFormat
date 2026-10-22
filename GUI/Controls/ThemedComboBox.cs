@@ -45,6 +45,24 @@ public class ThemedComboBox : ComboBox
         ForeColor = Themer.CurrentThemeColors.Contrast;
     }
 
+    protected override void WndProc(ref Message m)
+    {
+        const int WM_PAINT = 0x000F;
+
+        base.WndProc(ref m);
+
+        if (m.Msg != WM_PAINT || GetStyle(ControlStyles.UserPaint))
+        {
+            return;
+        }
+
+        using var graphics = Graphics.FromHwnd(Handle);
+        using var borderPen = new Pen(Themer.CurrentThemeColors.ControlBorder);
+        using var innerPen = new Pen(BackColor);
+        graphics.DrawRectangle(borderPen, 0, 0, Width - 1, Height - 1);
+        graphics.DrawRectangle(innerPen, 1, 1, Width - 3, Height - 3);
+    }
+
     protected override void OnDrawItem(DrawItemEventArgs e)
     {
         if (e.Index < 0)
@@ -110,7 +128,7 @@ public class ThemedComboBox : ComboBox
         e.DrawFocusRectangle();
     }
 
-    private static string TrimStartToFit(Graphics graphics, string text, Font font, int width, TextFormatFlags drawFlags)
+    internal static string TrimStartToFit(Graphics graphics, string text, Font font, int width, TextFormatFlags drawFlags)
     {
         // Measured with the padding the text is drawn with, minus the end ellipsis it would otherwise take
         var measureFlags = (drawFlags & ~(TextFormatFlags.EndEllipsis | TextFormatFlags.PathEllipsis)) | TextFormatFlags.SingleLine;
