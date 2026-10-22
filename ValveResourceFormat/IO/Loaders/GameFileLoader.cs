@@ -890,10 +890,10 @@ namespace ValveResourceFormat.IO
         /// mounted packages, and loose files that are not game content, such as demo recordings, logs and crash dumps, are left out.
         /// </summary>
         /// <returns>
-        /// Each file with the package or path on disk it is in, and the file that is found first at its path instead,
+        /// Each file with its path on disk when it is loose, and the file that is found first at its path instead,
         /// or <see langword="null"/> when it is found itself.
         /// </returns>
-        public IEnumerable<(PackageEntry Entry, Package? Package, string? PathOnDisk, PackageEntry? OverriddenBy)> EnumerateMountedFiles()
+        public IEnumerable<(PackageEntry Entry, string? PathOnDisk, PackageEntry? OverriddenBy)> EnumerateMountedFiles()
         {
             MountShaderPackages();
 
@@ -918,7 +918,7 @@ namespace ValveResourceFormat.IO
                 {
                     foreach (var entry in package.Entries?.Values.SelectMany(static entries => entries) ?? [])
                     {
-                        yield return (entry, package, null, searched.Count > 0 ? FindFirst(entry.GetFullPath()) : null);
+                        yield return (entry, null, searched.Count > 0 ? FindFirst(entry.GetFullPath()) : null);
                     }
 
                     searched.Add((package, null));
@@ -966,7 +966,7 @@ namespace ValveResourceFormat.IO
                     };
 
                     looseFiles[path] = entry;
-                    yield return (entry, null, pathOnDisk, FindFirst(path));
+                    yield return (entry, pathOnDisk, FindFirst(path));
                 }
 
                 searched.Add((null, looseFiles));

@@ -738,6 +738,7 @@ namespace GUI.Types.PackageViewer
                         hiddenIndex++;
                         var newEntry = new PackageEntry
                         {
+                            Package = package,
                             FileName = $"Archive {archiveIndex:D3} File {hiddenIndex}",
                             DirectoryName = "Undetected filenames",
                             TypeName = " ",

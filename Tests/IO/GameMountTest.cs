@@ -37,7 +37,7 @@ namespace Tests.IO
                 var files = loader.EnumerateMountedFiles()
                     .Select(file => (
                         Path: file.Entry.GetFullPath(),
-                        Source: file.Package != null ? Path.GetFileName(Path.GetDirectoryName(file.Package.FilePath)) : Path.GetRelativePath(gameRoot.FullName, file.PathOnDisk!).Replace('\\', '/'),
+                        Source: file.Entry.Package != null ? Path.GetFileName(Path.GetDirectoryName(file.Entry.Package.FilePath)) : Path.GetRelativePath(gameRoot.FullName, file.PathOnDisk!).Replace('\\', '/'),
                         OverriddenBy: file.OverriddenBy?.GetFullPath()))
                     .Where(file => file.Path != "gameinfo.gi")
                     .ToList();

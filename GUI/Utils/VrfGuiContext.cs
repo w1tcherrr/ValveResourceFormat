@@ -46,10 +46,10 @@ namespace GUI.Utils
         /// <summary>
         /// Whether this context lists all the files of a mounted game, rather than one package, see <see cref="MountGame"/>.
         /// </summary>
-        public bool IsMountedGame => OverriddenFiles != null;
+        public bool IsMountedGame => OverriddenLooseFiles != null;
 
-        // Copies of a path in a mounted game that are not the one FindFile finds, by where they are
-        private Dictionary<PackageEntry, (Package? Package, string? PathOnDisk)>? OverriddenFiles;
+        // Paths on disk of the loose files of a mounted game that are not the copy FindFile finds
+        private Dictionary<PackageEntry, string>? OverriddenLooseFiles;
 
         /// <summary>
         /// Mounts the game of the gameinfo.gi this context is for as the engine does, and lists its files, see
@@ -58,13 +58,13 @@ namespace GUI.Utils
         public IEnumerable<(PackageEntry Entry, PackageEntry? OverriddenBy)> MountGame()
         {
             FindAndLoadSearchPaths(FileName);
-            OverriddenFiles = new(ReferenceEqualityComparer.Instance);
+            OverriddenLooseFiles = new(ReferenceEqualityComparer.Instance);
 
-            foreach (var (entry, package, pathOnDisk, overriddenBy) in EnumerateMountedFiles())
+            foreach (var (entry, pathOnDisk, overriddenBy) in EnumerateMountedFiles())
             {
-                if (overriddenBy != null)
+                if (overriddenBy != null && pathOnDisk != null)
                 {
-                    OverriddenFiles.Add(entry, (package, pathOnDisk));
+                    OverriddenLooseFiles.Add(entry, pathOnDisk);
                 }
 
                 yield return (entry, overriddenBy);
@@ -72,19 +72,18 @@ namespace GUI.Utils
         }
 
         /// <summary>
-        /// Finds the package an entry is in, or for a loose file of a mounted game, its path on disk. A file of a mounted
-        /// game is where <see cref="GameFileLoader.FindFile"/> finds its path, unless another copy overrides it.
+        /// Finds the package an entry is in, or for a loose file of a mounted game, its path on disk.
         /// </summary>
         public (Package? Package, string? PathOnDisk) Resolve(PackageEntry entry)
         {
-            if (OverriddenFiles == null)
+            if (entry.Package != null)
             {
-                return (CurrentPackage, null);
+                return (entry.Package, null);
             }
 
-            if (OverriddenFiles.TryGetValue(entry, out var source))
+            if (OverriddenLooseFiles?.TryGetValue(entry, out var overriddenPath) == true)
             {
-                return source;
+                return (null, overriddenPath);
             }
 
             var (pathOnDisk, package, _) = FindFile(entry.GetFullPath(), logNotFound: false);
@@ -93,19 +92,22 @@ namespace GUI.Utils
         }
 
         /// <summary>
-        /// Opens the data of an entry from the package it is in, or for a file of a mounted game, from where
+        /// Opens the data of an entry from the package it is in, or for a loose file of a mounted game, from where
         /// <see cref="GameFileLoader.FindFile"/> finds its path. Overridden loose copies of a mounted game can not be read.
         /// </summary>
         public Stream OpenEntryStream(PackageEntry entry)
         {
-            if (OverriddenFiles != null && !OverriddenFiles.ContainsKey(entry))
+            if (entry.Package != null)
             {
-                return GetFileStream(entry.GetFullPath()) ?? throw new FileNotFoundException($"\"{entry.GetFullPath()}\" was not found.");
+                return entry.Package.GetMemoryMappedStreamIfPossible(entry);
             }
 
-            var (package, _) = Resolve(entry);
+            if (OverriddenLooseFiles?.ContainsKey(entry) == true)
+            {
+                throw new InvalidOperationException($"\"{entry.GetFullPath()}\" is overridden by another copy.");
+            }
 
-            return (package ?? throw new InvalidOperationException($"\"{entry.GetFullPath()}\" is not in a package.")).GetMemoryMappedStreamIfPossible(entry);
+            return GetFileStream(entry.GetFullPath()) ?? throw new FileNotFoundException($"\"{entry.GetFullPath()}\" was not found.");
         }
 
         /// <summary>

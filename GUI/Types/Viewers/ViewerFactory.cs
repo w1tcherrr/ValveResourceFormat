@@ -24,13 +24,7 @@ static class ViewerFactory
 
         if (entry != null)
         {
-            var parentContext = vrfGuiContext.ParentGuiContext;
-            if (parentContext?.CurrentPackage == null)
-            {
-                throw new InvalidDataException("Parent context or package is null");
-            }
-
-            stream = parentContext.CurrentPackage.GetMemoryMappedStreamIfPossible(entry);
+            stream = (entry.Package ?? throw new InvalidDataException("Entry is not in a package")).GetMemoryMappedStreamIfPossible(entry);
 
             if (stream.Length >= magicData.Length)
             {
