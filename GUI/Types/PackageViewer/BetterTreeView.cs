@@ -26,6 +26,7 @@ namespace GUI.Types.PackageViewer
         public VrfGuiContext? VrfGuiContext { get; set; }
 
         private const int MaxPooledLength = 4 * 1024 * 1024;
+        private const int MaxTextSearchLength = 256 * 1024 * 1024;
 
         protected override void OnPaint(PaintEventArgs e)
         {
@@ -35,22 +36,23 @@ namespace GUI.Types.PackageViewer
         /// <summary>
         /// Finds the files in the searched folder and its subfolders that match a search.
         /// </summary>
+        /// <param name="include">Decides which files are searched at all, before their names or contents are read.</param>
         /// <returns>
-        /// The matching files, whether a contents search was cancelled before it read every file,
-        /// and how many files it could not read because they are in chunk files of a nested package.
+        /// The matching files, whether the user cancelled a contents search before it read every file,
+        /// and which files it could not search, or <see langword="null"/> when it searched them all.
         /// </returns>
-        public (List<PackageEntry> Files, bool Cancelled, int UnsearchedFiles) Search(SearchRequest request)
+        public (List<PackageEntry> Files, bool Cancelled, string? Unsearched) Search(SearchRequest request, Func<PackageEntry, bool>? include = null)
         {
             var candidates = new List<PackageEntry>();
 
             if ((request.Folder ?? Root) is { } folder)
             {
-                CollectFiles(folder, request.Extension, candidates);
+                CollectFiles(folder, request.Extension, include, candidates);
             }
 
             if (request.Text.Length == 0)
             {
-                return (candidates, false, 0);
+                return (candidates, false, null);
             }
 
             if (request.Target == SearchTarget.Contents)
@@ -97,7 +99,7 @@ namespace GUI.Types.PackageViewer
                 _ = AppMessageDialogs.ShowMessageAsync(Message, "Search stopped early", MessageIcon.Warning);
             }
 
-            return (candidates, false, 0);
+            return (candidates, false, null);
         }
 
         internal const string WholeWordPrefix = @"(?<!\w)(?:";
@@ -114,11 +116,11 @@ namespace GUI.Types.PackageViewer
             return new Regex(pattern, options, matchTimeout);
         }
 
-        private static void CollectFiles(VirtualPackageNode node, string? extension, List<PackageEntry> files)
+        private static void CollectFiles(VirtualPackageNode node, string? extension, Func<PackageEntry, bool>? include, List<PackageEntry> files)
         {
             foreach (var entry in node.Files)
             {
-                if (extension == null || string.Equals(entry.TypeName, extension, StringComparison.OrdinalIgnoreCase))
+                if ((extension == null || string.Equals(entry.TypeName, extension, StringComparison.OrdinalIgnoreCase)) && include?.Invoke(entry) != false)
                 {
                     files.Add(entry);
                 }
@@ -126,11 +128,11 @@ namespace GUI.Types.PackageViewer
 
             foreach (var folder in node.Folders.Values)
             {
-                CollectFiles(folder, extension, files);
+                CollectFiles(folder, extension, include, files);
             }
         }
 
-        private (List<PackageEntry> Files, bool Cancelled, int UnsearchedFiles) SearchFileContents(List<PackageEntry> candidates, SearchRequest request)
+        private (List<PackageEntry> Files, bool Cancelled, string? Unsearched) SearchFileContents(List<PackageEntry> candidates, SearchRequest request)
         {
             byte[] pattern = [];
             SearchValues<byte>? firstByte = null;
@@ -162,11 +164,12 @@ namespace GUI.Types.PackageViewer
             var results = new List<PackageEntry>();
             var skippedEntries = 0;
             var unreadableEntries = 0;
-            var completed = false;
+            var tooLargeEntries = 0;
+            var cancelled = false;
 
             if (VrfGuiContext?.CurrentPackage is not { } package)
             {
-                return (results, false, 0);
+                return (results, false, null);
             }
 
             using var progressDialog = new GenericProgressForm
@@ -176,6 +179,19 @@ namespace GUI.Types.PackageViewer
                 CancelOnEscape = true,
             };
             progressDialog.OnProcess = cancellationToken =>
+            {
+                try
+                {
+                    return SearchArchives(cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    cancelled = true;
+                    throw;
+                }
+            };
+
+            Task SearchArchives(CancellationToken cancellationToken)
             {
                 Log.Info(nameof(BetterTreeView), "Pattern search");
 
@@ -190,6 +206,12 @@ namespace GUI.Types.PackageViewer
                     if (package is NestedPackage && entry.ArchiveIndex != Package.DirectoryArchiveIndex)
                     {
                         unreadableEntries++;
+                        continue;
+                    }
+
+                    if (regex != null && entry.TotalLength > MaxTextSearchLength)
+                    {
+                        tooLargeEntries++;
                         continue;
                     }
 
@@ -290,10 +312,10 @@ namespace GUI.Types.PackageViewer
                 var found = string.Create(CultureInfo.InvariantCulture, $"Found {results.Count} matches");
                 Log.Info(nameof(BetterTreeView), found);
                 progressDialog.SetProgress(found);
-                completed = true;
 
                 return Task.CompletedTask;
-            };
+            }
+
             progressDialog.ShowDialog();
 
             if (skippedEntries > 0)
@@ -304,7 +326,19 @@ namespace GUI.Types.PackageViewer
                     MessageIcon.Warning);
             }
 
-            return (results, !completed, unreadableEntries);
+            List<string> unsearched = [];
+
+            if (unreadableEntries > 0)
+            {
+                unsearched.Add(string.Create(CultureInfo.InvariantCulture, $"{unreadableEntries:N0} {(unreadableEntries == 1 ? "file" : "files")} in chunk files of a nested package"));
+            }
+
+            if (tooLargeEntries > 0)
+            {
+                unsearched.Add(string.Create(CultureInfo.InvariantCulture, $"{tooLargeEntries:N0} {(tooLargeEntries == 1 ? "file" : "files")} over {MaxTextSearchLength / 1024 / 1024} MB"));
+            }
+
+            return (results, cancelled, unsearched.Count > 0 ? string.Join(" and ", unsearched) + " not searched" : null);
         }
 
         private static HashSet<PackageEntry> SearchEntriesInArchive(Stream archive, Regex regex, List<PackageEntry> archiveEntries, ref int skippedEntries, CancellationToken cancellationToken)

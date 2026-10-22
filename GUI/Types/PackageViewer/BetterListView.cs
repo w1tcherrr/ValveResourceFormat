@@ -45,7 +45,6 @@ namespace GUI.Types.PackageViewer
         protected override void WndProc(ref Message m)
         {
             const int WM_LBUTTONDOWN = 0x0201;
-            const int WM_PAINT = 0x000F;
 
             // On Shift+click, range-select from the anchor in reading order instead of the native 2D region.
             if (m.Msg == WM_LBUTTONDOWN
@@ -59,7 +58,7 @@ namespace GUI.Types.PackageViewer
 
             base.WndProc(ref m);
 
-            if (m.Msg == WM_PAINT && Items.Count == 0 && !string.IsNullOrEmpty(EmptyText))
+            if (m.Msg == PInvoke.WM_PAINT && Items.Count == 0 && !string.IsNullOrEmpty(EmptyText))
             {
                 using var graphics = CreateGraphics();
                 var top = this.AdjustForDPI(View == View.Details ? 40 : 16);

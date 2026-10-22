@@ -21,7 +21,6 @@ namespace GUI.Forms
         private sealed class FilterEntry(string key, int count, Dictionary<string, int>? values = null, string? label = null)
         {
             public string Key => key;
-            public int Count => count;
             public Dictionary<string, int>? Values => values;
 
             public override string ToString() => string.Create(CultureInfo.InvariantCulture, $"{label ?? key} ({count})");
@@ -32,7 +31,6 @@ namespace GUI.Forms
 
         private readonly TaskScheduler uiTaskScheduler;
         private int filterLoadVersion;
-        private int lastPopulatedKeysHash;
         private VirtualPackageNode? folder;
         private Dictionary<string, List<PackageEntry>>? packageEntries;
         private FilterEntry? valuesKey;
@@ -322,7 +320,6 @@ namespace GUI.Forms
         /// <summary>
         /// Sets the folder that "Only in" limits the search to, or <see langword="null"/> when no folder is selected.
         /// </summary>
-        /// <param name="searchFolder">The folder.</param>
         /// <param name="onlyInFolder">Whether to tick "Only in", otherwise it stays as it was last used.</param>
         public void SetFolder(VirtualPackageNode? searchFolder, bool onlyInFolder)
         {
@@ -355,7 +352,6 @@ namespace GUI.Forms
             SetFolder(null, onlyInFolder: false);
 
             filterLoadVersion++;
-            lastPopulatedKeysHash = 0;
             SetFilterKeyItems(["No asset info"], enabled: false);
         }
 
@@ -384,13 +380,6 @@ namespace GUI.Forms
         /// </summary>
         public void SetSearchableUserDataKeys(Task<Dictionary<string, (int Count, Dictionary<string, int> Values)>?> keysTask)
         {
-            // Skip repopulating if the same data is already loaded (preserves user's filter selection)
-            if (keysTask.IsCompletedSuccessfully
-                && keysTask.Result?.GetHashCode() == lastPopulatedKeysHash)
-            {
-                return;
-            }
-
             var version = ++filterLoadVersion;
 
             if (keysTask.IsCompleted)
@@ -412,8 +401,6 @@ namespace GUI.Forms
 
         private void PopulateFilterKeys(Dictionary<string, (int Count, Dictionary<string, int> Values)>? keys)
         {
-            lastPopulatedKeysHash = keys?.GetHashCode() ?? 0;
-
             if (keys is not { Count: > 0 })
             {
                 SetFilterKeyItems(["No asset info"], enabled: false);

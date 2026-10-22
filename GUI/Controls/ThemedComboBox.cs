@@ -1,6 +1,7 @@
 using System.Drawing;
 using System.Windows.Forms;
 using GUI.Utils;
+using Windows.Win32;
 
 namespace GUI.Controls;
 
@@ -70,11 +71,9 @@ public class ThemedComboBox : ComboBox
 
     protected override void WndProc(ref Message m)
     {
-        const int WM_PAINT = 0x000F;
-
         base.WndProc(ref m);
 
-        if (m.Msg != WM_PAINT || GetStyle(ControlStyles.UserPaint))
+        if (m.Msg != PInvoke.WM_PAINT || GetStyle(ControlStyles.UserPaint))
         {
             return;
         }
@@ -161,7 +160,6 @@ public class ThemedComboBox : ComboBox
             }
 
             TextRenderer.DrawText(e.Graphics, text, e.Font, bounds, foreColor, Color.Transparent, flags);
-
         }
 
         e.DrawFocusRectangle();

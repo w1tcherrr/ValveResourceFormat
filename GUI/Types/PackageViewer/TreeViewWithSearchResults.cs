@@ -86,7 +86,7 @@ namespace GUI.Types.PackageViewer
 
         private Dictionary<string, Dictionary<string, string>>? AssetSearchData;
         private string? searchStatus;
-        private (SearchRequest Request, bool Cancelled, int UnsearchedFiles)? displayedSearch;
+        private (SearchRequest Request, bool Cancelled, string? Unsearched)? displayedSearch;
         private Task<Dictionary<string, (int Count, Dictionary<string, int> Values)>?>? searchDataKeysTask;
 
         /// <summary>
@@ -397,8 +397,12 @@ namespace GUI.Types.PackageViewer
                 UpdateSearchTextBoxToCurrentPath(pkgNode);
             }
 
-            displayedSearch = null;
-            ShowSearchResultsState(null);
+            if (DisplayedFolder != null)
+            {
+                displayedSearch = null;
+                ShowSearchResultsState(null);
+            }
+
             RecordNavigation(new FolderNavigationEntry(pkgNode));
         }
 
@@ -698,7 +702,7 @@ namespace GUI.Types.PackageViewer
 
                 if (displayedSearch is { } search)
                 {
-                    ShowSearchResultsState(DescribeSearch(search.Request, ListViewItems.Count, search.Cancelled, search.UnsearchedFiles), mainListView.EmptyText);
+                    ShowSearchResultsState(DescribeSearch(search.Request, ListViewItems.Count, search.Cancelled, search.Unsearched), mainListView.EmptyText);
                 }
 
                 mainListView.VirtualListSize = ListViewItems.Count;
@@ -1431,7 +1435,7 @@ namespace GUI.Types.PackageViewer
         }
 
         /// <summary>
-        /// Performs a search and displays the matching files in the ListView with name, file size, and file type, replacing what it showed before.
+        /// Performs a search and displays the matching files in the ListView with name, folder, file size, and file type, replacing what it showed before.
         /// </summary>
         internal void SearchAndFillResults(SearchRequest request)
         {
@@ -1451,12 +1455,10 @@ namespace GUI.Types.PackageViewer
 
         private void PerformSearch(SearchRequest request)
         {
-            var (results, cancelled, unsearchedFiles) = mainTreeView.Search(request);
-
-            if (request.FilterKey != null && AssetSearchData != null)
-            {
-                results.RemoveAll(entry => !MatchesAssetFilter(entry, request.FilterKey, request.FilterValue));
-            }
+            var include = request.FilterKey is { } filterKey && AssetSearchData != null
+                ? entry => MatchesAssetFilter(entry, filterKey, request.FilterValue)
+                : (Func<PackageEntry, bool>?)null;
+            var (results, cancelled, unsearched) = mainTreeView.Search(request, include);
 
             var node = new VirtualPackageNode(string.Empty, 0, null);
             node.Files.AddRange(results);
@@ -1464,17 +1466,15 @@ namespace GUI.Types.PackageViewer
             DisplayMainListView();
             MainListView_DisplayNodes(node, updatePath: false);
             UpdateSearchTextBoxToCurrentPath(request.Folder ?? node);
-            displayedSearch = (request, cancelled, unsearchedFiles);
+            displayedSearch = (request, cancelled, unsearched);
 
             var isFiltered = request is not { Folder: null, Extension: null, FilterKey: null };
-            ShowSearchResultsState(DescribeSearch(request, results.Count, cancelled, unsearchedFiles), isFiltered ? "No matching files. Clear a filter or search the whole package." : "No matching files");
+            ShowSearchResultsState(DescribeSearch(request, results.Count, cancelled, unsearched), isFiltered ? "No matching files. Clear a filter or search the whole package." : "No matching files");
         }
 
         /// <summary>
         /// Shows the description of the search whose results are listed, with a Folder column, or hides them for <see langword="null"/>.
         /// </summary>
-        /// <param name="description">What the search found.</param>
-        /// <param name="emptyText">What the list shows when nothing was found.</param>
         private void ShowSearchResultsState(string? description, string? emptyText = null)
         {
             const int FolderColumn = 3;
@@ -1513,7 +1513,7 @@ namespace GUI.Types.PackageViewer
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
         }
 
-        private static string DescribeSearch(SearchRequest request, int count, bool cancelled, int unsearchedFiles)
+        private static string DescribeSearch(SearchRequest request, int count, bool cancelled, string? unsearched)
         {
             var description = new StringBuilder(count switch
             {
@@ -1561,9 +1561,9 @@ namespace GUI.Types.PackageViewer
                 description.Append(" so far");
             }
 
-            if (unsearchedFiles > 0)
+            if (unsearched != null)
             {
-                description.Append(CultureInfo.InvariantCulture, $" ({unsearchedFiles:N0} {(unsearchedFiles == 1 ? "file" : "files")} in chunk files of a nested package not searched)");
+                description.Append(" (").Append(unsearched).Append(')');
             }
 
             return description.ToString();

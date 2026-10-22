@@ -27,8 +27,6 @@ internal sealed partial class McpTools
 {
     private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(50);
 
-    private const PRINT_WINDOW_FLAGS RenderFullContent = (PRINT_WINDOW_FLAGS)2;
-
     [Tool("Select a file or folder in a package tab's tree, as a click does, expanding the folders on the way. A folder fills the listing, and a file shows its preview. Returns the selected path, the folder the listing belongs to and its item count.")]
     private static object SelectPackageItem(TabPage tab, [Description("Path in the package, such as materials/dev or materials/dev/a.vmat_c. An empty path selects the root.")] string path)
     {
@@ -201,13 +199,12 @@ internal sealed partial class McpTools
         return new { form.Width, form.Height };
     }
 
-    [Tool("Read the message box that is open, such as a warning after a search, with its title, text and buttons. 'button' presses one of them, which closes it. Answers while the call that opened the message box still waits for it.", Concurrent = true)]
+    [Tool("Read the MessageBox that is open, such as a warning after a search, with its title, text and buttons. 'button' presses one of them, which closes it. Answers while the call that opened the message box still waits for it. Other native dialogs, such as task dialogs and file dialogs, are not supported.", Concurrent = true)]
     private static Task<object> MessageBoxWindow(
         [Description("Text of the button to press, such as OK or Yes. Omit to only read the message box.")] string? button = null,
         CancellationToken cancellationToken = default) => OnUi<object>(() =>
     {
         const int MessageTextId = 0xFFFF;
-        const uint BM_CLICK = 0x00F5;
 
         HWND dialog = default;
 
@@ -239,6 +236,13 @@ internal sealed partial class McpTools
             return true;
         }, default);
 
+        var text = PInvoke.GetDlgItem(dialog, MessageTextId);
+
+        if (text == default && buttons.Count == 0)
+        {
+            throw new ToolException($"The open dialog '{TextOf(dialog)}' is not a MessageBox, such as a task dialog or a file dialog, which this tool does not read.");
+        }
+
         if (button != null)
         {
             var target = buttons.FirstOrDefault(candidate => candidate.Text.Equals(StripMnemonics(button), StringComparison.OrdinalIgnoreCase));
@@ -248,13 +252,13 @@ internal sealed partial class McpTools
                 throw new ToolException($"The message box has no button '{button}'. Its buttons are: {string.Join(", ", buttons.Select(static candidate => candidate.Text))}.");
             }
 
-            PInvoke.PostMessage(target.Handle, BM_CLICK, default, default);
+            PInvoke.PostMessage(target.Handle, PInvoke.BM_CLICK, default, default);
         }
 
         return new
         {
             Title = TextOf(dialog),
-            Text = TextOf(PInvoke.GetDlgItem(dialog, MessageTextId)),
+            Text = TextOf(text),
             Buttons = buttons.Select(static candidate => candidate.Text).ToList(),
             Pressed = button,
         };
@@ -300,7 +304,7 @@ internal sealed partial class McpTools
 
             try
             {
-                if (!PInvoke.PrintWindow((HWND)form.Handle, (HDC)hdc, RenderFullContent))
+                if (!PInvoke.PrintWindow((HWND)form.Handle, (HDC)hdc, (PRINT_WINDOW_FLAGS)PInvoke.PW_RENDERFULLCONTENT))
                 {
                     throw new ToolException($"Could not capture '{form.Text}'.");
                 }
