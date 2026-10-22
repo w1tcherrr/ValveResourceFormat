@@ -1443,7 +1443,7 @@ namespace GUI.Types.PackageViewer
 
         private void PerformSearch(SearchRequest request)
         {
-            var results = mainTreeView.Search(request);
+            var (results, cancelled, unsearchedFiles) = mainTreeView.Search(request);
 
             if (request.FilterKey != null && AssetSearchData != null)
             {
@@ -1458,7 +1458,7 @@ namespace GUI.Types.PackageViewer
             UpdateSearchTextBoxToCurrentPath(request.Folder ?? node);
 
             var isFiltered = request is not { Folder: null, Extension: null, FilterKey: null };
-            ShowSearchResultsState(DescribeSearch(request, results.Count), isFiltered ? "No matching files. Clear a filter or search the whole package." : "No matching files");
+            ShowSearchResultsState(DescribeSearch(request, results.Count, cancelled, unsearchedFiles), isFiltered ? "No matching files. Clear a filter or search the whole package." : "No matching files");
         }
 
         /// <summary>
@@ -1499,13 +1499,13 @@ namespace GUI.Types.PackageViewer
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
         }
 
-        private static string DescribeSearch(SearchRequest request, int count)
+        private static string DescribeSearch(SearchRequest request, int count, bool cancelled, int unsearchedFiles)
         {
             var description = new StringBuilder(count switch
             {
-                0 => "No files",
-                1 => "1 file",
-                _ => string.Create(CultureInfo.InvariantCulture, $"{count} files"),
+                0 => cancelled ? "Search cancelled, no files" : "No files",
+                1 => cancelled ? "Search cancelled, 1 file" : "1 file",
+                _ => string.Create(CultureInfo.InvariantCulture, $"{(cancelled ? "Search cancelled, " : "")}{count:N0} files"),
             });
 
             if (request.Text.Length > 0)
@@ -1540,6 +1540,16 @@ namespace GUI.Types.PackageViewer
             if (request.Folder != null)
             {
                 description.Append(" in ").Append(PackageViewer.GetFolderPath(request.Folder));
+            }
+
+            if (cancelled)
+            {
+                description.Append(" so far");
+            }
+
+            if (unsearchedFiles > 0)
+            {
+                description.Append(CultureInfo.InvariantCulture, $" ({unsearchedFiles:N0} {(unsearchedFiles == 1 ? "file" : "files")} in chunk files of a nested package not searched)");
             }
 
             return description.ToString();
@@ -2037,11 +2047,7 @@ namespace GUI.Types.PackageViewer
             }
 
             ListViewItems.Sort(sorter.Compare);
-
-            if (ListViewItems.Count > 0)
-            {
-                mainListView.RedrawItems(0, ListViewItems.Count - 1, true);
-            }
+            mainListView.Invalidate();
         }
 
         private void AssignBigIconIndicesAndRenderThumbnails()

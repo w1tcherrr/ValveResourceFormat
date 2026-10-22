@@ -35,7 +35,11 @@ namespace GUI.Types.PackageViewer
         /// <summary>
         /// Finds the files in the searched folder and its subfolders that match a search.
         /// </summary>
-        public List<PackageEntry> Search(SearchRequest request)
+        /// <returns>
+        /// The matching files, whether a contents search was cancelled before it read every file,
+        /// and how many files it could not read because they are in chunk files of a nested package.
+        /// </returns>
+        public (List<PackageEntry> Files, bool Cancelled, int UnsearchedFiles) Search(SearchRequest request)
         {
             var candidates = new List<PackageEntry>();
 
@@ -46,7 +50,7 @@ namespace GUI.Types.PackageViewer
 
             if (request.Text.Length == 0)
             {
-                return candidates;
+                return (candidates, false, 0);
             }
 
             if (request.Target == SearchTarget.Contents)
@@ -93,7 +97,7 @@ namespace GUI.Types.PackageViewer
                 _ = AppMessageDialogs.ShowMessageAsync(Message, "Search stopped early", MessageIcon.Warning);
             }
 
-            return candidates;
+            return (candidates, false, 0);
         }
 
         internal const string WholeWordPrefix = @"(?<!\w)(?:";
@@ -126,7 +130,7 @@ namespace GUI.Types.PackageViewer
             }
         }
 
-        private List<PackageEntry> SearchFileContents(List<PackageEntry> candidates, SearchRequest request)
+        private (List<PackageEntry> Files, bool Cancelled, int UnsearchedFiles) SearchFileContents(List<PackageEntry> candidates, SearchRequest request)
         {
             byte[] pattern = [];
             SearchValues<byte>? firstByte = null;
@@ -157,10 +161,12 @@ namespace GUI.Types.PackageViewer
 
             var results = new List<PackageEntry>();
             var skippedEntries = 0;
+            var unreadableEntries = 0;
+            var completed = false;
 
             if (VrfGuiContext?.CurrentPackage is not { } package)
             {
-                return results;
+                return (results, false, 0);
             }
 
             using var progressDialog = new GenericProgressForm
@@ -174,7 +180,6 @@ namespace GUI.Types.PackageViewer
 
                 var maxArchiveIndex = -1;
                 var sortedEntriesPerArchive = new Dictionary<int, List<PackageEntry>>();
-                var unreadableEntries = 0;
 
                 foreach (var entry in candidates)
                 {
@@ -284,6 +289,7 @@ namespace GUI.Types.PackageViewer
                 var found = string.Create(CultureInfo.InvariantCulture, $"Found {results.Count} matches");
                 Log.Info(nameof(BetterTreeView), found);
                 progressDialog.SetProgress(found);
+                completed = true;
 
                 return Task.CompletedTask;
             };
@@ -297,7 +303,7 @@ namespace GUI.Types.PackageViewer
                     MessageIcon.Warning);
             }
 
-            return results;
+            return (results, !completed, unreadableEntries);
         }
 
         private static HashSet<PackageEntry> SearchEntriesInArchive(Stream archive, Regex regex, List<PackageEntry> archiveEntries, ref int skippedEntries, CancellationToken cancellationToken)

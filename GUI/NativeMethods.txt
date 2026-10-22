@@ -69,7 +69,13 @@ WM_LBUTTONDOWN
 WM_LBUTTONDBLCLK
 COPYDATASTRUCT
 HWND_MESSAGE
+EnumChildWindows
 EnumThreadWindows
+GetClassName
+GetDlgItem
+GetWindowText
+GetWindowTextLength
+IsWindowVisible
 GetCurrentThreadId
 GetKeyboardState
 MapVirtualKey

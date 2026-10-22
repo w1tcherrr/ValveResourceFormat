@@ -201,6 +201,81 @@ internal sealed partial class McpTools
         return new { form.Width, form.Height };
     }
 
+    [Tool("Read the message box that is open, such as a warning after a search, with its title, text and buttons. 'button' presses one of them, which closes it. Answers while the call that opened the message box still waits for it.", Concurrent = true)]
+    private static Task<object> MessageBoxWindow(
+        [Description("Text of the button to press, such as OK or Yes. Omit to only read the message box.")] string? button = null,
+        CancellationToken cancellationToken = default) => OnUi<object>(() =>
+    {
+        const int MessageTextId = 0xFFFF;
+        const uint BM_CLICK = 0x00F5;
+
+        HWND dialog = default;
+
+        PInvoke.EnumThreadWindows(PInvoke.GetCurrentThreadId(), (hwnd, _) =>
+        {
+            if (PInvoke.IsWindowVisible(hwnd) && ClassNameOf(hwnd) == "#32770")
+            {
+                dialog = hwnd;
+                return false;
+            }
+
+            return true;
+        }, default);
+
+        if (dialog == default)
+        {
+            throw new ToolException("No message box is open.");
+        }
+
+        var buttons = new List<(HWND Handle, string Text)>();
+
+        PInvoke.EnumChildWindows(dialog, (child, _) =>
+        {
+            if (ClassNameOf(child) == "Button")
+            {
+                buttons.Add((child, StripMnemonics(TextOf(child))));
+            }
+
+            return true;
+        }, default);
+
+        if (button != null)
+        {
+            var target = buttons.FirstOrDefault(candidate => candidate.Text.Equals(StripMnemonics(button), StringComparison.OrdinalIgnoreCase));
+
+            if (target.Handle == default)
+            {
+                throw new ToolException($"The message box has no button '{button}'. Its buttons are: {string.Join(", ", buttons.Select(static candidate => candidate.Text))}.");
+            }
+
+            PInvoke.PostMessage(target.Handle, BM_CLICK, default, default);
+        }
+
+        return new
+        {
+            Title = TextOf(dialog),
+            Text = TextOf(PInvoke.GetDlgItem(dialog, MessageTextId)),
+            Buttons = buttons.Select(static candidate => candidate.Text).ToList(),
+            Pressed = button,
+        };
+    }, cancellationToken);
+
+    private static string ClassNameOf(HWND hwnd)
+    {
+        Span<char> name = stackalloc char[64];
+        var length = PInvoke.GetClassName(hwnd, name);
+
+        return name[..length].ToString();
+    }
+
+    private static string TextOf(HWND hwnd)
+    {
+        var buffer = new char[PInvoke.GetWindowTextLength(hwnd) + 1];
+        var length = PInvoke.GetWindowText(hwnd, buffer);
+
+        return new string(buffer, 0, length);
+    }
+
     [Tool("Capture an open window as the screen shows it, frame included, even while other windows cover it. Returns a JPEG. 'path' also writes a PNG.")]
     private static ImageReply ScreenshotWindow(
         [Description("Title or control name of the window, such as Find. Defaults to the topmost dialog, or the main window when none is open.")] string? window = null,
