@@ -206,8 +206,21 @@ internal sealed partial class McpTools
         }
     }
 
+    /// <summary>Finds the sound event viewer of a tab and selects the tabs it sits in, so its buttons and lists are shown.</summary>
     private static SoundEventViewer SoundEventViewerOf(TabPage tab)
-        => SoundEventViewer.Find(tab) ?? throw new ToolException($"Tab '{tab.Text}' has no sound event viewer. Open a .vsndevts_c file.");
+    {
+        var viewer = SoundEventViewer.Find(tab) ?? throw new ToolException($"Tab '{tab.Text}' has no sound event viewer. Open a .vsndevts_c file.");
+
+        for (Control? control = viewer; control != null; control = control.Parent)
+        {
+            if (control is TabPage tabPage && tabPage.Parent is TabControl tabControl)
+            {
+                tabControl.SelectedTab = tabPage;
+            }
+        }
+
+        return viewer;
+    }
 
     /// <summary>Waits for a tab to load and for its sound event viewer to finish indexing.</summary>
     private static async Task WaitForSoundEvents(TabPage tab, CancellationToken cancellationToken)

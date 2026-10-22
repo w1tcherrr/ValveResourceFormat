@@ -609,7 +609,10 @@ namespace GUI.Types.Viewers
                 {
                     var found = context.FindFile(file, logNotFound: false);
                     return !context.RootContext.IsGameLocation(found.Package, found.PathOnDisk);
-                }).ToList();
+                })
+                .OrderBy(static file => !file.StartsWith(SoundEventIndex.AddonEventsFile, StringComparison.OrdinalIgnoreCase))
+                .ThenBy(static file => file, StringComparer.OrdinalIgnoreCase)
+                .ToList();
                 var fileName = GetIndexPath(context);
                 var addFile = fileEvents != null && !ownFiles.Contains(fileName, StringComparer.OrdinalIgnoreCase);
 
