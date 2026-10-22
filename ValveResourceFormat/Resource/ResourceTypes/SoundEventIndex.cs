@@ -42,7 +42,8 @@ namespace ValveResourceFormat.ResourceTypes
         private readonly List<string> files = [];
         private readonly Dictionary<string, List<(string File, KVObject Data)>> definitions = new(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, (string File, List<(string Name, KVObject Operator)> Operators)> stacks = new(StringComparer.OrdinalIgnoreCase);
-        private readonly Dictionary<string, (List<(string Name, KVObject Field, string Stack, string? Block)> Fields, Dictionary<string, int> ByName)> stackFields
+        private readonly Dictionary<string, (List<(string Name, KVObject Field, string Stack, string? Block)> Fields, Dictionary<string, int> ByName,
+            List<(string Block, string Name, string Stack, int Position)> Collisions)> stackFields
             = new(StringComparer.OrdinalIgnoreCase);
         private Dictionary<string, List<(string Event, string Key)>>? referencedBy;
         private Dictionary<string, List<string>>? soundUsers;
@@ -504,7 +505,7 @@ namespace ValveResourceFormat.ResourceTypes
 
         private string? GetFieldDefault(string stack, string field)
         {
-            var (fields, byName) = GetStackFieldMap(stack);
+            var (fields, byName, _) = GetStackFieldMap(stack);
 
             return byName.TryGetValue(field, out var i) && fields[i].Field.GetStringProperty("data_type") == "public_opvar"
                 ? fields[i].Field.GetStringProperty("value")
@@ -597,11 +598,11 @@ namespace ValveResourceFormat.ResourceTypes
         /// </summary>
         /// <remarks>
         /// The fields that the sub-stack of a <c>public_opvar</c> field brings in form the block of that field, which the
-        /// fragments of an array base with that <c>field_name</c> set. A later field of the same name replaces an earlier one
-        /// of the same stack, and an imported field does not replace a field of the stack's own fields or of its own block,
-        /// but gives its <c>data_type</c> to one that has none. Fields of two different blocks may share a name. The fields
-        /// of a sub-stack whose <c>public_opvar</c> field sets <c>use_public_opvar_scope</c> are named after that field, such
-        /// as <c>track_1.track_vsnd_files</c>.
+        /// fragments of an array base with that <c>field_name</c> set. There is one field of each name: a later field of the
+        /// same name replaces an earlier one of the same stack, and an imported field whose name, or name without its scope,
+        /// is already taken is left out, giving only its <c>data_type</c> to a field that has none. The fields of a sub-stack
+        /// whose <c>public_opvar</c> field sets <c>use_public_opvar_scope</c> are named after that field, such as
+        /// <c>track_1.track_vsnd_files</c>.
         /// </remarks>
         /// <returns>Each field name, its definition with <c>data_type</c>, the default <c>value</c> and <c>_system_properties</c>,
         /// the stack that declares it, which differs from <paramref name="stackName"/> for imported fields, and the
@@ -609,7 +610,17 @@ namespace ValveResourceFormat.ResourceTypes
         /// The stack's own fields come first.</returns>
         public IReadOnlyList<(string Name, KVObject Field, string Stack, string? Block)> GetStackFields(string stackName) => GetStackFieldMap(stackName).Fields;
 
-        private (List<(string Name, KVObject Field, string Stack, string? Block)> Fields, Dictionary<string, int> ByName) GetStackFieldMap(string stackName)
+        /// <summary>
+        /// Gets the fields of the blocks of a stack that were left out because a field of their name already exists. The
+        /// engine places the values of a fragment by their position in the block, so a fragment's values for the fields of
+        /// the block after a left out field land one field later.
+        /// </summary>
+        /// <returns>The block, the name of the left out field, the stack that declares it, and the index in
+        /// <see cref="GetStackFields"/> of the first field added after it.</returns>
+        public IReadOnlyList<(string Block, string Name, string Stack, int Position)> GetStackFieldCollisions(string stackName) => GetStackFieldMap(stackName).Collisions;
+
+        private (List<(string Name, KVObject Field, string Stack, string? Block)> Fields, Dictionary<string, int> ByName,
+            List<(string Block, string Name, string Stack, int Position)> Collisions) GetStackFieldMap(string stackName)
         {
             lock (stackFields)
             {
@@ -621,7 +632,7 @@ namespace ValveResourceFormat.ResourceTypes
 
             var fields = new List<(string Name, KVObject Field, string Stack, string? Block)>();
             var byName = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-            var byBlock = new Dictionary<(string? Block, string Name), int>();
+            var collisions = new List<(string Block, string Name, string Stack, int Position)>();
             var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var path = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -629,10 +640,10 @@ namespace ValveResourceFormat.ResourceTypes
 
             lock (stackFields)
             {
-                stackFields[stackName] = (fields, byName);
+                stackFields[stackName] = (fields, byName, collisions);
             }
 
-            return (fields, byName);
+            return (fields, byName, collisions);
 
             void AddFields(string stack, bool imported, string prefix, string? block)
             {
@@ -664,29 +675,35 @@ namespace ValveResourceFormat.ResourceTypes
                         }
 
                         var name = prefix + fieldName;
-                        var lowerName = name.ToLowerInvariant();
 
-                        if (!byBlock.TryGetValue((null, lowerName), out var existing) && !byBlock.TryGetValue((block, lowerName), out existing))
+                        if (!byName.TryGetValue(name, out var existing) && !byName.TryGetValue(fieldName, out existing))
                         {
-                            byName.TryAdd(name, fields.Count);
-                            byBlock.Add((block, lowerName), fields.Count);
+                            byName.Add(name, fields.Count);
                             fields.Add((name, field, stack, block));
                         }
                         else if (!imported && fields[existing].Stack == stack)
                         {
                             fields[existing] = (name, field, stack, fields[existing].Block);
                         }
-                        else if (imported && !fields[existing].Field.ContainsKey("data_type") && field.TryGetValue("data_type", out var dataType))
+                        else
                         {
-                            var overridden = KVObject.Collection();
-
-                            foreach (var (key, value) in fields[existing].Field)
+                            if (block != null && !block.Equals(fields[existing].Block, StringComparison.OrdinalIgnoreCase))
                             {
-                                overridden.Add(key, value);
+                                collisions.Add((block, name, stack, fields.Count));
                             }
 
-                            overridden.Add("data_type", dataType);
-                            fields[existing] = (name, overridden, fields[existing].Stack, fields[existing].Block);
+                            if (imported && !fields[existing].Field.ContainsKey("data_type") && field.TryGetValue("data_type", out var dataType))
+                            {
+                                var overridden = KVObject.Collection();
+
+                                foreach (var (key, value) in fields[existing].Field)
+                                {
+                                    overridden.Add(key, value);
+                                }
+
+                                overridden.Add("data_type", dataType);
+                                fields[existing] = (fields[existing].Name, overridden, fields[existing].Stack, fields[existing].Block);
+                            }
                         }
 
                         if (field.GetStringProperty("data_type") == "public_opvar" && field.GetStringProperty("value") is { Length: > 0 } subStack)
