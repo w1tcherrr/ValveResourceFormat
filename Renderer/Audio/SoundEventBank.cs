@@ -1,5 +1,5 @@
 using ValveKeyValue;
-using ValveResourceFormat.Serialization.KeyValues;
+using ValveResourceFormat.ResourceTypes;
 
 namespace ValveResourceFormat.Renderer.Audio;
 
@@ -42,12 +42,12 @@ public sealed class SoundEventBank
         }
     }
 
-    /// <summary>Adds all sound event definitions from a parsed soundevents file.</summary>
-    public void AddSoundEvents(KVObject soundEventsFile)
+    /// <summary>Adds all sound event definitions from a sound event file.</summary>
+    public void AddSoundEvents(IEnumerable<(string Name, KVObject Data)> soundEventsFile)
     {
-        foreach (var soundEvent in soundEventsFile)
+        foreach (var (name, data) in soundEventsFile)
         {
-            AddSoundEvent(soundEvent.Key, soundEventsFile.GetSubCollection(soundEvent.Key));
+            AddSoundEvent(name, data);
         }
     }
 
@@ -64,69 +64,25 @@ public sealed class SoundEventBank
             return null;
         }
 
-        definition = new SoundEventDefinition(name, ResolveBase(name, soundEvent, depth: 0));
+        definition = new SoundEventDefinition(name, ResolveBase(soundEvent));
         definitions.Add(name, definition);
         return definition;
     }
 
-    /// <summary>
-    /// Resolves the "base" inheritance chain. A base is either a single event name, or an array
-    /// of shared fragments referenced by "event_name" - a falloff curve, a mix send - each contributing only the fields the event lacks.
-    /// The merged result replaces the stored definition, so resolution happens once per event.
-    /// </summary>
-    private KVObject ResolveBase(string name, KVObject soundEvent, int depth)
+    private KVObject ResolveBase(KVObject soundEvent)
     {
-        if (depth > SoundEvent.MaxRecursionDepth || !soundEvent.TryGetValue("base", out var baseValue))
+        if (!soundEvent.ContainsKey("base"))
         {
             return soundEvent;
         }
 
-        var merged = new KVObject();
+        var merged = KVObject.Collection();
 
-        foreach (var property in soundEvent)
+        foreach (var (key, value, _) in SoundEventIndex.Resolve(soundEvent, name => soundEvents.GetValueOrDefault(name)))
         {
-            if (!string.Equals(property.Key, "base", StringComparison.OrdinalIgnoreCase))
-            {
-                merged.Add(property.Key, property.Value);
-            }
+            merged.Add(key, value);
         }
 
-        if (baseValue.ValueType == KVValueType.Array)
-        {
-            foreach (var fragment in soundEvent.GetArray("base"))
-            {
-                // The fragment's own "type" names what kind of fragment it is
-                // ("citadel_distance_falloff"), not what the event is, so it is not inherited
-                MergeBase(merged, fragment.GetStringProperty("event_name"), depth, inheritType: false);
-            }
-        }
-        else
-        {
-            MergeBase(merged, soundEvent.GetStringProperty("base"), depth, inheritType: true);
-        }
-
-        soundEvents[name] = merged;
         return merged;
-    }
-
-    private void MergeBase(KVObject merged, string? baseName, int depth, bool inheritType)
-    {
-        if (string.IsNullOrEmpty(baseName) || !soundEvents.TryGetValue(baseName, out var baseEvent))
-        {
-            return;
-        }
-
-        foreach (var property in ResolveBase(baseName, baseEvent, depth + 1))
-        {
-            if (!inheritType && string.Equals(property.Key, "type", StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            if (!merged.ContainsKey(property.Key))
-            {
-                merged.Add(property.Key, property.Value);
-            }
-        }
     }
 }

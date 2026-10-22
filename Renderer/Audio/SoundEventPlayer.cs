@@ -356,7 +356,7 @@ public sealed class SoundEventPlayer : IDisposable
             return;
         }
 
-        if (soundEventsFile.DataBlock is not BinaryKV3)
+        if (soundEventsFile.DataBlock is not SoundEventScript soundEventScript)
         {
             logger.LogWarning(
                 "Sound events file {FileName} has unexpected data block type {BlockType}, skipping",
@@ -365,7 +365,7 @@ public sealed class SoundEventPlayer : IDisposable
             return;
         }
 
-        bank.AddSoundEvents(soundEventsFile.DataBlock.AsKeyValueCollection());
+        bank.AddSoundEvents(soundEventScript.Events);
     }
 
     /// <summary>

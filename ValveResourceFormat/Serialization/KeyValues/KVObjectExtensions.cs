@@ -19,6 +19,7 @@ namespace ValveResourceFormat.Serialization.KeyValues
             data switch
             {
                 BinaryKV3 kv => kv.Data,
+                KeyValuesOrNTRO kvOrNtro => kvOrNtro.Data,
                 NTRO ntro => ntro.Output,
                 _ => throw new InvalidOperationException($"Cannot use {data.GetType().Name} as key-value collection")
             };

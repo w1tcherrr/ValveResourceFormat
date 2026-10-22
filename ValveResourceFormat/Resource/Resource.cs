@@ -550,6 +550,7 @@ namespace ValveResourceFormat
                 ResourceType.SboxManagedResource or ResourceType.ArtifactItem or ResourceType.DotaHeroList => new Plaintext() { Resource = this },
                 ResourceType.SmartProp => new SmartProp() { Resource = this },
                 ResourceType.Sound => new Sound() { Resource = this },
+                ResourceType.SoundEventScript => new SoundEventScript() { Resource = this },
                 ResourceType.SoundStackScript => new SoundStackScript() { Resource = this },
                 ResourceType.Texture => new Texture() { Resource = this },
                 ResourceType.World => new World() { Resource = this },
@@ -573,7 +574,8 @@ namespace ValveResourceFormat
                 or ResourceType.SmartProp
                 or ResourceType.AnimationGraph
                 or ResourceType.NmClip
-                or ResourceType.PostProcessing;
+                or ResourceType.PostProcessing
+                or ResourceType.SoundEventScript;
         }
 
         private static ResourceType DetermineResourceTypeByCompilerIdentifier(SpecialDependency input)
