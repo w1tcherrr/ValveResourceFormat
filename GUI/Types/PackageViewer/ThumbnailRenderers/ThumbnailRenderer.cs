@@ -138,9 +138,7 @@ internal abstract class ThumbnailRenderer : IDisposable
 
     public static Resource? LoadResourceFromPackageEntry(VrfGuiContext context, PackageEntry entry)
     {
-#pragma warning disable CA2000 // Disposed with the resource
         var stream = context.OpenEntryStream(entry);
-#pragma warning restore CA2000
         var resource = new Resource { FileName = entry.GetFullPath() };
         resource.Read(stream);
 

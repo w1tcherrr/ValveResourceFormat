@@ -366,9 +366,7 @@ namespace GUI.Types.Exporter
                 {
                     EnsureDirectoryExists(outFilePath);
 
-#pragma warning disable CA2000 // Disposed by the using declaration
                     using var stream = exportData.VrfGuiContext.OpenEntryStream(packageFile);
-#pragma warning restore CA2000
 
                     if (!decompile || !packageFile.TypeName.EndsWith(GameFileLoader.CompiledFileSuffix, StringComparison.Ordinal))
                     {

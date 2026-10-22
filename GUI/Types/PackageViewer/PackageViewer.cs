@@ -79,7 +79,7 @@ namespace GUI.Types.PackageViewer
         /// <summary>
         /// Whether this lists all the files of a mounted game, see <see cref="LoadGame"/>.
         /// </summary>
-        public bool IsMountedGame => vrfGuiContext.MountedFiles != null;
+        public bool IsMountedGame => vrfGuiContext.IsMountedGame;
 
         /// <summary>
         /// The files listed, by extension.

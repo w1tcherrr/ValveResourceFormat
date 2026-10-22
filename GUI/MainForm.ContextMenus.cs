@@ -134,7 +134,7 @@ namespace GUI
                 return;
             }
 
-            var packageLink = wantsFullPath && context.MountedFiles == null ? context.GetVpkLink() : null;
+            var packageLink = wantsFullPath && !context.IsMountedGame ? context.GetVpkLink() : null;
             var sb = new StringBuilder();
 
             foreach (var selectedNode in selectedNodes)
@@ -153,7 +153,7 @@ namespace GUI
                 {
                     var packageEntry = selectedNode.PackageEntry;
 
-                    if (wantsFullPath && context.MountedFiles != null && packageEntry != null)
+                    if (wantsFullPath && context.IsMountedGame && packageEntry != null)
                     {
                         var (package, pathOnDisk) = context.Resolve(packageEntry);
                         sb.Append(pathOnDisk != null

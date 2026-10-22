@@ -44,42 +44,68 @@ namespace GUI.Utils
         public ToolsAssetInfo? ToolsAssetInfo { get; private set; }
 
         /// <summary>
-        /// Where each file comes from when this context lists all the files of a mounted game, rather than one package.
+        /// Whether this context lists all the files of a mounted game, rather than one package, see <see cref="MountGame"/>.
         /// </summary>
-        public Dictionary<PackageEntry, (Package? Package, string? PathOnDisk)>? MountedFiles { get; private set; }
+        public bool IsMountedGame => OverriddenFiles != null;
+
+        // Copies of a path in a mounted game that are not the one FindFile finds, by where they are
+        private Dictionary<PackageEntry, (Package? Package, string? PathOnDisk)>? OverriddenFiles;
 
         /// <summary>
         /// Mounts the game of the gameinfo.gi this context is for as the engine does, and lists its files, see
-        /// <see cref="GameFileLoader.EnumerateMountedFiles"/>. Each file is added to <see cref="MountedFiles"/> as it is listed.
+        /// <see cref="GameFileLoader.EnumerateMountedFiles"/>.
         /// </summary>
         public IEnumerable<(PackageEntry Entry, PackageEntry? OverriddenBy)> MountGame()
         {
             FindAndLoadSearchPaths(FileName);
-            MountedFiles = new(ReferenceEqualityComparer.Instance);
+            OverriddenFiles = new(ReferenceEqualityComparer.Instance);
 
             foreach (var (entry, package, pathOnDisk, overriddenBy) in EnumerateMountedFiles())
             {
-                MountedFiles.Add(entry, (package, pathOnDisk));
+                if (overriddenBy != null)
+                {
+                    OverriddenFiles.Add(entry, (package, pathOnDisk));
+                }
+
                 yield return (entry, overriddenBy);
             }
         }
 
         /// <summary>
-        /// Finds the package an entry is in, or for a loose file of a mounted game, its path on disk.
+        /// Finds the package an entry is in, or for a loose file of a mounted game, its path on disk. A file of a mounted
+        /// game is where <see cref="GameFileLoader.FindFile"/> finds its path, unless another copy overrides it.
         /// </summary>
         public (Package? Package, string? PathOnDisk) Resolve(PackageEntry entry)
-            => MountedFiles != null && MountedFiles.TryGetValue(entry, out var source) ? source : (CurrentPackage, null);
+        {
+            if (OverriddenFiles == null)
+            {
+                return (CurrentPackage, null);
+            }
+
+            if (OverriddenFiles.TryGetValue(entry, out var source))
+            {
+                return source;
+            }
+
+            var (pathOnDisk, package, _) = FindFile(entry.GetFullPath(), logNotFound: false);
+
+            return (package, pathOnDisk);
+        }
 
         /// <summary>
-        /// Opens the data of an entry from the package or the file on disk it is in, see <see cref="Resolve"/>.
+        /// Opens the data of an entry from the package it is in, or for a file of a mounted game, from where
+        /// <see cref="GameFileLoader.FindFile"/> finds its path. Overridden loose copies of a mounted game can not be read.
         /// </summary>
         public Stream OpenEntryStream(PackageEntry entry)
         {
-            var (package, pathOnDisk) = Resolve(entry);
+            if (OverriddenFiles != null && !OverriddenFiles.ContainsKey(entry))
+            {
+                return GetFileStream(entry.GetFullPath()) ?? throw new FileNotFoundException($"\"{entry.GetFullPath()}\" was not found.");
+            }
 
-            return pathOnDisk != null
-                ? File.OpenRead(pathOnDisk)
-                : (package ?? throw new InvalidOperationException("The package is not available.")).GetMemoryMappedStreamIfPossible(entry);
+            var (package, _) = Resolve(entry);
+
+            return (package ?? throw new InvalidOperationException($"\"{entry.GetFullPath()}\" is not in a package.")).GetMemoryMappedStreamIfPossible(entry);
         }
 
         /// <summary>

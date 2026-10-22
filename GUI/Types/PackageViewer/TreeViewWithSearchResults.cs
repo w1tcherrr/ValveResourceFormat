@@ -2216,7 +2216,7 @@ namespace GUI.Types.PackageViewer
             var package = vrfGuiContext?.CurrentPackage;
 
             // The tools asset info covers the whole game, as a mounted game does
-            if (vrfGuiContext == null || (package == null && vrfGuiContext.MountedFiles == null))
+            if (vrfGuiContext == null || (package == null && !vrfGuiContext.IsMountedGame))
             {
                 return null;
             }

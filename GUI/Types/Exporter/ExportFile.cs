@@ -23,9 +23,7 @@ namespace GUI.Types.Exporter
 
             try
             {
-#pragma warning disable CA2000 // Disposed by ExtractFileFromStream
                 stream = vrfGuiContext.OpenEntryStream(file);
-#pragma warning restore CA2000
             }
             catch (Exception e)
             {
