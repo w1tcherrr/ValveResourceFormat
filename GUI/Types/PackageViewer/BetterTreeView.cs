@@ -59,10 +59,24 @@ namespace GUI.Types.PackageViewer
             var matchPath = request.Target == SearchTarget.Path || (!request.UseRegex && text.Contains(Package.DirectorySeparatorChar, StringComparison.Ordinal));
 
             Func<string, bool> isMatch;
+            var timedOut = false;
 
             if (request.UseRegex || request.WholeWord)
             {
-                isMatch = CreateRegex(request.UseRegex ? text : Regex.Escape(text), request).IsMatch;
+                var regex = CreateRegex(request.UseRegex ? text : Regex.Escape(text), request, TimeSpan.FromMilliseconds(100));
+
+                isMatch = value =>
+                {
+                    try
+                    {
+                        return !timedOut && regex.IsMatch(value);
+                    }
+                    catch (RegexMatchTimeoutException)
+                    {
+                        timedOut = true;
+                        return false;
+                    }
+                };
             }
             else
             {
@@ -72,10 +86,15 @@ namespace GUI.Types.PackageViewer
 
             candidates.RemoveAll(entry => !isMatch(matchPath ? entry.GetFullPath() : entry.GetFileName()));
 
+            if (timedOut)
+            {
+                Log.Warn(nameof(BetterTreeView), "Stopped the search because the regular expression took too long to match a file name");
+            }
+
             return candidates;
         }
 
-        private static Regex CreateRegex(string pattern, SearchRequest request)
+        private static Regex CreateRegex(string pattern, SearchRequest request, TimeSpan matchTimeout)
         {
             if (request.WholeWord)
             {
@@ -84,7 +103,7 @@ namespace GUI.Types.PackageViewer
 
             var options = request.MatchCase ? RegexOptions.CultureInvariant : RegexOptions.CultureInvariant | RegexOptions.IgnoreCase;
 
-            return new Regex(pattern, options);
+            return new Regex(pattern, options, matchTimeout);
         }
 
         private static void CollectFiles(VirtualPackageNode node, string? extension, List<PackageEntry> files)
@@ -124,9 +143,7 @@ namespace GUI.Types.PackageViewer
             }
             else
             {
-                // Contents are matched as Latin1, one character per byte, so the text becomes the characters of its UTF-8 bytes
-                var text = Encoding.Latin1.GetString(Encoding.UTF8.GetBytes(request.Text));
-                regex = CreateRegex(request.UseRegex ? text : Regex.Escape(text), request);
+                regex = CreateRegex(request.UseRegex ? request.Text : Regex.Escape(request.Text), request, TimeSpan.FromSeconds(3));
             }
 
             if (regex == null && pattern.Length < 3)
@@ -175,7 +192,7 @@ namespace GUI.Types.PackageViewer
 
                         package.ReadEntry(entry, out var entryData, validateCrc: false);
 
-                        if (regex != null ? IsLatin1Match(regex, entryData) : IndexOf(entryData, pattern, firstByte) >= 0)
+                        if (regex != null ? IsTextMatch(regex, entry, entryData) : IndexOf(entryData, pattern, firstByte) >= 0)
                         {
                             results.Add(entry);
                         }
@@ -286,7 +303,7 @@ namespace GUI.Types.PackageViewer
                     archive.Position = entry.Offset;
                     archive.ReadExactly(buffer, 0, length);
 
-                    if (IsLatin1Match(regex, buffer.AsSpan(0, length)))
+                    if (IsTextMatch(regex, entry, buffer.AsSpan(0, length)))
                     {
                         matches.Add(entry);
                     }
@@ -300,15 +317,20 @@ namespace GUI.Types.PackageViewer
             return matches;
         }
 
-        private static bool IsLatin1Match(Regex regex, ReadOnlySpan<byte> data)
+        private static bool IsTextMatch(Regex regex, PackageEntry entry, ReadOnlySpan<byte> data)
         {
-            var chars = ArrayPool<char>.Shared.Rent(data.Length);
+            var chars = ArrayPool<char>.Shared.Rent(Encoding.UTF8.GetMaxCharCount(data.Length));
 
             try
             {
-                var length = Encoding.Latin1.GetChars(data, chars);
+                var length = Encoding.UTF8.GetChars(data, chars);
 
                 return regex.IsMatch(chars.AsSpan(0, length));
+            }
+            catch (RegexMatchTimeoutException)
+            {
+                Log.Warn(nameof(BetterTreeView), $"Skipped \"{entry.GetFullPath()}\" because the regular expression took too long to match its contents");
+                return false;
             }
             finally
             {

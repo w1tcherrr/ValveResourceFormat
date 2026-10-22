@@ -1,3 +1,4 @@
+using System.Windows.Forms;
 using GUI.Utils;
 
 namespace GUI.Controls
@@ -18,6 +19,7 @@ namespace GUI.Controls
 
                 field = value;
                 UpdateColors();
+                AccessibilityNotifyClients(AccessibleEvents.StateChange, -1);
             }
         }
 
@@ -30,6 +32,8 @@ namespace GUI.Controls
             base.OnClick(e);
             Toggled?.Invoke(Checked);
         }
+
+        protected override AccessibleObject CreateAccessibilityInstance() => new ToggleButtonAccessibleObject(this);
 
         protected override void OnCreateControl()
         {
@@ -46,6 +50,13 @@ namespace GUI.Controls
 
             BackColor = Checked ? Themer.CurrentThemeColors.Accent : Themer.CurrentThemeColors.Border;
             Invalidate();
+        }
+
+        private sealed class ToggleButtonAccessibleObject(ThemedToggleButton owner) : ButtonBaseAccessibleObject(owner)
+        {
+            public override AccessibleRole Role => AccessibleRole.CheckButton;
+
+            public override AccessibleStates State => owner.Checked ? base.State | AccessibleStates.Checked : base.State;
         }
     }
 }

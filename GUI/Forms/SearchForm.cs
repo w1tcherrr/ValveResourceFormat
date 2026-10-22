@@ -166,7 +166,7 @@ namespace GUI.Forms
         {
             folder = searchFolder;
             onlyInFolderCheckBox.Enabled = folder != null;
-            onlyInFolderCheckBox.Text = folder != null ? $"Only in {PackageViewer.GetFolderPath(folder)}" : "Only in selected folder";
+            onlyInFolderCheckBox.Text = folder != null ? $"&Only in {PackageViewer.GetFolderPath(folder).Replace("&", "&&", StringComparison.Ordinal)}" : "&Only in selected folder";
 
             if (onlyInFolder)
             {

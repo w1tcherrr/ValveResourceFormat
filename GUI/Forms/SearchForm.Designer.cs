@@ -54,6 +54,7 @@ namespace GUI.Forms
             //
             // findTextBox
             //
+            findTextBox.AccessibleName = "Search text";
             findTextBox.Location = new System.Drawing.Point(13, 14);
             findTextBox.Margin = new System.Windows.Forms.Padding(4, 3, 4, 3);
             findTextBox.Name = "findTextBox";
@@ -107,7 +108,7 @@ namespace GUI.Forms
             targetLabel.Name = "targetLabel";
             targetLabel.Size = new System.Drawing.Size(63, 19);
             targetLabel.TabIndex = 5;
-            targetLabel.Text = "Search in";
+            targetLabel.Text = "Search &in";
             //
             // nameRadioButton
             //
@@ -118,7 +119,7 @@ namespace GUI.Forms
             nameRadioButton.Size = new System.Drawing.Size(63, 23);
             nameRadioButton.TabIndex = 6;
             nameRadioButton.TabStop = true;
-            nameRadioButton.Text = "Name";
+            nameRadioButton.Text = "&Name";
             //
             // pathRadioButton
             //
@@ -127,7 +128,7 @@ namespace GUI.Forms
             pathRadioButton.Name = "pathRadioButton";
             pathRadioButton.Size = new System.Drawing.Size(55, 23);
             pathRadioButton.TabIndex = 7;
-            pathRadioButton.Text = "Path";
+            pathRadioButton.Text = "&Path";
             //
             // contentsRadioButton
             //
@@ -136,7 +137,7 @@ namespace GUI.Forms
             contentsRadioButton.Name = "contentsRadioButton";
             contentsRadioButton.Size = new System.Drawing.Size(82, 23);
             contentsRadioButton.TabIndex = 8;
-            contentsRadioButton.Text = "Contents";
+            contentsRadioButton.Text = "&Contents";
             //
             // onlyInFolderCheckBox
             //
@@ -145,7 +146,7 @@ namespace GUI.Forms
             onlyInFolderCheckBox.Name = "onlyInFolderCheckBox";
             onlyInFolderCheckBox.Size = new System.Drawing.Size(460, 24);
             onlyInFolderCheckBox.TabIndex = 9;
-            onlyInFolderCheckBox.Text = "Only in selected folder";
+            onlyInFolderCheckBox.Text = "&Only in selected folder";
             //
             // extensionLabel
             //
@@ -154,7 +155,7 @@ namespace GUI.Forms
             extensionLabel.Name = "extensionLabel";
             extensionLabel.Size = new System.Drawing.Size(66, 19);
             extensionLabel.TabIndex = 10;
-            extensionLabel.Text = "Extension";
+            extensionLabel.Text = "&Extension";
             //
             // extensionComboBox
             //
@@ -172,7 +173,7 @@ namespace GUI.Forms
             filterKeyLabel.Name = "filterKeyLabel";
             filterKeyLabel.Size = new System.Drawing.Size(70, 19);
             filterKeyLabel.TabIndex = 12;
-            filterKeyLabel.Text = "Asset info";
+            filterKeyLabel.Text = "&Asset info";
             //
             // filterKeyComboBox
             //
@@ -185,6 +186,7 @@ namespace GUI.Forms
             //
             // filterValueComboBox
             //
+            filterValueComboBox.AccessibleName = "Asset info value";
             filterValueComboBox.DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList;
             filterValueComboBox.Location = new System.Drawing.Point(110, 184);
             filterValueComboBox.Margin = new System.Windows.Forms.Padding(4, 3, 4, 3);
