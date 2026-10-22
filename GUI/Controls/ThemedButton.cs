@@ -18,6 +18,9 @@ namespace GUI.Controls
         public Color HoveredBackColor { get; set; } = Color.Gray;
         public int CornerRadius { get; set; } = 5;
 
+        /// <summary>Gets or sets whether a disabled button draws only its dimmed image, without its fill and border.</summary>
+        public bool HideFrameWhenDisabled { get; set; }
+
         public ThemedButton() : base()
         {
             FlatStyle = FlatStyle.Flat;
@@ -103,7 +106,7 @@ namespace GUI.Controls
 
             using var roundedRect = Themer.GetRoundedRect(rect, this.AdjustForDPI(CornerRadius));
 
-            if (Enabled || Image == null || Text.Length > 0)
+            if (Enabled || !HideFrameWhenDisabled)
             {
                 pevent.Graphics.FillPath(backBrush, roundedRect);
 
