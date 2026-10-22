@@ -12,7 +12,7 @@ namespace ValveResourceFormat.IO
     /// </summary>
     public static class PackageFileNames
     {
-        private const string Extension = ".vpk";
+        internal const string Extension = ".vpk";
         private const string DirectorySuffix = "_dir";
 
         /// <summary>

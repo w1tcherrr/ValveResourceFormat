@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -109,6 +110,79 @@ namespace Tests.IO
                         .IsEquivalentTo(["mymod/pak01_dir.vpk", "core/pak01_dir.vpk", "mymod", "csgo", "core"], CollectionOrdering.Matching);
                     await Assert.That(loader.EnumerateMountedFiles().Select(static file => file.Entry.GetFullPath()))
                         .Contains("scripts/mod.txt").And.Contains("notafolder.txt").And.Contains("pak01_dir.vpk");
+                }
+            }
+            finally
+            {
+                gameRoot.Delete(recursive: true);
+            }
+        }
+
+        [Test]
+        public async Task MergesBranchAndLayeredGameInfos()
+        {
+            var gameRoot = Directory.CreateTempSubdirectory("vrf_game_mount_");
+
+            try
+            {
+                var mod = gameRoot.CreateSubdirectory("mymod").FullName;
+                var language = gameRoot.CreateSubdirectory("mymod_lang").FullName;
+                var extra = gameRoot.CreateSubdirectory("extra").FullName;
+                var core = gameRoot.CreateSubdirectory("core").FullName;
+                var cycle = gameRoot.CreateSubdirectory("cycle").FullName;
+
+                await File.WriteAllTextAsync(Path.Join(mod, "gameinfo.gi"), """
+                    #base "missing.gi"
+                    "GameInfo"
+                    {
+                        "game" "Base"
+                        FileSystem { SearchPaths { Game "replaced" } }
+                    }
+                    """);
+                await File.WriteAllTextAsync(Path.Join(mod, "gameinfo_branchspecific.gi"), """
+                    "GameInfo"
+                    {
+                        FileSystem
+                        {
+                            SteamAppId 730
+                            SearchPaths { Game "extra/extra.vpk" Game "mymod" Game "core" }
+                        }
+                    }
+                    """);
+                await File.WriteAllTextAsync(Path.Join(language, "gameinfo.gi"), """
+                    "GameInfo"
+                    {
+                        LayeredOnMod mymod
+                        FileSystem { SearchPaths { Game "mymod_lang" Game "mymod" Game "core" } }
+                    }
+                    """);
+                await File.WriteAllTextAsync(Path.Join(cycle, "gameinfo.gi"), """
+                    "GameInfo"
+                    {
+                        LayeredOnMod cycle
+                        FileSystem { SearchPaths { Game "cycle" } }
+                    }
+                    """);
+                WritePackage(Path.Join(mod, "pak01_dir.vpk"), "scripts/mod.txt");
+                WritePackage(Path.Join(extra, "extra.vpk"), "scripts/extra.txt");
+                WritePackage(Path.Join(core, "pak01_dir.vpk"), "scripts/core.txt");
+
+                List<string> SearchOrder(string gameInfo)
+                {
+                    using var loader = new GameFileLoader(null, null);
+                    loader.FindAndLoadSearchPaths(gameInfo);
+
+                    return [.. loader.EnumerateSearchOrder().Select(source => Path.GetRelativePath(gameRoot.FullName, source.Package?.FilePath ?? source.Folder!).Replace('\\', '/')), loader.SteamAppId.ToString(CultureInfo.InvariantCulture)];
+                }
+
+                using (Assert.Multiple())
+                {
+                    await Assert.That(SearchOrder(Path.Join(mod, "gameinfo.gi")))
+                        .IsEquivalentTo(["extra/extra.vpk", "mymod/pak01_dir.vpk", "core/pak01_dir.vpk", "mymod", "core", "730"], CollectionOrdering.Matching);
+                    await Assert.That(SearchOrder(Path.Join(language, "gameinfo.gi")))
+                        .IsEquivalentTo(["mymod/pak01_dir.vpk", "core/pak01_dir.vpk", "mymod_lang", "mymod", "core", "730"], CollectionOrdering.Matching);
+                    await Assert.That(SearchOrder(Path.Join(cycle, "gameinfo.gi")))
+                        .IsEquivalentTo(["core/pak01_dir.vpk", "cycle", "core", "0"], CollectionOrdering.Matching);
                 }
             }
             finally

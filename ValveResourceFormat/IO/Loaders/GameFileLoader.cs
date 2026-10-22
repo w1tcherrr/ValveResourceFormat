@@ -34,6 +34,7 @@ namespace ValveResourceFormat.IO
     {
         private const string AddonsSuffix = "_addons";
         private const string GameinfoGi = "gameinfo.gi";
+        private const string GameinfoBranchSpecificGi = "gameinfo_branchspecific.gi";
         private const string AddonInfoTxt = "addoninfo.txt";
 
         /// <summary>
@@ -48,10 +49,11 @@ namespace ValveResourceFormat.IO
             ".sbproj",
         ];
 
-        // Search paths a game mounts only in some modes, such as for a language other than English
+        // Search paths a game mounts only in some modes, such as for a language other than English or outside of the tools, whose folders are not mods of their own
         private static readonly HashSet<string> ConditionalGameSearchPathKeys = new(StringComparer.OrdinalIgnoreCase)
         {
             "Game_LowViolence",
+            "Game_NonTools",
             "Game_UILanguage",
             "Game_AudioLanguage",
         };
@@ -99,13 +101,12 @@ namespace ValveResourceFormat.IO
         public Package? CurrentPackage { get; set; }
 
         /// <summary>
-        /// Gets the Steam app id the first game found mounts its content as, which its <c>gameinfo.gi</c> gives as
-        /// <c>FileSystem/SteamAppId</c>, or zero when no game gives one.
+        /// Gets the Steam app id of the first game found, which its <c>gameinfo.gi</c> or the
+        /// <c>gameinfo_branchspecific.gi</c> next to it gives as <c>FileSystem/SteamAppId</c>, or zero when no game gives one.
         /// </summary>
         public int SteamAppId { get; private set; }
 
-        // Counter-Strike 2 mounts its content as the CS:GO SDK, not under its own app id
-        private const int CounterStrike2SteamAppId = 710;
+        private const int CounterStrike2SteamAppId = 730;
 
         /// <summary>Gets whether the game found is Counter-Strike 2.</summary>
         public bool IsCounterStrike2 => SteamAppId == CounterStrike2SteamAppId;
@@ -471,18 +472,95 @@ namespace ValveResourceFormat.IO
 
         private KVObject? ReadGameInfo(string gameinfoPath) => ReadGameInfo(gameinfoPath, Logger);
 
-        private static KVObject? ReadGameInfo(string gameinfoPath, ILogger logger)
+        /// <summary>
+        /// Reads a gameinfo.gi as the engine does: the gameinfo_branchspecific.gi next to it is merged over it, and a
+        /// <c>LayeredOnMod</c> gameinfo is read first with this one merged over it.
+        /// </summary>
+        private static KVObject? ReadGameInfo(string gameinfoPath, ILogger logger, HashSet<string>? layeredGameInfos = null)
+        {
+            if (ReadKeyValues(gameinfoPath, logger) is not { } gameInfo)
+            {
+                return null;
+            }
+
+            var modFolder = Path.GetDirectoryName(Path.GetFullPath(gameinfoPath))!;
+
+            if (new FileInfo(Path.Join(modFolder, GameinfoBranchSpecificGi)) is { Exists: true, Length: > 0 } branchFile
+                && ReadKeyValues(branchFile.FullName, logger) is { } branchInfo)
+            {
+                MergeGameInfo(gameInfo, branchInfo);
+            }
+
+            if (GameFolderLocator.GetChild(gameInfo, "LayeredOnMod")?.ToString() is not { Length: > 0 } baseMod)
+            {
+                return gameInfo;
+            }
+
+            layeredGameInfos ??= new(StringComparer.OrdinalIgnoreCase) { Path.Join(modFolder, GameinfoGi) };
+            var baseGameInfoPath = Path.GetFullPath(Path.Join(Path.GetDirectoryName(modFolder), baseMod, GameinfoGi));
+
+            if (!layeredGameInfos.Add(baseGameInfoPath))
+            {
+                logger.LogError("\"{GameInfo}\" is layered on itself through LayeredOnMod \"{BaseMod}\"", gameinfoPath, baseMod);
+                return gameInfo;
+            }
+
+            if (ReadGameInfo(baseGameInfoPath, logger, layeredGameInfos) is not { } baseGameInfo)
+            {
+                return gameInfo;
+            }
+
+            MergeGameInfo(baseGameInfo, gameInfo);
+
+            return baseGameInfo;
+        }
+
+        private static KVObject? ReadKeyValues(string path, ILogger logger)
         {
             try
             {
-                using var stream = File.OpenRead(gameinfoPath);
-                return KVSerializer.Create(KVSerializationFormat.KeyValues1Text).Deserialize(stream);
+                using var stream = File.OpenRead(path);
+                return KVSerializer.Create(KVSerializationFormat.KeyValues1Text).Deserialize(stream, new KVSerializerOptions { FileLoader = IgnoredIncludes.Instance });
             }
             catch (Exception e)
             {
-                logger.LogError(e, "Failed to read \"{GameInfo}\"", gameinfoPath);
+                logger.LogError(e, "Failed to read \"{GameInfo}\"", path);
                 return null;
             }
+        }
+
+        /// <summary>
+        /// Merges the keys of a gameinfo over another, the way the engine merges a branch or layered gameinfo: blocks are
+        /// merged recursively, except a SearchPaths block, which replaces the one it is merged over.
+        /// </summary>
+        private static void MergeGameInfo(KVObject target, KVObject update)
+        {
+            foreach (var (key, value) in update.Children)
+            {
+                var existingKey = target.Keys.FirstOrDefault(existing => existing.Equals(key, StringComparison.OrdinalIgnoreCase));
+
+                if (existingKey != null && target[existingKey].ValueType == KVValueType.Collection && value.ValueType == KVValueType.Collection
+                    && !key.Equals("SearchPaths", StringComparison.OrdinalIgnoreCase))
+                {
+                    MergeGameInfo(target[existingKey], value);
+                    continue;
+                }
+
+                if (existingKey != null)
+                {
+                    target.Remove(existingKey);
+                }
+
+                target.Add(key, value);
+            }
+        }
+
+        // The engine reads gameinfo.gi without a file system, so #base and #include load nothing
+        private sealed class IgnoredIncludes : IIncludedFileLoader
+        {
+            public static IgnoredIncludes Instance { get; } = new();
+
+            public Stream OpenFile(string filePath) => new MemoryStream("\"\" {}"u8.ToArray());
         }
 
         private static IEnumerable<(string Key, string Value)> EnumerateSearchPaths(KVObject gameInfo)
@@ -528,7 +606,7 @@ namespace ValveResourceFormat.IO
                 return;
             }
 
-            if (SteamAppId == 0 && fileSystem.TryGetValue("SteamAppId", out var appIdValue))
+            if (SteamAppId == 0 && GameFolderLocator.GetChild(fileSystem, "SteamAppId") is { } appIdValue)
             {
                 SteamAppId = int.TryParse(appIdValue.ToString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var appId) ? appId : 0;
             }
@@ -552,9 +630,10 @@ namespace ValveResourceFormat.IO
                 var path = GetSearchPathFolder(gameRoot, searchPath);
 
                 if (key.Equals("Game", StringComparison.OrdinalIgnoreCase)
+                    || key.Equals("Game_NonTools", StringComparison.OrdinalIgnoreCase)
                     || (MountLowViolence && key.Equals("Game_LowViolence", StringComparison.OrdinalIgnoreCase)))
                 {
-                    if (Directory.Exists(path))
+                    if (path.EndsWith(PackageFileNames.Extension, StringComparison.OrdinalIgnoreCase) ? File.Exists(path) || File.Exists(PackageFileNames.GetDirectoryFile(path)) : Directory.Exists(path))
                     {
                         folders.Add(path);
                     }
@@ -1445,6 +1524,13 @@ namespace ValveResourceFormat.IO
         {
             foreach (var folder in folders)
             {
+                // A Game search path that names a vpk mounts it as a package
+                if (folder.EndsWith(PackageFileNames.Extension, StringComparison.OrdinalIgnoreCase))
+                {
+                    AddGamePackageToSearch(File.Exists(folder) ? folder : PackageFileNames.GetDirectoryFile(folder));
+                    continue;
+                }
+
                 foreach (var vpk in PackageFileNames.EnumeratePakDirectoryFiles(folder))
                 {
                     AddGamePackageToSearch(vpk);
@@ -1622,21 +1708,25 @@ namespace ValveResourceFormat.IO
             }
         }
 
+        /// <summary>
+        /// Mounts the shader package of one platform from every game folder that has it, as the engine does, the first
+        /// platform that any game folder has.
+        /// </summary>
         private void FindAndLoadShaderPackages()
         {
-            foreach (var folder in CurrentGameSearchPaths)
+            for (var platformType = (VcsPlatformType)0; platformType < VcsPlatformType.Undetermined; platformType++)
             {
-                for (var platformType = (VcsPlatformType)0; platformType < VcsPlatformType.Undetermined; platformType++)
+                var shaderName = $"shaders_{platformType.ToString().ToLowerInvariant()}_dir.vpk";
+                var vpks = CurrentGameSearchPaths.Select(folder => Path.Combine(folder, shaderName)).Where(File.Exists).ToList();
+
+                foreach (var vpk in vpks)
                 {
-                    var shaderName = $"shaders_{platformType.ToString().ToLowerInvariant()}_dir.vpk";
-                    var vpk = Path.Combine(folder, shaderName);
+                    AddGamePackageToSearch(vpk);
+                }
 
-                    if (File.Exists(vpk))
-                    {
-                        AddGamePackageToSearch(vpk);
-
-                        break; // One for each folder
-                    }
+                if (vpks.Count > 0)
+                {
+                    return;
                 }
             }
         }
