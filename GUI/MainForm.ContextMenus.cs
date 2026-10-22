@@ -18,13 +18,13 @@ namespace GUI
 {
     partial class MainForm
     {
-        public void ShowVpkContextMenu(Control control, Point position, bool isRootNode, bool isFolderNode, bool canSearchInFolder, bool deletedFilesRecovered, bool canEdit)
+        public void ShowVpkContextMenu(Control control, Point position, bool isRootNode, bool isFolderNode, bool deletedFilesRecovered, bool canEdit)
         {
             copyFileNameToolStripMenuItem.Visible = !isRootNode;
             openWithDefaultAppToolStripMenuItem.Visible = !isRootNode && !isFolderNode;
             openWithoutViewerToolStripMenuItem.Visible = !isRootNode && !isFolderNode;
             viewAssetInfoToolStripMenuItem.Visible = !isRootNode && !isFolderNode;
-            searchInFolderToolStripMenuItem.Visible = canSearchInFolder;
+            searchInFolderToolStripMenuItem.Visible = isFolderNode && !isRootNode;
 
             verifyPackageContentsToolStripMenuItem.Visible = isRootNode;
             recoverDeletedToolStripMenuItem.Visible = isRootNode && !deletedFilesRecovered;
@@ -85,7 +85,7 @@ namespace GUI
 
         private void SearchInFolderToolStripMenuItem_Click(object sender, EventArgs e)
         {
-            if (GetSelectedItems(sender).Items is [{ PkgNode: { Parent: not null } folder }]
+            if (GetSelectedItems(sender).Items is [{ PkgNode: { } folder }]
                 && mainTabs.SelectedTab?.Controls.OfType<TreeViewWithSearchResults>().FirstOrDefault() is { } package)
             {
                 ShowPackageSearch(package, folder, onlyInFolder: true);

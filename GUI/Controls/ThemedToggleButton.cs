@@ -19,7 +19,7 @@ namespace GUI.Controls
 
                 field = value;
                 UpdateColors();
-                AccessibilityNotifyClients(AccessibleEvents.StateChange, -1);
+                AccessibilityNotifyClients(AccessibleEvents.NameChange, -1);
             }
         }
 
@@ -60,9 +60,7 @@ namespace GUI.Controls
 
         private sealed class ToggleButtonAccessibleObject(ThemedToggleButton owner) : ButtonBaseAccessibleObject(owner)
         {
-            public override AccessibleRole Role => AccessibleRole.CheckButton;
-
-            public override AccessibleStates State => owner.Checked ? base.State | AccessibleStates.Checked : base.State;
+            public override string? Name => string.Concat(base.Name, owner.Checked ? ", on" : ", off");
         }
     }
 }

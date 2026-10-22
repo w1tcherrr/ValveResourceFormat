@@ -71,7 +71,8 @@ namespace GUI.Types.PackageViewer
         /// <summary>
         /// Removes every folder entry and folder scoped search that points at <paramref name="removedRoot"/>
         /// or any of its descendants, keeping the cursor on the nearest surviving earlier entry when the
-        /// current one is removed. Other entries are kept.
+        /// current one is removed, or on the first entry when none before it is left. Entries that become
+        /// equal neighbours are merged. Other entries are kept.
         /// </summary>
         public void RemoveSubtree(VirtualPackageNode removedRoot)
         {
@@ -93,6 +94,24 @@ namespace GUI.Types.PackageViewer
                         index--;
                     }
                 }
+            }
+
+            for (var i = entries.Count - 1; i > 0; i--)
+            {
+                if (entries[i] == entries[i - 1])
+                {
+                    entries.RemoveAt(i);
+
+                    if (i <= index)
+                    {
+                        index--;
+                    }
+                }
+            }
+
+            if (index < 0 && entries.Count > 0)
+            {
+                index = 0;
             }
         }
 

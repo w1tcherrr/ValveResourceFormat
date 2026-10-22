@@ -88,15 +88,14 @@ namespace GUI.Types.PackageViewer
 
             if (timedOut)
             {
-                Log.Warn(nameof(BetterTreeView), "Stopped the search because the regular expression took too long to match a file name");
+                const string Message = "The search stopped early because the regular expression took too long to match a file name, so some matches may be missing.";
+                Log.Warn(nameof(BetterTreeView), Message);
+                _ = AppMessageDialogs.ShowMessageAsync(Message, "Search stopped early", MessageIcon.Warning);
             }
 
             return candidates;
         }
 
-        /// <summary>
-        /// Creates the regular expression that a search matches names, paths or contents with.
-        /// </summary>
         internal static Regex CreateRegex(string pattern, SearchRequest request, TimeSpan matchTimeout)
         {
             if (request.WholeWord)
@@ -155,6 +154,7 @@ namespace GUI.Types.PackageViewer
             }
 
             var results = new List<PackageEntry>();
+            var skippedEntries = 0;
 
             if (VrfGuiContext?.CurrentPackage is not { } package)
             {
@@ -195,7 +195,7 @@ namespace GUI.Types.PackageViewer
 
                         package.ReadEntry(entry, out var entryData, validateCrc: false);
 
-                        if (regex != null ? IsTextMatch(regex, entry, entryData) : IndexOf(entryData, pattern, firstByte) >= 0)
+                        if (regex != null ? IsTextMatch(regex, entry, entryData, ref skippedEntries) : IndexOf(entryData, pattern, firstByte) >= 0)
                         {
                             results.Add(entry);
                         }
@@ -256,7 +256,7 @@ namespace GUI.Types.PackageViewer
 
                             using var archive = package.OpenArchiveStream((ushort)archiveIndex);
                             var archiveMatches = regex != null
-                                ? SearchEntriesInArchive(archive, regex, archiveEntries, cancellationToken)
+                                ? SearchEntriesInArchive(archive, regex, archiveEntries, ref skippedEntries, cancellationToken)
                                 : SearchForContentsInArchive(archive, pattern, firstByte, archiveEntries, cancellationToken);
 
                             if (archiveMatches.Count > 0)
@@ -287,10 +287,18 @@ namespace GUI.Types.PackageViewer
             };
             progressDialog.ShowDialog();
 
+            if (skippedEntries > 0)
+            {
+                _ = AppMessageDialogs.ShowMessageAsync(
+                    string.Create(CultureInfo.InvariantCulture, $"{skippedEntries} files were not searched because the regular expression took too long to match their contents, the log lists them."),
+                    "Some files were skipped",
+                    MessageIcon.Warning);
+            }
+
             return results;
         }
 
-        private static HashSet<PackageEntry> SearchEntriesInArchive(Stream archive, Regex regex, List<PackageEntry> archiveEntries, CancellationToken cancellationToken)
+        private static HashSet<PackageEntry> SearchEntriesInArchive(Stream archive, Regex regex, List<PackageEntry> archiveEntries, ref int skippedEntries, CancellationToken cancellationToken)
         {
             var matches = new HashSet<PackageEntry>();
 
@@ -306,7 +314,7 @@ namespace GUI.Types.PackageViewer
                     archive.Position = entry.Offset;
                     archive.ReadExactly(buffer, 0, length);
 
-                    if (IsTextMatch(regex, entry, buffer.AsSpan(0, length)))
+                    if (IsTextMatch(regex, entry, buffer.AsSpan(0, length), ref skippedEntries))
                     {
                         matches.Add(entry);
                     }
@@ -323,19 +331,25 @@ namespace GUI.Types.PackageViewer
             return matches;
         }
 
-        private static bool IsTextMatch(Regex regex, PackageEntry entry, ReadOnlySpan<byte> data)
+        private static bool IsTextMatch(Regex regex, PackageEntry entry, ReadOnlySpan<byte> data, ref int skippedEntries)
         {
             var charCount = Encoding.UTF8.GetMaxCharCount(data.Length);
             var chars = charCount <= MaxPooledLength ? ArrayPool<char>.Shared.Rent(charCount) : new char[charCount];
 
             try
             {
-                var length = Encoding.UTF8.GetChars(data, chars);
+                var text = chars.AsSpan(0, Encoding.UTF8.GetChars(data, chars));
 
-                return regex.IsMatch(chars.AsSpan(0, length));
+                if (text is ['\uFEFF', ..])
+                {
+                    text = text[1..];
+                }
+
+                return regex.IsMatch(text);
             }
             catch (RegexMatchTimeoutException)
             {
+                Interlocked.Increment(ref skippedEntries);
                 Log.Warn(nameof(BetterTreeView), $"Skipped \"{entry.GetFullPath()}\" because the regular expression took too long to match its contents");
                 return false;
             }
@@ -388,10 +402,26 @@ namespace GUI.Types.PackageViewer
         private static HashSet<PackageEntry> SearchForContentsInArchive(Stream archive, byte[] pattern, SearchValues<byte>? firstByte, List<PackageEntry> archiveEntries, CancellationToken cancellationToken)
         {
             const int BufferSize = 4 * 1024 * 1024;
-            const int MaxReadGap = 64 * 1024;
 
             var matches = new HashSet<PackageEntry>();
-            var buffer = new byte[Math.Max(BufferSize, pattern.Length)];
+            var buffer = ArrayPool<byte>.Shared.Rent(Math.Max(BufferSize, pattern.Length));
+
+            try
+            {
+                ScanEntries(archive, buffer, pattern, firstByte, archiveEntries, matches, cancellationToken);
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buffer);
+            }
+
+            return matches;
+        }
+
+        private static void ScanEntries(Stream archive, byte[] buffer, byte[] pattern, SearchValues<byte>? firstByte, List<PackageEntry> archiveEntries, HashSet<PackageEntry> matches, CancellationToken cancellationToken)
+        {
+            const int MaxReadGap = 64 * 1024;
+
             var first = 0;
 
             while (first < archiveEntries.Count)
@@ -442,8 +472,6 @@ namespace GUI.Types.PackageViewer
 
                 first = last + 1;
             }
-
-            return matches;
         }
 
         private static bool ContainsInLargeEntry(Stream archive, long start, long end, byte[] buffer, byte[] pattern, SearchValues<byte>? firstByte, CancellationToken cancellationToken)
