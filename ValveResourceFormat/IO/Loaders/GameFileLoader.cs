@@ -236,22 +236,7 @@ namespace ValveResourceFormat.IO
                 }
             }
 
-            if (AddonDependenciesPending && (CurrentPackage != null || PreferredAddonFolderOnDisk != null))
-            {
-                // Files are looked up in parallel, the addon lists must be complete before anyone searches them
-                lock (AddonDependenciesLock)
-                {
-                    if (AddonDependenciesPending)
-                    {
-#if DEBUG_FILE_LOAD
-                        Logger.LogDebug("Attempting to find addon dependencies while loading \"{File}\"", file);
-#endif
-
-                        LoadAddonDependencies();
-                        AddonDependenciesPending = false;
-                    }
-                }
-            }
+            LoadPendingAddonDependencies();
 
             foreach (var (package, folder) in CurrentAddonSearchPaths)
             {
@@ -319,6 +304,72 @@ namespace ValveResourceFormat.IO
 #endif
 
             return (null, null, null);
+        }
+
+        private void LoadPendingAddonDependencies()
+        {
+            if (!AddonDependenciesPending || (CurrentPackage == null && PreferredAddonFolderOnDisk == null))
+            {
+                return;
+            }
+
+            // Files are looked up in parallel, the addon lists must be complete before anyone searches them
+            lock (AddonDependenciesLock)
+            {
+                if (AddonDependenciesPending)
+                {
+                    LoadAddonDependencies();
+                    AddonDependenciesPending = false;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Lists the paths of the files with an extension in every search location, in the order <see cref="FindFile"/>
+        /// searches them: the current package, map packages, addons, game packages and folders on disk.
+        /// A path that is in several locations is listed once.
+        /// </summary>
+        /// <param name="extension">The extension without the leading dot, such as <c>vsndevts_c</c>.</param>
+        public virtual IEnumerable<string> EnumerateFiles(string extension)
+        {
+            LoadPendingAddonDependencies();
+
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            IEnumerable<(Package? Package, string? Folder)> locations =
+            [
+                (CurrentPackage, null),
+                .. CurrentMapPackages.Select(static mapPackage => ((Package?)mapPackage.Package, (string?)null)),
+                .. CurrentAddonSearchPaths.Select(static searchPath => (searchPath.Package, searchPath.Folder)),
+                .. CurrentGamePackages.Select(static package => ((Package?)package, (string?)null)),
+                .. CurrentGameSearchPaths.Select(static folder => ((Package?)null, (string?)folder)),
+            ];
+
+            foreach (var (package, folder) in locations)
+            {
+                IEnumerable<string> paths;
+
+                if (package != null)
+                {
+                    paths = package.Entries?.GetValueOrDefault(extension)?.Select(static entry => entry.GetFullPath()) ?? [];
+                }
+                else if (folder != null && Directory.Exists(folder))
+                {
+                    paths = Directory.EnumerateFiles(folder, $"*.{extension}", SearchOption.AllDirectories)
+                        .Select(file => Path.GetRelativePath(folder, file).Replace(Path.DirectorySeparatorChar, '/'));
+                }
+                else
+                {
+                    continue;
+                }
+
+                foreach (var path in paths)
+                {
+                    if (seen.Add(path))
+                    {
+                        yield return path;
+                    }
+                }
+            }
         }
 
         /// <summary>
