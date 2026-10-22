@@ -88,6 +88,38 @@ namespace ValveResourceFormat.ResourceTypes
             }
         }
 
+        private static bool AnyDecompressedBufferVersion0(BinaryReader reader, int blockSize, Func<ReadOnlySpan<byte>, bool> predicate)
+        {
+            var encoding = KV3IDLookup.GetByValue(new Guid(reader.ReadBytes(16)));
+            reader.BaseStream.Position += 16; // format
+
+            if (encoding == KV3IDLookup.Get("binary_bc"))
+            {
+                var info = BlockCompress.GetDecompressedSize(reader);
+                var output = ArrayPool<byte>.Shared.Rent(info.Size);
+
+                try
+                {
+                    BlockCompress.FastDecompress(info, reader, output.AsSpan(0, info.Size));
+                    return predicate(output.AsSpan(0, info.Size));
+                }
+                finally
+                {
+                    ArrayPool<byte>.Shared.Return(output);
+                }
+            }
+
+            if (encoding == KV3IDLookup.Get("binary_lz4"))
+            {
+                var size = reader.ReadInt32();
+                var compressedSize = (int)(blockSize - reader.BaseStream.Position);
+
+                return AnyDecompressed(reader, null, size, compressedSize, predicate);
+            }
+
+            return false;
+        }
+
         private static (KV3BinaryNodeType Type, KVFlag Flag) LegacyReadType(BinaryReader reader)
         {
             var databyte = reader.ReadByte();

@@ -176,7 +176,7 @@ namespace GUI.Forms
 
                 if (request.Text.Length == 0)
                 {
-                    return ("Bytes in the file contents, such as 56 42 4B 56", false, true);
+                    return ("Bytes as stored in the file, such as 56 42 4B 56", false, true);
                 }
 
                 var text = string.Concat(bytes.Select(static b => b is >= 0x20 and < 0x7F ? (char)b : '.'));
@@ -214,8 +214,8 @@ namespace GUI.Forms
 
             var hint = (request.Target, request.UseRegex) switch
             {
-                (SearchTarget.Contents, true) => "A regular expression over the text of each file",
-                (SearchTarget.Contents, false) => "Text in the file contents",
+                (SearchTarget.Contents, true) => "A regular expression over the text of each file, including compiled KV3 data",
+                (SearchTarget.Contents, false) => "Text in the file contents, including compiled KV3 data",
                 (SearchTarget.Path, true) => "A regular expression over the full path, ^path$ matches it exactly",
                 (SearchTarget.Path, false) => "Part of the full path, such as materials/dev",
                 (SearchTarget.Name, false) when request.Text.AsSpan().IndexOfAny('/', '\\') >= 0 => "Has a / or \\, so it matches the full path",

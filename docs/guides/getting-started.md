@@ -56,7 +56,8 @@ Press <kbd>Ctrl</kbd>+<kbd>F</kbd> to open the search dialog, or right-click a f
 
 - **Search in** picks what the text is matched against: the file name, the full path, or the file contents. In a name search without a regular expression, text with a `/` in it matches the full path instead.
 - The buttons next to the text box toggle **Match case** (<kbd>Alt</kbd>+<kbd>C</kbd>), **Match whole word** (<kbd>Alt</kbd>+<kbd>W</kbd>) and **Use regular expression** (<kbd>Alt</kbd>+<kbd>R</kbd>). They apply to contents too, which are read as UTF-8 text. With a regular expression, `^name$` matches a whole name exactly.
-- **0x** (<kbd>Alt</kbd>+<kbd>X</kbd>), available when searching contents, searches them for hex bytes such as `56 42 4B 56` instead of text.
+- In compiled resources (`_c` files), a text search reads the blocks that hold their data, references and edit info, and decompresses the KV3 data in them, so it finds names such as particle operators, material parameters and sound events. It skips geometry, animation, texture pixels and audio.
+- **0x** (<kbd>Alt</kbd>+<kbd>X</kbd>), available when searching contents, searches them for hex bytes such as `56 42 4B 56` instead of text. It matches the bytes of the whole file as stored, without decompressing anything.
 - **Only in** limits the search to the folder selected in the tree and its subfolders.
 - **Extension** limits the search to one file type. It lists each type with its number of files, counted in the **Only in** folder when that is ticked. The extension match ignores case.
 - **Asset info** limits the search to files with a given searchable user data key, and optionally a value, from the tools asset info next to the package. Only keys and values of files in the package are listed, with how many files have each. Both boxes accept typing and complete from the list.

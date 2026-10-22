@@ -121,7 +121,7 @@ namespace GUI.Forms
             hexBytesToggle.Size = new System.Drawing.Size(34, 26);
             hexBytesToggle.TabIndex = 4;
             hexBytesToggle.Text = "0x";
-            toolTip.SetToolTip(hexBytesToggle, "Search file contents for hex bytes, such as 56 42 4B 56, available when searching contents (Alt+X)");
+            toolTip.SetToolTip(hexBytesToggle, "Search the stored bytes of files for hex bytes, such as 56 42 4B 56, available when searching contents (Alt+X)");
             //
             // hintLabel
             //

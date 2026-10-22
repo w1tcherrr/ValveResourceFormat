@@ -10,7 +10,9 @@ using GUI.Controls;
 using GUI.Forms;
 using GUI.Utils;
 using ValvePak;
+using ValveResourceFormat;
 using ValveResourceFormat.IO;
+using ValveResourceFormat.Utils;
 
 namespace GUI.Types.PackageViewer
 {
@@ -27,6 +29,8 @@ namespace GUI.Types.PackageViewer
 
         private const int MaxPooledLength = 4 * 1024 * 1024;
         private const int MaxTextSearchLength = 256 * 1024 * 1024;
+        private const int MaxWholeCompiledLength = 64 * 1024;
+        private const int ScanBufferSize = 4 * 1024 * 1024;
 
         protected override void OnPaint(PaintEventArgs e)
         {
@@ -172,6 +176,30 @@ namespace GUI.Types.PackageViewer
                 return (results, false, null);
             }
 
+            bool IsSearchedAsCompiled(PackageEntry entry) => !request.HexBytes && entry.TypeName.EndsWith(GameFileLoader.CompiledFileSuffix, StringComparison.Ordinal);
+
+            bool Matches(PackageEntry entry, ReadOnlySpan<byte> data)
+                => regex != null ? IsTextMatch(regex, entry, data, ref skippedEntries) : IndexOf(data, pattern, firstByte) >= 0;
+
+            bool IsEntryMatch(PackageEntry entry)
+            {
+                package.ReadEntry(entry, out var entryData, validateCrc: false);
+                return Matches(entry, entryData);
+            }
+
+            bool IsCompiledMatch(PackageEntry entry, ArraySegment<byte>? stored)
+            {
+                try
+                {
+                    using var stream = stored is { } data ? new MemoryStream(data.Array!, data.Offset, data.Count, writable: false) : package.OpenEntryStream(entry);
+                    return Resource.AnySearchableBytes(stream, data => Matches(entry, data));
+                }
+                catch (Exception e) when (e is UnexpectedMagicException or InvalidDataException or EndOfStreamException or ArgumentOutOfRangeException)
+                {
+                    return stored is { } data ? Matches(entry, data) : IsEntryMatch(entry);
+                }
+            }
+
             using var progressDialog = new GenericProgressForm
             {
                 Text = "Searching file contents…",
@@ -209,7 +237,7 @@ namespace GUI.Types.PackageViewer
                         continue;
                     }
 
-                    if (regex != null && entry.TotalLength > MaxTextSearchLength)
+                    if (regex != null && entry.TotalLength > MaxTextSearchLength && !IsSearchedAsCompiled(entry))
                     {
                         tooLargeEntries++;
                         continue;
@@ -223,9 +251,7 @@ namespace GUI.Types.PackageViewer
                             continue;
                         }
 
-                        package.ReadEntry(entry, out var entryData, validateCrc: false);
-
-                        if (regex != null ? IsTextMatch(regex, entry, entryData, ref skippedEntries) : IndexOf(entryData, pattern, firstByte) >= 0)
+                        if (IsSearchedAsCompiled(entry) ? IsCompiledMatch(entry, null) : IsEntryMatch(entry))
                         {
                             results.Add(entry);
                         }
@@ -273,7 +299,7 @@ namespace GUI.Types.PackageViewer
                         maxArchiveIndex + 1,
                         new ParallelOptions
                         {
-                            MaxDegreeOfParallelism = 3,
+                            MaxDegreeOfParallelism = Environment.ProcessorCount,
                             CancellationToken = cancellationToken,
                         },
                         archiveIndex =>
@@ -284,9 +310,26 @@ namespace GUI.Types.PackageViewer
                             if (sortedEntriesPerArchive.TryGetValue(archiveIndex, out var archiveEntries))
                             {
                                 using var archive = package.OpenArchiveStream((ushort)archiveIndex);
-                                archiveMatches = regex != null
-                                    ? SearchEntriesInArchive(archive, regex, archiveEntries, ref skippedEntries, cancellationToken)
-                                    : SearchForContentsInArchive(archive, pattern, firstByte, archiveEntries, cancellationToken);
+                                var buffer = ArrayPool<byte>.Shared.Rent(Math.Max(ScanBufferSize, pattern.Length));
+
+                                try
+                                {
+                                    ScanEntries(
+                                        archive,
+                                        buffer,
+                                        archiveEntries,
+                                        archiveMatches,
+                                        entry => IsSearchedAsCompiled(entry) && entry.Length > MaxWholeCompiledLength,
+                                        entry => IsSearchedAsCompiled(entry) ? IsCompiledMatch(entry, null)
+                                            : regex != null ? IsEntryMatch(entry)
+                                            : ContainsInLargeEntry(archive, entry.Offset, entry.Offset + entry.Length, buffer, pattern, firstByte, cancellationToken),
+                                        (entry, data) => IsSearchedAsCompiled(entry) ? IsCompiledMatch(entry, data) : Matches(entry, data),
+                                        cancellationToken);
+                                }
+                                finally
+                                {
+                                    ArrayPool<byte>.Shared.Return(buffer);
+                                }
                             }
 
                             lock (matches)
@@ -337,39 +380,6 @@ namespace GUI.Types.PackageViewer
             }
 
             return (results, cancelled, unsearched.Count > 0 ? string.Join(" and ", unsearched) + " not searched" : null);
-        }
-
-        private static HashSet<PackageEntry> SearchEntriesInArchive(Stream archive, Regex regex, List<PackageEntry> archiveEntries, ref int skippedEntries, CancellationToken cancellationToken)
-        {
-            var matches = new HashSet<PackageEntry>();
-
-            foreach (var entry in archiveEntries)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                var length = (int)entry.Length;
-                var buffer = length <= MaxPooledLength ? ArrayPool<byte>.Shared.Rent(length) : new byte[length];
-
-                try
-                {
-                    archive.Position = entry.Offset;
-                    archive.ReadExactly(buffer, 0, length);
-
-                    if (IsTextMatch(regex, entry, buffer.AsSpan(0, length), ref skippedEntries))
-                    {
-                        matches.Add(entry);
-                    }
-                }
-                finally
-                {
-                    if (length <= MaxPooledLength)
-                    {
-                        ArrayPool<byte>.Shared.Return(buffer);
-                    }
-                }
-            }
-
-            return matches;
         }
 
         private static bool IsTextMatch(Regex regex, PackageEntry entry, ReadOnlySpan<byte> data, ref int skippedEntries)
@@ -440,34 +450,34 @@ namespace GUI.Types.PackageViewer
             }
         }
 
-        private static HashSet<PackageEntry> SearchForContentsInArchive(Stream archive, byte[] pattern, SearchValues<byte>? firstByte, List<PackageEntry> archiveEntries, CancellationToken cancellationToken)
-        {
-            const int BufferSize = 4 * 1024 * 1024;
-
-            var matches = new HashSet<PackageEntry>();
-            var buffer = ArrayPool<byte>.Shared.Rent(Math.Max(BufferSize, pattern.Length));
-
-            try
-            {
-                ScanEntries(archive, buffer, pattern, firstByte, archiveEntries, matches, cancellationToken);
-            }
-            finally
-            {
-                ArrayPool<byte>.Shared.Return(buffer);
-            }
-
-            return matches;
-        }
-
-        private static void ScanEntries(Stream archive, byte[] buffer, byte[] pattern, SearchValues<byte>? firstByte, List<PackageEntry> archiveEntries, HashSet<PackageEntry> matches, CancellationToken cancellationToken)
+        /// <summary>
+        /// Reads entries sorted by offset in runs of nearby entries that fit in the buffer,
+        /// and leaves entries larger than the buffer or read on their own to <paramref name="matchesAlone"/>.
+        /// </summary>
+        private static void ScanEntries(Stream archive, byte[] buffer, List<PackageEntry> archiveEntries, HashSet<PackageEntry> matches,
+            Func<PackageEntry, bool> isReadAlone, Func<PackageEntry, bool> matchesAlone, Func<PackageEntry, ArraySegment<byte>, bool> matchesInBuffer,
+            CancellationToken cancellationToken)
         {
             const int MaxReadGap = 64 * 1024;
+
+            bool IsAlone(PackageEntry entry) => entry.Length > buffer.Length || isReadAlone(entry);
 
             var first = 0;
 
             while (first < archiveEntries.Count)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+
+                if (IsAlone(archiveEntries[first]))
+                {
+                    if (matchesAlone(archiveEntries[first]))
+                    {
+                        matches.Add(archiveEntries[first]);
+                    }
+
+                    first++;
+                    continue;
+                }
 
                 var start = (long)archiveEntries[first].Offset;
                 var end = start + archiveEntries[first].Length;
@@ -478,24 +488,13 @@ namespace GUI.Types.PackageViewer
                     var next = archiveEntries[last + 1];
                     var nextEnd = (long)next.Offset + next.Length;
 
-                    if (next.Offset - end > MaxReadGap || nextEnd - start > buffer.Length)
+                    if (next.Offset - end > MaxReadGap || nextEnd - start > buffer.Length || IsAlone(next))
                     {
                         break;
                     }
 
                     end = Math.Max(end, nextEnd);
                     last++;
-                }
-
-                if (end - start > buffer.Length)
-                {
-                    if (ContainsInLargeEntry(archive, start, end, buffer, pattern, firstByte, cancellationToken))
-                    {
-                        matches.Add(archiveEntries[first]);
-                    }
-
-                    first++;
-                    continue;
                 }
 
                 archive.Position = start;
@@ -505,7 +504,7 @@ namespace GUI.Types.PackageViewer
                 {
                     var entry = archiveEntries[i];
 
-                    if (IndexOf(buffer.AsSpan((int)(entry.Offset - start), (int)entry.Length), pattern, firstByte) >= 0)
+                    if (matchesInBuffer(entry, new ArraySegment<byte>(buffer, (int)(entry.Offset - start), (int)entry.Length)))
                     {
                         matches.Add(entry);
                     }
