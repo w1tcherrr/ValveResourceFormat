@@ -18,7 +18,7 @@ namespace GUI.Controls
         public Color HoveredBackColor { get; set; } = Color.Gray;
         public int CornerRadius { get; set; } = 5;
 
-        /// <summary>Gets or sets whether a disabled button draws only its dimmed image, without its fill and border.</summary>
+        /// <summary>Gets or sets whether a disabled button draws only its image in grey, without its fill and border.</summary>
         public bool HideFrameWhenDisabled { get; set; }
 
         public ThemedButton() : base()
@@ -145,7 +145,9 @@ namespace GUI.Controls
                 {
                     // Dim the icon while keeping the same scaling as the enabled state.
                     using var attributes = new ImageAttributes();
-                    var matrix = new ColorMatrix { Matrix33 = 0.35f };
+                    var matrix = HideFrameWhenDisabled
+                        ? new ColorMatrix([[0.3f, 0.3f, 0.3f, 0, 0], [0.59f, 0.59f, 0.59f, 0, 0], [0.11f, 0.11f, 0.11f, 0, 0], [0, 0, 0, 0.5f, 0], [0, 0, 0, 0, 1]])
+                        : new ColorMatrix { Matrix33 = 0.35f };
                     attributes.SetColorMatrix(matrix);
                     pevent.Graphics.DrawImage(Image, imageRect, 0, 0, Image.Width, Image.Height, GraphicsUnit.Pixel, attributes);
                 }
