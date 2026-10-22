@@ -299,6 +299,120 @@ namespace ValveResourceFormat.ResourceTypes
             }
         }
 
+        /// <summary>
+        /// Whether any decompressed buffer of a compressed binary KV3 block satisfies a predicate, without parsing the block.
+        /// Uncompressed KV3 and other formats are not visited, and binary blobs only where zstd before version 5 compresses them with the buffer.
+        /// </summary>
+        /// <param name="block">The stored bytes of the block.</param>
+        /// <param name="predicate">Called with each decompressed buffer, which is only valid during the call.</param>
+        /// <returns>Whether a buffer satisfied the predicate, or <see langword="null"/> when the block is not compressed binary KV3.</returns>
+        /// <exception cref="InvalidDataException">A buffer size is negative or past the end of the block, or a buffer fails to decompress.</exception>
+        internal static bool? AnyDecompressedBuffer(ArraySegment<byte> block, Func<ReadOnlySpan<byte>, bool> predicate)
+        {
+            if (block.Count < 4)
+            {
+                return null;
+            }
+
+            using var reader = new BinaryReader(new MemoryStream(block.Array!, block.Offset, block.Count, writable: false));
+
+            var magic = reader.ReadUInt32();
+
+            if (!IsBinaryKV3(magic))
+            {
+                return null;
+            }
+
+            if (magic == MAGIC0)
+            {
+                return AnyDecompressedBufferVersion0(reader, block.Count, predicate);
+            }
+
+            var version = (int)(magic & 0xFF);
+
+            reader.BaseStream.Position += 16; // format
+            var compressionMethod = (KV3BinaryCompressionMethod)reader.ReadUInt32();
+
+            if (compressionMethod is not (KV3BinaryCompressionMethod.Lz4 or KV3BinaryCompressionMethod.Zstd))
+            {
+                return null;
+            }
+
+            int sizeUncompressedBuffer1;
+            int sizeCompressedBuffer1;
+            var sizeUncompressedBuffer2 = 0;
+            var sizeCompressedBuffer2 = 0;
+            var sizeBinaryBlobsBytes = 0;
+
+            if (version == 1)
+            {
+                reader.BaseStream.Position += 12; // countBytes1, countBytes4, countBytes8
+                sizeUncompressedBuffer1 = reader.ReadInt32();
+                sizeCompressedBuffer1 = (int)(block.Count - reader.BaseStream.Position);
+            }
+            else
+            {
+                reader.BaseStream.Position += 24; // compression dictionary and frame size, lane, type, object and array counts
+                sizeUncompressedBuffer1 = reader.ReadInt32();
+                sizeCompressedBuffer1 = reader.ReadInt32();
+                reader.BaseStream.Position += 4; // countBlocks
+                sizeBinaryBlobsBytes = reader.ReadInt32();
+
+                if (version >= 4)
+                {
+                    reader.BaseStream.Position += 8; // countBytes2, sizeBlockCompressedSizesBytes
+                }
+
+                if (version >= 5)
+                {
+                    sizeUncompressedBuffer1 = reader.ReadInt32();
+                    sizeCompressedBuffer1 = reader.ReadInt32();
+                    sizeUncompressedBuffer2 = reader.ReadInt32();
+                    sizeCompressedBuffer2 = reader.ReadInt32();
+                    reader.BaseStream.Position += 32; // buffer 2 lane, node, object, array and element counts
+                }
+            }
+
+            // Before version 5, zstd stores the buffer and the binary blobs as two consecutive frames that decompress together
+            if (compressionMethod == KV3BinaryCompressionMethod.Zstd && version < 5)
+            {
+                sizeUncompressedBuffer1 += sizeBinaryBlobsBytes;
+            }
+
+            using var zstdDecompressor = compressionMethod == KV3BinaryCompressionMethod.Zstd ? new ZstdSharp.Decompressor() : null;
+
+            return AnyDecompressed(reader, zstdDecompressor, sizeUncompressedBuffer1, sizeCompressedBuffer1, predicate)
+                || (version >= 5 && AnyDecompressed(reader, zstdDecompressor, sizeUncompressedBuffer2, sizeCompressedBuffer2, predicate));
+        }
+
+        private static bool AnyDecompressed(BinaryReader reader, ZstdSharp.Decompressor? zstdDecompressor, int size, int compressedSize, Func<ReadOnlySpan<byte>, bool> predicate)
+        {
+            if (size < 0 || compressedSize < 0 || compressedSize > reader.BaseStream.Length - reader.BaseStream.Position)
+            {
+                throw new InvalidDataException("A compressed KV3 buffer is outside of the block.");
+            }
+
+            var output = ArrayPool<byte>.Shared.Rent(size);
+
+            try
+            {
+                if (zstdDecompressor != null)
+                {
+                    DecompressZSTD(zstdDecompressor, reader, output.AsSpan(0, size), compressedSize);
+                }
+                else
+                {
+                    DecompressLZ4(reader, output.AsSpan(0, size), compressedSize);
+                }
+
+                return predicate(output.AsSpan(0, size));
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(output);
+            }
+        }
+
         private void ReadBuffer(int version, BinaryReader reader)
         {
             var context = new Context

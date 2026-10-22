@@ -1,3 +1,5 @@
+using System.Buffers;
+using System.Buffers.Binary;
 using System.Collections;
 using System.Diagnostics;
 using System.IO;
@@ -336,6 +338,115 @@ namespace ValveResourceFormat
                 && GenericData.Construct(vdataBlock) is { } specializedData)
             {
                 blocks.Items[blocks.Items.IndexOf(vdataBlock)] = specializedData;
+            }
+        }
+
+        /// <summary>
+        /// Whether any of the searchable bytes of a compiled resource satisfy a predicate, without parsing the resource.
+        /// These are the blocks except the geometry and visibility buffers (VBIB, MBUF, MVTX, MIDX, MADJ, MSLT, TBUF and VXVS),
+        /// each as its decompressed buffers when it is compressed binary KV3 and as its stored bytes otherwise.
+        /// Only the header, the block table and those blocks are read, so other blocks and the data after the last block are not searched.
+        /// </summary>
+        /// <param name="input">A seekable stream with the resource at position 0.</param>
+        /// <param name="predicate">Called with each buffer, which is only valid during the call, until it returns true.</param>
+        /// <exception cref="UnexpectedMagicException">The stream does not hold a resource.</exception>
+        /// <exception cref="InvalidDataException">The block table or a compressed block is invalid.</exception>
+        /// <exception cref="EndOfStreamException">The stream or a compressed block header ends early.</exception>
+        public static bool AnySearchableBytes(Stream input, Func<ReadOnlySpan<byte>, bool> predicate)
+        {
+            ArgumentNullException.ThrowIfNull(input);
+            ArgumentNullException.ThrowIfNull(predicate);
+
+            const int ProbeSize = 4096;
+            const int BlockEntrySize = 12;
+
+            var length = input.Length;
+            var probeLength = (int)Math.Min(length, ProbeSize);
+            var probe = ArrayPool<byte>.Shared.Rent(ProbeSize);
+            byte[]? buffer = null;
+
+            ArraySegment<byte> ReadRange(long offset, int size)
+            {
+                if (offset < 0 || size < 0 || offset + size > length)
+                {
+                    throw new InvalidDataException("A block is outside of the resource.");
+                }
+
+                if (offset + size <= probeLength)
+                {
+                    return new ArraySegment<byte>(probe, (int)offset, size);
+                }
+
+                if (buffer == null || buffer.Length < size)
+                {
+                    if (buffer != null)
+                    {
+                        ArrayPool<byte>.Shared.Return(buffer);
+                    }
+
+                    buffer = ArrayPool<byte>.Shared.Rent(size);
+                }
+
+                input.Position = offset;
+                input.ReadExactly(buffer, 0, size);
+
+                return new ArraySegment<byte>(buffer, 0, size);
+            }
+
+            try
+            {
+                input.Position = 0;
+                input.ReadExactly(probe, 0, probeLength);
+
+                var headerVersion = probeLength >= 16 ? BinaryPrimitives.ReadUInt16LittleEndian(probe.AsSpan(4)) : 0;
+
+                if (headerVersion != KnownHeaderVersion)
+                {
+                    throw new UnexpectedMagicException("Not a resource", headerVersion, nameof(headerVersion));
+                }
+
+                var tableOffset = 8 + (long)BinaryPrimitives.ReadUInt32LittleEndian(probe.AsSpan(8));
+                var blockCount = BinaryPrimitives.ReadUInt32LittleEndian(probe.AsSpan(12));
+
+                if (blockCount > (length - tableOffset) / BlockEntrySize)
+                {
+                    throw new InvalidDataException("The block table is outside of the resource.");
+                }
+
+                var table = ReadRange(tableOffset, (int)blockCount * BlockEntrySize).AsSpan();
+                var blocks = new List<(long Offset, int Size)>((int)blockCount);
+
+                for (var i = 0; i < table.Length; i += BlockEntrySize)
+                {
+                    var type = (BlockType)BinaryPrimitives.ReadUInt32LittleEndian(table[i..]);
+
+                    if (type is not (BlockType.VBIB or BlockType.MBUF or BlockType.MVTX or BlockType.MIDX or BlockType.MADJ or BlockType.MSLT or BlockType.TBUF or BlockType.VXVS))
+                    {
+                        var offset = tableOffset + i + 4 + BinaryPrimitives.ReadUInt32LittleEndian(table[(i + 4)..]);
+                        blocks.Add((offset, (int)BinaryPrimitives.ReadUInt32LittleEndian(table[(i + 8)..])));
+                    }
+                }
+
+                foreach (var (offset, size) in blocks)
+                {
+                    var block = ReadRange(offset, size);
+
+                    if (BinaryKV3.AnyDecompressedBuffer(block, predicate) ?? predicate(block))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(probe);
+
+                if (buffer != null)
+                {
+                    ArrayPool<byte>.Shared.Return(buffer);
+                }
             }
         }
 
