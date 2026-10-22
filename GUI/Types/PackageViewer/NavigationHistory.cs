@@ -1,8 +1,30 @@
-using GUI.Forms;
-
 namespace GUI.Types.PackageViewer
 {
-    internal readonly record struct SearchRequest(string Text, SearchType Type, string? FilterKey, string? FilterValue);
+    internal enum SearchTarget
+    {
+        Name,
+        Path,
+        Contents,
+    }
+
+    /// <summary>
+    /// A package search: what to match, how to match it, and which files to look at.
+    /// </summary>
+    /// <param name="Folder">Folder whose subtree is searched, or <see langword="null"/> for the whole package.</param>
+    /// <param name="Extension">File extension that matching files must have, or <see langword="null"/> for any.</param>
+    /// <param name="FilterKey">Searchable user data key that matching files must contain.</param>
+    /// <param name="FilterValue">Value the filter key must equal; when <see langword="null"/>, any value for the key matches.</param>
+    internal readonly record struct SearchRequest(
+        string Text,
+        SearchTarget Target,
+        bool MatchCase,
+        bool WholeWord,
+        bool UseRegex,
+        bool HexBytes,
+        VirtualPackageNode? Folder,
+        string? Extension,
+        string? FilterKey,
+        string? FilterValue);
 
     /// <summary>
     /// A single back/forward history location: either a folder node or a search.
@@ -47,15 +69,23 @@ namespace GUI.Types.PackageViewer
         public NavigationEntry? Forward() => CanGoForward ? entries[++index] : null;
 
         /// <summary>
-        /// Removes every folder entry that points at <paramref name="removedRoot"/> or any of its
-        /// descendants, keeping the cursor on the nearest surviving earlier entry when the current
-        /// one is removed. Other folder entries and searches are kept.
+        /// Removes every folder entry and folder scoped search that points at <paramref name="removedRoot"/>
+        /// or any of its descendants, keeping the cursor on the nearest surviving earlier entry when the
+        /// current one is removed, or on the first entry when none before it is left. Entries that become
+        /// equal neighbours are merged. Other entries are kept.
         /// </summary>
         public void RemoveSubtree(VirtualPackageNode removedRoot)
         {
             for (var i = entries.Count - 1; i >= 0; i--)
             {
-                if (entries[i] is FolderNavigationEntry folder && IsInSubtree(folder.Node, removedRoot))
+                var node = entries[i] switch
+                {
+                    FolderNavigationEntry folder => folder.Node,
+                    SearchNavigationEntry search => search.Search.Folder,
+                    _ => null,
+                };
+
+                if (node != null && IsInSubtree(node, removedRoot))
                 {
                     entries.RemoveAt(i);
 
@@ -64,6 +94,24 @@ namespace GUI.Types.PackageViewer
                         index--;
                     }
                 }
+            }
+
+            for (var i = entries.Count - 1; i > 0; i--)
+            {
+                if (entries[i] == entries[i - 1])
+                {
+                    entries.RemoveAt(i);
+
+                    if (i <= index)
+                    {
+                        index--;
+                    }
+                }
+            }
+
+            if (index < 0 && entries.Count > 0)
+            {
+                index = 0;
             }
         }
 

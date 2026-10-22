@@ -908,7 +908,7 @@ namespace GUI.Types.PackageViewer
         /// </summary>
         private VirtualPackageNode GetContextFolder() => ContextFolder ?? VirtualRoot!;
 
-        private static string GetFolderPath(VirtualPackageNode folder)
+        internal static string GetFolderPath(VirtualPackageNode folder)
         {
             var names = new Stack<string>();
 

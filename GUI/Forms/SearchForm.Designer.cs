@@ -30,156 +30,350 @@ namespace GUI.Forms
         /// </summary>
         private void InitializeComponent()
         {
-            findButton = new ThemedButton();
-            cancelButton = new ThemedButton();
+            components = new System.ComponentModel.Container();
+            findTextBoxPanel = new UnstyledPanel();
             findTextBox = new System.Windows.Forms.TextBox();
-            searchTypeComboBox = new ThemedComboBox();
+            matchCaseToggle = new ThemedToggleButton();
+            wholeWordToggle = new ThemedToggleButton();
+            regexToggle = new ThemedToggleButton();
+            hexBytesToggle = new ThemedToggleButton();
+            hintLabel = new System.Windows.Forms.Label();
+            targetLabel = new System.Windows.Forms.Label();
+            nameRadioButton = new System.Windows.Forms.RadioButton();
+            pathRadioButton = new System.Windows.Forms.RadioButton();
+            contentsRadioButton = new System.Windows.Forms.RadioButton();
+            onlyInFolderTable = new System.Windows.Forms.TableLayoutPanel();
+            onlyInFolderCheckBox = new System.Windows.Forms.CheckBox();
+            folderPathLabel = new System.Windows.Forms.Label();
+            noFolderLabel = new System.Windows.Forms.Label();
+            extensionLabel = new System.Windows.Forms.Label();
+            extensionComboBox = new ThemedComboBox();
             filterKeyLabel = new System.Windows.Forms.Label();
+            filterTable = new System.Windows.Forms.TableLayoutPanel();
             filterKeyComboBox = new ThemedComboBox();
             filterValueComboBox = new ThemedComboBox();
+            findButton = new ThemedButton();
+            cancelButton = new ThemedButton();
+            toolTip = new System.Windows.Forms.ToolTip(components);
+            findTextBoxPanel.SuspendLayout();
+            filterTable.SuspendLayout();
             SuspendLayout();
-            // 
+            //
+            // findTextBoxPanel
+            //
+            findTextBoxPanel.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right;
+            findTextBoxPanel.Controls.Add(findTextBox);
+            findTextBoxPanel.Location = new System.Drawing.Point(12, 12);
+            findTextBoxPanel.Name = "findTextBoxPanel";
+            findTextBoxPanel.Padding = new System.Windows.Forms.Padding(6, 4, 4, 3);
+            findTextBoxPanel.Size = new System.Drawing.Size(308, 26);
+            findTextBoxPanel.TabIndex = 0;
+            findTextBoxPanel.Paint += FindTextBoxPanel_Paint;
+            //
+            // findTextBox
+            //
+            findTextBox.AccessibleName = "Search text";
+            findTextBox.BorderStyle = System.Windows.Forms.BorderStyle.None;
+            findTextBox.Dock = System.Windows.Forms.DockStyle.Fill;
+            findTextBox.Name = "findTextBox";
+            findTextBox.TabIndex = 0;
+            //
+            // matchCaseToggle
+            //
+            matchCaseToggle.AccessibleName = "Match case";
+            matchCaseToggle.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right;
+            matchCaseToggle.Location = new System.Drawing.Point(326, 12);
+            matchCaseToggle.Name = "matchCaseToggle";
+            matchCaseToggle.Size = new System.Drawing.Size(34, 26);
+            matchCaseToggle.TabIndex = 1;
+            matchCaseToggle.Text = "Aa";
+            toolTip.SetToolTip(matchCaseToggle, "Match case (Alt+C)");
+            //
+            // wholeWordToggle
+            //
+            wholeWordToggle.AccessibleName = "Match whole word";
+            wholeWordToggle.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right;
+            wholeWordToggle.Font = new System.Drawing.Font("Segoe UI", 10F, System.Drawing.FontStyle.Underline);
+            wholeWordToggle.Location = new System.Drawing.Point(364, 12);
+            wholeWordToggle.Name = "wholeWordToggle";
+            wholeWordToggle.Size = new System.Drawing.Size(34, 26);
+            wholeWordToggle.TabIndex = 2;
+            wholeWordToggle.Text = "ab";
+            toolTip.SetToolTip(wholeWordToggle, "Match whole word (Alt+W)");
+            //
+            // regexToggle
+            //
+            regexToggle.AccessibleName = "Use regular expression";
+            regexToggle.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right;
+            regexToggle.Location = new System.Drawing.Point(402, 12);
+            regexToggle.Name = "regexToggle";
+            regexToggle.Size = new System.Drawing.Size(34, 26);
+            regexToggle.TabIndex = 3;
+            regexToggle.Text = ".*";
+            toolTip.SetToolTip(regexToggle, "Use regular expression, ^name$ matches a whole name exactly (Alt+R)");
+            //
+            // hexBytesToggle
+            //
+            hexBytesToggle.AccessibleName = "Hex bytes";
+            hexBytesToggle.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right;
+            hexBytesToggle.Location = new System.Drawing.Point(440, 12);
+            hexBytesToggle.Name = "hexBytesToggle";
+            hexBytesToggle.Size = new System.Drawing.Size(34, 26);
+            hexBytesToggle.TabIndex = 4;
+            hexBytesToggle.Text = "0x";
+            toolTip.SetToolTip(hexBytesToggle, "Search the stored bytes of files for hex bytes, such as 56 42 4B 56, available when searching contents (Alt+X)");
+            //
+            // hintLabel
+            //
+            hintLabel.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right;
+            hintLabel.AutoEllipsis = true;
+            hintLabel.Location = new System.Drawing.Point(12, 41);
+            hintLabel.Name = "hintLabel";
+            hintLabel.Size = new System.Drawing.Size(462, 19);
+            hintLabel.TabIndex = 5;
+            hintLabel.UseMnemonic = false;
+            //
+            // targetLabel
+            //
+            targetLabel.AutoSize = true;
+            targetLabel.Location = new System.Drawing.Point(12, 72);
+            targetLabel.Name = "targetLabel";
+            targetLabel.Size = new System.Drawing.Size(63, 19);
+            targetLabel.TabIndex = 6;
+            targetLabel.Text = "Search in";
+            //
+            // nameRadioButton
+            //
+            nameRadioButton.AutoSize = true;
+            nameRadioButton.Checked = true;
+            nameRadioButton.Location = new System.Drawing.Point(110, 70);
+            nameRadioButton.Name = "nameRadioButton";
+            nameRadioButton.Size = new System.Drawing.Size(63, 23);
+            nameRadioButton.TabIndex = 7;
+            nameRadioButton.TabStop = true;
+            nameRadioButton.Text = "&Name";
+            //
+            // pathRadioButton
+            //
+            pathRadioButton.AutoSize = true;
+            pathRadioButton.Location = new System.Drawing.Point(185, 70);
+            pathRadioButton.Name = "pathRadioButton";
+            pathRadioButton.Size = new System.Drawing.Size(55, 23);
+            pathRadioButton.TabIndex = 8;
+            pathRadioButton.Text = "&Path";
+            //
+            // contentsRadioButton
+            //
+            contentsRadioButton.AutoSize = true;
+            contentsRadioButton.Location = new System.Drawing.Point(252, 70);
+            contentsRadioButton.Name = "contentsRadioButton";
+            contentsRadioButton.Size = new System.Drawing.Size(82, 23);
+            contentsRadioButton.TabIndex = 9;
+            contentsRadioButton.Text = "Con&tents";
+            //
+            // onlyInFolderCheckBox
+            //
+            onlyInFolderCheckBox.Anchor = System.Windows.Forms.AnchorStyles.Left;
+            onlyInFolderCheckBox.AutoSize = true;
+            onlyInFolderCheckBox.Margin = new System.Windows.Forms.Padding(0);
+            onlyInFolderCheckBox.Name = "onlyInFolderCheckBox";
+            onlyInFolderCheckBox.TabIndex = 0;
+            onlyInFolderCheckBox.Text = "&Only in";
+            //
+            // folderPathLabel
+            //
+            folderPathLabel.Dock = System.Windows.Forms.DockStyle.Fill;
+            folderPathLabel.Margin = new System.Windows.Forms.Padding(0);
+            folderPathLabel.Name = "folderPathLabel";
+            folderPathLabel.TabIndex = 1;
+            folderPathLabel.UseMnemonic = false;
+            folderPathLabel.Click += FolderPathLabel_Click;
+            folderPathLabel.Paint += FolderPathLabel_Paint;
+            folderPathLabel.Resize += FolderPathLabel_Resize;
+            //
+            // onlyInFolderTable
+            //
+            onlyInFolderTable.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right;
+            onlyInFolderTable.ColumnCount = 2;
+            onlyInFolderTable.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Absolute, 98F));
+            onlyInFolderTable.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Percent, 100F));
+            onlyInFolderTable.Controls.Add(onlyInFolderCheckBox, 0, 0);
+            onlyInFolderTable.Controls.Add(folderPathLabel, 1, 0);
+            onlyInFolderTable.Location = new System.Drawing.Point(12, 103);
+            onlyInFolderTable.Margin = new System.Windows.Forms.Padding(0);
+            onlyInFolderTable.Name = "onlyInFolderTable";
+            onlyInFolderTable.RowCount = 1;
+            onlyInFolderTable.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.Percent, 100F));
+            onlyInFolderTable.Size = new System.Drawing.Size(462, 24);
+            onlyInFolderTable.TabIndex = 10;
+            //
+            // noFolderLabel
+            //
+            noFolderLabel.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right;
+            noFolderLabel.AutoEllipsis = true;
+            noFolderLabel.Location = new System.Drawing.Point(12, 106);
+            noFolderLabel.Name = "noFolderLabel";
+            noFolderLabel.Size = new System.Drawing.Size(462, 19);
+            noFolderLabel.TabIndex = 10;
+            noFolderLabel.Text = "Select a folder in the tree to limit the search to it";
+            noFolderLabel.UseMnemonic = false;
+            noFolderLabel.Visible = false;
+            //
+            // extensionLabel
+            //
+            extensionLabel.AutoSize = true;
+            extensionLabel.Location = new System.Drawing.Point(12, 140);
+            extensionLabel.Name = "extensionLabel";
+            extensionLabel.Size = new System.Drawing.Size(66, 19);
+            extensionLabel.TabIndex = 11;
+            extensionLabel.Text = "&Extension";
+            //
+            // extensionComboBox
+            //
+            extensionComboBox.AccessibleName = "Extension";
+            extensionComboBox.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right;
+            extensionComboBox.DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList;
+            extensionComboBox.Location = new System.Drawing.Point(110, 137);
+            extensionComboBox.Margin = new System.Windows.Forms.Padding(0);
+            extensionComboBox.Name = "extensionComboBox";
+            extensionComboBox.Size = new System.Drawing.Size(364, 26);
+            extensionComboBox.TabIndex = 12;
+            //
+            // filterKeyLabel
+            //
+            filterKeyLabel.AutoSize = true;
+            filterKeyLabel.Location = new System.Drawing.Point(12, 176);
+            filterKeyLabel.Name = "filterKeyLabel";
+            filterKeyLabel.Size = new System.Drawing.Size(70, 19);
+            filterKeyLabel.TabIndex = 13;
+            filterKeyLabel.Text = "&Asset info";
+            toolTip.SetToolTip(filterKeyLabel, "Only files whose searchable user data in the tools asset info has this key, and optionally this value");
+            //
+            // filterTable
+            //
+            filterTable.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right;
+            filterTable.ColumnCount = 2;
+            filterTable.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Percent, 60F));
+            filterTable.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Percent, 40F));
+            filterTable.Controls.Add(filterKeyComboBox, 0, 0);
+            filterTable.Controls.Add(filterValueComboBox, 1, 0);
+            filterTable.Location = new System.Drawing.Point(110, 173);
+            filterTable.Margin = new System.Windows.Forms.Padding(0);
+            filterTable.Name = "filterTable";
+            filterTable.RowCount = 1;
+            filterTable.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.Percent, 100F));
+            filterTable.Size = new System.Drawing.Size(364, 26);
+            filterTable.TabIndex = 14;
+            //
+            // filterKeyComboBox
+            //
+            filterKeyComboBox.AccessibleName = "Asset info key";
+            filterKeyComboBox.AutoCompleteMode = System.Windows.Forms.AutoCompleteMode.SuggestAppend;
+            filterKeyComboBox.AutoCompleteSource = System.Windows.Forms.AutoCompleteSource.ListItems;
+            filterKeyComboBox.Dock = System.Windows.Forms.DockStyle.Fill;
+            filterKeyComboBox.Margin = new System.Windows.Forms.Padding(0, 0, 3, 0);
+            filterKeyComboBox.Name = "filterKeyComboBox";
+            filterKeyComboBox.TabIndex = 0;
+            filterKeyComboBox.TrimStart = true;
+            //
+            // filterValueComboBox
+            //
+            filterValueComboBox.AccessibleName = "Asset info value";
+            filterValueComboBox.AutoCompleteMode = System.Windows.Forms.AutoCompleteMode.SuggestAppend;
+            filterValueComboBox.AutoCompleteSource = System.Windows.Forms.AutoCompleteSource.ListItems;
+            filterValueComboBox.Dock = System.Windows.Forms.DockStyle.Fill;
+            filterValueComboBox.DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList;
+            filterValueComboBox.Enabled = false;
+            filterValueComboBox.Margin = new System.Windows.Forms.Padding(3, 0, 0, 0);
+            filterValueComboBox.Name = "filterValueComboBox";
+            filterValueComboBox.TabIndex = 1;
+            filterValueComboBox.TrimStart = true;
+            //
             // findButton
-            // 
-            findButton.BackColor = System.Drawing.Color.FromArgb(188, 188, 188);
-            findButton.ClickedBackColor = System.Drawing.Color.FromArgb(99, 161, 255);
-            findButton.CornerRadius = 5;
+            //
+            findButton.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right;
             findButton.DialogResult = System.Windows.Forms.DialogResult.OK;
-            findButton.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
-            findButton.ForeColor = System.Drawing.Color.Black;
-            findButton.HoveredBackColor = System.Drawing.Color.FromArgb(140, 191, 255);
-            findButton.LabelFormatFlags = System.Windows.Forms.TextFormatFlags.HorizontalCenter | System.Windows.Forms.TextFormatFlags.VerticalCenter | System.Windows.Forms.TextFormatFlags.EndEllipsis;
-            findButton.Location = new System.Drawing.Point(13, 193);
-            findButton.Margin = new System.Windows.Forms.Padding(4, 3, 4, 3);
+            findButton.Location = new System.Drawing.Point(292, 215);
             findButton.Name = "findButton";
             findButton.Size = new System.Drawing.Size(88, 31);
-            findButton.Style = true;
-            findButton.TabIndex = 0;
+            findButton.TabIndex = 15;
             findButton.Text = "Find";
-            findButton.UseVisualStyleBackColor = false;
-            // 
+            //
             // cancelButton
-            // 
-            cancelButton.BackColor = System.Drawing.Color.FromArgb(188, 188, 188);
-            cancelButton.ClickedBackColor = System.Drawing.Color.FromArgb(99, 161, 255);
-            cancelButton.CornerRadius = 5;
+            //
+            cancelButton.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right;
             cancelButton.DialogResult = System.Windows.Forms.DialogResult.Cancel;
-            cancelButton.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
-            cancelButton.ForeColor = System.Drawing.Color.Black;
-            cancelButton.HoveredBackColor = System.Drawing.Color.FromArgb(140, 191, 255);
-            cancelButton.LabelFormatFlags = System.Windows.Forms.TextFormatFlags.HorizontalCenter | System.Windows.Forms.TextFormatFlags.VerticalCenter | System.Windows.Forms.TextFormatFlags.EndEllipsis;
-            cancelButton.Location = new System.Drawing.Point(325, 193);
-            cancelButton.Margin = new System.Windows.Forms.Padding(4, 3, 4, 3);
+            cancelButton.Location = new System.Drawing.Point(386, 215);
             cancelButton.Name = "cancelButton";
             cancelButton.Size = new System.Drawing.Size(88, 31);
-            cancelButton.Style = true;
-            cancelButton.TabIndex = 1;
+            cancelButton.TabIndex = 16;
             cancelButton.Text = "Cancel";
-            cancelButton.UseVisualStyleBackColor = false;
-            // 
-            // findTextBox
-            // 
-            findTextBox.Location = new System.Drawing.Point(13, 18);
-            findTextBox.Margin = new System.Windows.Forms.Padding(4, 3, 4, 3);
-            findTextBox.Name = "findTextBox";
-            findTextBox.Size = new System.Drawing.Size(400, 25);
-            findTextBox.TabIndex = 2;
-            // 
-            // searchTypeComboBox
-            // 
-            searchTypeComboBox.BackColor = System.Drawing.Color.FromArgb(218, 218, 218);
-            searchTypeComboBox.DrawMode = System.Windows.Forms.DrawMode.OwnerDrawFixed;
-            searchTypeComboBox.DropDownBackColor = System.Drawing.Color.FromArgb(218, 218, 218);
-            searchTypeComboBox.DropDownForeColor = System.Drawing.Color.Black;
-            searchTypeComboBox.DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList;
-            searchTypeComboBox.ForeColor = System.Drawing.Color.Black;
-            searchTypeComboBox.HeaderColor = System.Drawing.Color.FromArgb(188, 188, 188);
-            searchTypeComboBox.HighlightColor = System.Drawing.Color.FromArgb(99, 161, 255);
-            searchTypeComboBox.Location = new System.Drawing.Point(13, 53);
-            searchTypeComboBox.Margin = new System.Windows.Forms.Padding(4, 3, 4, 3);
-            searchTypeComboBox.Name = "searchTypeComboBox";
-            searchTypeComboBox.Size = new System.Drawing.Size(400, 26);
-            searchTypeComboBox.TabIndex = 5;
-            // 
-            // filterKeyLabel
-            // 
-            filterKeyLabel.AutoSize = true;
-            filterKeyLabel.Location = new System.Drawing.Point(13, 91);
-            filterKeyLabel.Name = "filterKeyLabel";
-            filterKeyLabel.Size = new System.Drawing.Size(103, 19);
-            filterKeyLabel.TabIndex = 6;
-            filterKeyLabel.Text = "Asset info filter:";
-            // 
-            // filterKeyComboBox
-            // 
-            filterKeyComboBox.BackColor = System.Drawing.Color.FromArgb(218, 218, 218);
-            filterKeyComboBox.DrawMode = System.Windows.Forms.DrawMode.OwnerDrawFixed;
-            filterKeyComboBox.DropDownBackColor = System.Drawing.Color.FromArgb(218, 218, 218);
-            filterKeyComboBox.DropDownForeColor = System.Drawing.Color.Black;
-            filterKeyComboBox.DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList;
-            filterKeyComboBox.ForeColor = System.Drawing.Color.Black;
-            filterKeyComboBox.HeaderColor = System.Drawing.Color.FromArgb(188, 188, 188);
-            filterKeyComboBox.HighlightColor = System.Drawing.Color.FromArgb(99, 161, 255);
-            filterKeyComboBox.Location = new System.Drawing.Point(13, 118);
-            filterKeyComboBox.Margin = new System.Windows.Forms.Padding(4, 3, 4, 3);
-            filterKeyComboBox.Name = "filterKeyComboBox";
-            filterKeyComboBox.Size = new System.Drawing.Size(400, 26);
-            filterKeyComboBox.TabIndex = 7;
-            // 
-            // filterValueComboBox
-            // 
-            filterValueComboBox.BackColor = System.Drawing.Color.FromArgb(218, 218, 218);
-            filterValueComboBox.DrawMode = System.Windows.Forms.DrawMode.OwnerDrawFixed;
-            filterValueComboBox.DropDownBackColor = System.Drawing.Color.FromArgb(218, 218, 218);
-            filterValueComboBox.DropDownForeColor = System.Drawing.Color.Black;
-            filterValueComboBox.DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList;
-            filterValueComboBox.ForeColor = System.Drawing.Color.Black;
-            filterValueComboBox.HeaderColor = System.Drawing.Color.FromArgb(188, 188, 188);
-            filterValueComboBox.HighlightColor = System.Drawing.Color.FromArgb(99, 161, 255);
-            filterValueComboBox.Location = new System.Drawing.Point(13, 150);
-            filterValueComboBox.Margin = new System.Windows.Forms.Padding(4, 3, 4, 3);
-            filterValueComboBox.Name = "filterValueComboBox";
-            filterValueComboBox.Size = new System.Drawing.Size(400, 26);
-            filterValueComboBox.TabIndex = 8;
-            filterValueComboBox.Visible = false;
-            // 
+            //
             // SearchForm
-            // 
+            //
             AcceptButton = findButton;
             AutoScaleDimensions = new System.Drawing.SizeF(7F, 17F);
             AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             CancelButton = cancelButton;
-            ClientSize = new System.Drawing.Size(427, 238);
-            Controls.Add(filterValueComboBox);
-            Controls.Add(filterKeyComboBox);
+            ClientSize = new System.Drawing.Size(486, 258);
+            Controls.Add(findTextBoxPanel);
+            Controls.Add(matchCaseToggle);
+            Controls.Add(wholeWordToggle);
+            Controls.Add(regexToggle);
+            Controls.Add(hexBytesToggle);
+            Controls.Add(hintLabel);
+            Controls.Add(targetLabel);
+            Controls.Add(nameRadioButton);
+            Controls.Add(pathRadioButton);
+            Controls.Add(contentsRadioButton);
+            Controls.Add(onlyInFolderTable);
+            Controls.Add(noFolderLabel);
+            Controls.Add(extensionLabel);
+            Controls.Add(extensionComboBox);
             Controls.Add(filterKeyLabel);
-            Controls.Add(searchTypeComboBox);
-            Controls.Add(findTextBox);
-            Controls.Add(cancelButton);
+            Controls.Add(filterTable);
             Controls.Add(findButton);
+            Controls.Add(cancelButton);
             Font = new System.Drawing.Font("Segoe UI", 10F);
-            ForeColor = System.Drawing.Color.Black;
-            FormBorderStyle = System.Windows.Forms.FormBorderStyle.FixedSingle;
-            Margin = new System.Windows.Forms.Padding(4, 3, 4, 3);
             MaximizeBox = false;
             MinimizeBox = false;
             Name = "SearchForm";
             ShowIcon = false;
             ShowInTaskbar = false;
+            SizeGripStyle = System.Windows.Forms.SizeGripStyle.Hide;
             StartPosition = System.Windows.Forms.FormStartPosition.CenterParent;
             Text = "Find";
-            Load += SearchForm_Load;
+            findTextBoxPanel.ResumeLayout(false);
+            findTextBoxPanel.PerformLayout();
+            filterTable.ResumeLayout(false);
             ResumeLayout(false);
             PerformLayout();
         }
 
         #endregion
+        private UnstyledPanel findTextBoxPanel;
         private System.Windows.Forms.TextBox findTextBox;
-        private ThemedButton findButton;
-        private ThemedButton cancelButton;
-        private ThemedComboBox searchTypeComboBox;
+        private ThemedToggleButton matchCaseToggle;
+        private ThemedToggleButton wholeWordToggle;
+        private ThemedToggleButton regexToggle;
+        private ThemedToggleButton hexBytesToggle;
+        private System.Windows.Forms.Label hintLabel;
+        private System.Windows.Forms.Label targetLabel;
+        private System.Windows.Forms.RadioButton nameRadioButton;
+        private System.Windows.Forms.RadioButton pathRadioButton;
+        private System.Windows.Forms.RadioButton contentsRadioButton;
+        private System.Windows.Forms.TableLayoutPanel onlyInFolderTable;
+        private System.Windows.Forms.CheckBox onlyInFolderCheckBox;
+        private System.Windows.Forms.Label folderPathLabel;
+        private System.Windows.Forms.Label noFolderLabel;
+        private System.Windows.Forms.Label extensionLabel;
+        private ThemedComboBox extensionComboBox;
         private System.Windows.Forms.Label filterKeyLabel;
+        private System.Windows.Forms.TableLayoutPanel filterTable;
         private ThemedComboBox filterKeyComboBox;
         private ThemedComboBox filterValueComboBox;
+        private ThemedButton findButton;
+        private ThemedButton cancelButton;
+        private System.Windows.Forms.ToolTip toolTip;
     }
 }

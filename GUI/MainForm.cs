@@ -1064,22 +1064,29 @@ namespace GUI
             var package = mainTabs.SelectedTab.Controls.OfType<TreeViewWithSearchResults>().FirstOrDefault();
             if (package != null)
             {
-                searchForm ??= new();
-                searchForm.SetSearchableUserDataKeys(package.GetSearchDataKeysAsync());
-                var result = searchForm.ShowDialog();
-                if (result == DialogResult.OK)
-                {
-                    var searchText = searchForm.SearchText;
-                    var filterKey = searchForm.SelectedFilterKey;
-                    if (!string.IsNullOrEmpty(searchText) || filterKey != null)
-                    {
-                        package.SearchAndFillResults(searchText, searchForm.SelectedSearchType, filterKey, searchForm.SelectedFilterValue);
-                    }
-                }
+                var selected = package.mainTreeView.SelectedNode as BetterTreeNode;
+                var folder = (selected?.PkgNode ?? (selected?.Parent as BetterTreeNode)?.PkgNode) is { Parent: not null } node ? node : null;
+                ShowPackageSearch(package, folder, onlyInFolder: false);
                 return;
             }
 
             mainTabs.SelectedTab.Controls.OfType<ExplorerControl>().FirstOrDefault()?.FocusFilter();
+        }
+
+        private void ShowPackageSearch(TreeViewWithSearchResults package, VirtualPackageNode? folder, bool onlyInFolder)
+        {
+            searchForm ??= new();
+            searchForm.SetSearchableUserDataKeys(package.GetSearchDataKeysAsync());
+            searchForm.SetPackage(package.mainTreeView.VrfGuiContext?.CurrentPackage?.Entries, folder, onlyInFolder);
+
+            var result = searchForm.ShowDialog();
+            var request = searchForm.Request;
+            searchForm.ReleasePackage();
+
+            if (result == DialogResult.OK)
+            {
+                package.SearchAndFillResults(request);
+            }
         }
 
         private static CodeTextBox? FindCodeTextBoxInControl(Control container)

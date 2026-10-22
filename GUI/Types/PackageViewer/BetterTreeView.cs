@@ -11,7 +11,9 @@ using GUI.Controls;
 using GUI.Forms;
 using GUI.Utils;
 using ValvePak;
+using ValveResourceFormat;
 using ValveResourceFormat.IO;
+using ValveResourceFormat.Utils;
 
 namespace GUI.Types.PackageViewer
 {
@@ -26,133 +28,228 @@ namespace GUI.Types.PackageViewer
 
         public VrfGuiContext? VrfGuiContext { get; set; }
 
+        internal const int MinContentsPatternLength = 3;
+        private const int MaxPooledLength = 4 * 1024 * 1024;
+        private const int MaxTextSearchLength = 256 * 1024 * 1024;
+        private const int MaxWholeCompiledLength = 64 * 1024;
+        private const int ScanBufferSize = 4 * 1024 * 1024;
+
         protected override void OnPaint(PaintEventArgs e)
         {
             base.OnPaint(e);
         }
 
         /// <summary>
-        /// Performs a depth-first search on the tree's nodes in search of the passed value. The matching conditions are based on the passed search type parameter.
+        /// Finds the files in the searched folder and its subfolders that match a search.
         /// </summary>
-        /// <param name="value">Value to search for in the TreeView. Matching on this value is based on the search type.</param>
-        /// <param name="searchType">Determines the matching of the value. For example, full/partial text search or full path search.</param>
-        /// <returns>A collection of package entries that match the conditions based on the search type.</returns>
-        public List<PackageEntry> Search(string value, SearchType searchType)
+        /// <param name="include">Decides which files are searched at all, before their names or contents are read.</param>
+        /// <returns>
+        /// The matching files, whether the user cancelled a contents search before it read every file,
+        /// and which files it could not search, or <see langword="null"/> when it searched them all.
+        /// </returns>
+        public (List<PackageEntry> Files, bool Cancelled, string? Unsearched) Search(SearchRequest request, Func<PackageEntry, bool>? include = null)
         {
-            var results = new List<PackageEntry>();
+            List<PackageEntry> candidates = (request.Folder ?? Root) is { } folder
+                ? [.. TreeViewWithSearchResults.EnumerateFiles(folder).Where(entry =>
+                    (request.Extension == null || string.Equals(entry.TypeName, request.Extension, StringComparison.OrdinalIgnoreCase)) && include?.Invoke(entry) != false)]
+                : [];
 
-            if (Root == null)
+            if (request.Text.Length == 0)
             {
-                return results;
-            }
-
-            if (searchType == SearchType.FileNamePartialMatch || searchType == SearchType.FullPath)
-            {
-                value = value.Replace('\\', Package.DirectorySeparatorChar);
+                return (candidates, false, null);
             }
 
-            // If only file name search is selected, but entered text contains a slash, search full path
-            if (searchType == SearchType.FileNamePartialMatch && value.Contains(Package.DirectorySeparatorChar, StringComparison.Ordinal))
+            if (request.Target == SearchTarget.Contents)
             {
-                searchType = SearchType.FullPath;
+                return SearchFileContents(candidates, request);
             }
 
-            if (searchType == SearchType.FileNameExactMatch)
-            {
-                bool MatchFunction(PackageEntry entry) => entry.GetFileName().Equals(value, StringComparison.OrdinalIgnoreCase);
-                Search(Root, results, MatchFunction);
-            }
-            else if (searchType == SearchType.FileNamePartialMatch)
-            {
-                bool MatchFunction(PackageEntry entry) => entry.GetFileName().Contains(value, StringComparison.OrdinalIgnoreCase);
-                Search(Root, results, MatchFunction);
-            }
-            else if (searchType == SearchType.FullPath)
-            {
-                bool MatchFunction(PackageEntry entry) => entry.GetFullPath().Contains(value, StringComparison.OrdinalIgnoreCase);
-                Search(Root, results, MatchFunction);
-            }
-            else if (searchType == SearchType.Regex)
-            {
-                var regex = new Regex(value, RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+            var text = request.UseRegex ? request.Text : request.Text.Replace('\\', Package.DirectorySeparatorChar);
 
-                bool MatchFunction(PackageEntry entry) => regex.IsMatch(entry.GetFileName());
-                Search(Root, results, MatchFunction);
-            }
-            else if (searchType == SearchType.FileContents)
-            {
-                SearchFileContents(results, Encoding.UTF8.GetBytes(value));
-            }
-            else if (searchType == SearchType.FileContentsHex)
-            {
-                // TODO: Optimize this
-                value = value.Replace(" ", "", StringComparison.Ordinal);
+            var matchPath = request.Target == SearchTarget.Path || (!request.UseRegex && text.Contains(Package.DirectorySeparatorChar, StringComparison.Ordinal));
 
-                var bytes = Enumerable.Range(0, value.Length)
-                     .Where(x => x % 2 == 0)
-                     .Select(x => Convert.ToByte(value.Substring(x, 2), 16))
-                     .ToArray();
+            Func<string, bool> isMatch;
+            var timedOut = false;
 
-                SearchFileContents(results, bytes);
+            if (request.UseRegex || request.WholeWord)
+            {
+                var regex = CreateRegex(request.UseRegex ? text : Regex.Escape(text), request, TimeSpan.FromMilliseconds(100));
+
+                isMatch = value =>
+                {
+                    try
+                    {
+                        return !timedOut && regex.IsMatch(value);
+                    }
+                    catch (RegexMatchTimeoutException)
+                    {
+                        timedOut = true;
+                        return false;
+                    }
+                };
+            }
+            else
+            {
+                var comparison = request.MatchCase ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+                isMatch = value => value.Contains(text, comparison);
             }
 
-            return results;
+            candidates.RemoveAll(entry => !isMatch(matchPath ? entry.GetFullPath() : entry.GetFileName()));
+
+            if (timedOut)
+            {
+                const string Message = "The search stopped early because the regular expression took too long to match a file name, so some matches may be missing.";
+                Log.Warn(nameof(BetterTreeView), Message);
+                _ = AppMessageDialogs.ShowMessageAsync(Message, "Search stopped early", MessageIcon.Warning);
+            }
+
+            return (candidates, false, null);
         }
 
-        /// <summary>
-        /// Performs a depth-first search on the virtual package node tree, adding entries for which the match function returns true. The matching conditions are based on the passed function.
-        /// </summary>
-        /// <param name="node">Node whose subtree is searched.</param>
-        /// <param name="results">List that receives the matching entries.</param>
-        /// <param name="matchFunction">Function which performs matching on each PackageEntry. Returns true if there's a match.</param>
-        private static void Search(VirtualPackageNode node, List<PackageEntry> results, Func<PackageEntry, bool> matchFunction)
+        internal static Regex CreateRegex(string pattern, SearchRequest request, TimeSpan matchTimeout)
         {
-            foreach (var entry in node.Files)
+            if (request.WholeWord)
             {
-                if (matchFunction(entry))
+                pattern = string.Concat(@"(?<!\w)(?:", pattern, @")(?!\w)");
+            }
+
+            var options = RegexOptions.CultureInvariant | RegexOptions.Multiline | (request.MatchCase ? RegexOptions.None : RegexOptions.IgnoreCase);
+
+            return new Regex(pattern, options, matchTimeout);
+        }
+
+        private (List<PackageEntry> Files, bool Cancelled, string? Unsearched) SearchFileContents(List<PackageEntry> candidates, SearchRequest request)
+        {
+            byte[] pattern = [];
+            SearchValues<byte>? firstByte = null;
+            Regex? regex = null;
+
+            if (request.HexBytes)
+            {
+                pattern = Convert.FromHexString(request.Text.Replace(" ", "", StringComparison.Ordinal));
+            }
+            else
+            {
+                if (request.MatchCase && !request.UseRegex)
                 {
-                    results.Add(entry);
+                    pattern = Encoding.UTF8.GetBytes(request.Text);
+                }
+                else if (!request.UseRegex && Ascii.IsValid(request.Text))
+                {
+                    pattern = Encoding.ASCII.GetBytes(request.Text);
+                    firstByte = SearchValues.Create([(byte)char.ToLowerInvariant(request.Text[0]), (byte)char.ToUpperInvariant(request.Text[0])]);
+                }
+
+                if (request.UseRegex || request.WholeWord || pattern.Length == 0)
+                {
+                    regex = CreateRegex(request.UseRegex ? request.Text : Regex.Escape(request.Text), request, TimeSpan.FromSeconds(3));
                 }
             }
 
-            foreach (var folder in node.Folders)
+            if (regex == null && pattern.Length < MinContentsPatternLength)
             {
-                Search(folder.Value, results, matchFunction);
+                throw new ArgumentException("Search input is too short.", nameof(request));
             }
-        }
 
-        private void SearchFileContents(List<PackageEntry> results, byte[] pattern)
-        {
-            if (pattern.Length < 3)
-            {
-                throw new ArgumentException("Search input is too short.", nameof(pattern));
-            }
+            var results = new List<PackageEntry>();
+            var skippedEntries = 0;
+            var unreadableEntries = 0;
+            var missingEntries = 0;
+            var tooLargeEntries = 0;
+            var cancelled = false;
 
             if (VrfGuiContext?.CurrentPackage is not { } package)
             {
-                return;
+                return (results, false, null);
+            }
+
+            bool IsSearchedAsCompiled(PackageEntry entry) => !request.HexBytes && entry.TypeName.EndsWith(GameFileLoader.CompiledFileSuffix, StringComparison.Ordinal);
+
+            bool Matches(ReadOnlySpan<byte> data) => IndexOf(data, pattern, firstByte) >= 0 && (regex == null || IsTextMatch(regex, data));
+
+            bool IsEntryMatch(PackageEntry entry)
+            {
+                var length = (int)entry.TotalLength;
+                var entryData = ArrayPool<byte>.Shared.Rent(length);
+
+                try
+                {
+                    package.ReadEntry(entry, entryData, validateCrc: false);
+                    return Matches(entryData.AsSpan(0, length));
+                }
+                finally
+                {
+                    ArrayPool<byte>.Shared.Return(entryData);
+                }
+            }
+
+            bool IsCompiledMatch(PackageEntry entry, ArraySegment<byte>? stored)
+            {
+                try
+                {
+                    using var stream = stored is { } data ? new MemoryStream(data.Array!, data.Offset, data.Count, writable: false) : package.OpenEntryStream(entry);
+                    return Resource.AnySearchableBytes(stream, Matches);
+                }
+                catch (Exception e) when (e is UnexpectedMagicException or InvalidDataException or EndOfStreamException)
+                {
+                    return stored is { } data ? Matches(data) : IsEntryMatch(entry);
+                }
+            }
+
+            bool IsFileMatch(PackageEntry entry, ArraySegment<byte>? stored)
+            {
+                try
+                {
+                    return IsSearchedAsCompiled(entry) ? IsCompiledMatch(entry, stored)
+                        : stored is { } data ? Matches(data)
+                        : IsEntryMatch(entry);
+                }
+                catch (RegexMatchTimeoutException)
+                {
+                    Interlocked.Increment(ref skippedEntries);
+                    Log.Warn(nameof(BetterTreeView), $"Skipped \"{entry.GetFullPath()}\" because the regular expression took too long to match its contents");
+                    return false;
+                }
             }
 
             using var progressDialog = new GenericProgressForm
             {
                 Text = "Searching file contents…",
                 WaitForWorkToStop = true,
+                CancelOnEscape = true,
             };
             progressDialog.OnProcess = cancellationToken =>
             {
+                try
+                {
+                    return SearchArchives(cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    cancelled = true;
+                    throw;
+                }
+            };
+
+            Task SearchArchives(CancellationToken cancellationToken)
+            {
                 Log.Info(nameof(BetterTreeView), "Pattern search");
 
-                var maxArchiveIndex = -1;
                 var sortedEntriesPerArchive = new Dictionary<int, List<PackageEntry>>();
-                var unreadableEntries = 0;
 
-                foreach (var entry in package.Entries?.Values.SelectMany(static entries => entries) ?? [])
+                foreach (var entry in candidates)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
 
                     if (package is NestedPackage && entry.ArchiveIndex != Package.DirectoryArchiveIndex)
                     {
                         unreadableEntries++;
+                        continue;
+                    }
+
+                    if (regex != null && entry.TotalLength > MaxTextSearchLength && !IsSearchedAsCompiled(entry))
+                    {
+                        tooLargeEntries++;
                         continue;
                     }
 
@@ -163,19 +260,12 @@ namespace GUI.Types.PackageViewer
                             continue;
                         }
 
-                        package.ReadEntry(entry, out var entryData, validateCrc: false);
-
-                        if (entryData.AsSpan().IndexOf(pattern) >= 0)
+                        if (IsFileMatch(entry, null))
                         {
                             results.Add(entry);
                         }
 
                         continue;
-                    }
-
-                    if (entry.ArchiveIndex > maxArchiveIndex)
-                    {
-                        maxArchiveIndex = entry.ArchiveIndex;
                     }
 
                     if (entry.Length == 0)
@@ -202,127 +292,243 @@ namespace GUI.Types.PackageViewer
                     archiveEntries.Sort((a, b) => a.Offset.CompareTo(b.Offset));
                 }
 
-                if (maxArchiveIndex > -1)
-                {
-                    var matches = new HashSet<PackageEntry>();
-                    var archivesScanned = 0;
+                var archivesScanned = 0;
+                progressDialog.SetBarMax(sortedEntriesPerArchive.Count);
 
-                    Parallel.For(
-                        0,
-                        maxArchiveIndex + 1,
-                        new ParallelOptions
-                        {
-                            MaxDegreeOfParallelism = 3,
-                            CancellationToken = cancellationToken,
-                        },
-                        archiveIndex =>
-                        {
-                            // Archives that only hold empty entries are never read
-                            if (!sortedEntriesPerArchive.TryGetValue(archiveIndex, out var archiveEntries))
-                            {
-                                Interlocked.Increment(ref archivesScanned);
-                                return;
-                            }
+                Parallel.ForEach(
+                    sortedEntriesPerArchive,
+                    new ParallelOptions
+                    {
+                        MaxDegreeOfParallelism = regex != null ? Math.Min(Environment.ProcessorCount, 3) : Environment.ProcessorCount,
+                        CancellationToken = cancellationToken,
+                    },
+                    pair =>
+                    {
+                        var (archiveIndex, archiveEntries) = pair;
+                        List<PackageEntry> archiveMatches = [];
 
+                        try
+                        {
                             using var archive = package.OpenArchiveStream((ushort)archiveIndex);
-                            var archiveMatches = SearchForContentsInArchive(archive, pattern, archiveEntries, cancellationToken);
+                            var buffer = ArrayPool<byte>.Shared.Rent(Math.Max(ScanBufferSize, pattern.Length));
 
-                            if (archiveMatches.Count > 0)
+                            try
                             {
-                                lock (matches)
-                                {
-                                    foreach (var match in archiveMatches)
-                                    {
-                                        if (matches.Add(match))
-                                        {
-                                            results.Add(match);
-                                        }
-                                    }
-                                }
+                                ScanEntries(
+                                    archive,
+                                    buffer,
+                                    archiveEntries,
+                                    archiveMatches,
+                                    entry => IsSearchedAsCompiled(entry) && entry.Length > MaxWholeCompiledLength,
+                                    entry => IsSearchedAsCompiled(entry) ? IsFileMatch(entry, null)
+                                        : (pattern.Length == 0 || ContainsInLargeEntry(archive, entry.Offset, entry.Offset + entry.Length, buffer, pattern, firstByte, cancellationToken))
+                                            && (regex == null || IsFileMatch(entry, null)),
+                                    (entry, data) => IsFileMatch(entry, data),
+                                    cancellationToken);
                             }
-
-                            var scanned = Interlocked.Increment(ref archivesScanned);
-                            progressDialog.SetProgress(string.Create(CultureInfo.InvariantCulture, $"Searched {scanned} vpks out of {maxArchiveIndex + 1}, found {results.Count} matches so far"));
+                            finally
+                            {
+                                ArrayPool<byte>.Shared.Return(buffer);
+                            }
                         }
-                    );
-                }
+                        catch (IOException e)
+                        {
+                            Interlocked.Add(ref missingEntries, archiveEntries.Count);
+                            Log.Warn(nameof(BetterTreeView), string.Create(CultureInfo.InvariantCulture, $"Not searching {archiveEntries.Count} files in archive {archiveIndex}: {e.Message}"));
+                        }
 
-                Log.Info(nameof(BetterTreeView), $"Found {results.Count} matches");
+                        lock (results)
+                        {
+                            results.AddRange(archiveMatches);
+                            archivesScanned++;
+                            progressDialog.SetBarValue(archivesScanned);
+                            progressDialog.SetProgress(string.Create(CultureInfo.InvariantCulture, $"Searched {archivesScanned:N0} of {sortedEntriesPerArchive.Count:N0} archives, found {results.Count:N0} matches so far"));
+                        }
+                    }
+                );
 
-                progressDialog.SetProgress($"Found {results.Count} matches");
+                var found = string.Create(CultureInfo.InvariantCulture, $"Found {results.Count} matches");
+                Log.Info(nameof(BetterTreeView), found);
+                progressDialog.SetProgress(found);
 
                 return Task.CompletedTask;
-            };
+            }
+
             progressDialog.ShowDialog();
+
+            if (skippedEntries > 0)
+            {
+                _ = AppMessageDialogs.ShowMessageAsync(
+                    string.Create(CultureInfo.InvariantCulture, $"{skippedEntries} files were not searched because the regular expression took too long to match their contents, the log lists them."),
+                    "Some files were skipped",
+                    MessageIcon.Warning);
+            }
+
+            List<string> unsearched = [];
+
+            if (unreadableEntries > 0)
+            {
+                unsearched.Add(string.Create(CultureInfo.InvariantCulture, $"{unreadableEntries:N0} {(unreadableEntries == 1 ? "file" : "files")} in chunk files of a nested package"));
+            }
+
+            if (missingEntries > 0)
+            {
+                unsearched.Add(string.Create(CultureInfo.InvariantCulture, $"{missingEntries:N0} {(missingEntries == 1 ? "file" : "files")} in missing or unreadable chunk files"));
+            }
+
+            if (tooLargeEntries > 0)
+            {
+                unsearched.Add(string.Create(CultureInfo.InvariantCulture, $"{tooLargeEntries:N0} {(tooLargeEntries == 1 ? "file" : "files")} over {MaxTextSearchLength / 1024 / 1024} MiB"));
+            }
+
+            return (results, cancelled, unsearched.Count > 0 ? string.Join(" and ", unsearched) + " not searched" : null);
         }
 
-        private static HashSet<PackageEntry> SearchForContentsInArchive(Stream archive, byte[] pattern, List<PackageEntry> archiveEntries, CancellationToken cancellationToken)
+        private static bool IsTextMatch(Regex regex, ReadOnlySpan<byte> data)
         {
-            const int BufferSize = 4 * 1024 * 1024;
-
-            var matches = new HashSet<PackageEntry>();
-            var buffer = ArrayPool<byte>.Shared.Rent(Math.Max(BufferSize, pattern.Length));
+            var charCount = Encoding.UTF8.GetMaxCharCount(data.Length);
+            var chars = charCount <= MaxPooledLength ? ArrayPool<char>.Shared.Rent(charCount) : new char[charCount];
 
             try
             {
-                var bufferStart = 0L;
-                var bufferLength = 0;
-                var position = 0L;
-                var entryIndex = 0;
+                var text = chars.AsSpan(0, Encoding.UTF8.GetChars(data, chars));
 
-                while (true)
+                if (text is ['\uFEFF', ..])
                 {
-                    var bufferOffset = position - bufferStart;
-
-                    if (bufferOffset < 0 || bufferOffset + pattern.Length > bufferLength)
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
-
-                        archive.Position = position;
-                        bufferStart = position;
-                        bufferOffset = 0;
-                        bufferLength = archive.ReadAtLeast(buffer, buffer.Length, throwOnEndOfStream: false);
-
-                        if (bufferLength < pattern.Length)
-                        {
-                            break;
-                        }
-                    }
-
-                    var match = buffer.AsSpan((int)bufferOffset, bufferLength - (int)bufferOffset).IndexOf(pattern);
-
-                    if (match < 0)
-                    {
-                        position = bufferStart + bufferLength - pattern.Length + 1;
-                        continue;
-                    }
-
-                    var start = position + match;
-
-                    while (entryIndex + 1 < archiveEntries.Count && archiveEntries[entryIndex + 1].Offset <= start)
-                    {
-                        entryIndex++;
-                    }
-
-                    var entry = archiveEntries[entryIndex];
-                    var entryEnd = (long)entry.Offset + entry.Length;
-
-                    if (entry.Offset > start || start + pattern.Length > entryEnd)
-                    {
-                        position = start + 1;
-                        continue;
-                    }
-
-                    matches.Add(entry);
-                    position = entryEnd;
+                    text = text[1..];
                 }
+
+                return regex.IsMatch(text);
             }
             finally
             {
-                ArrayPool<byte>.Shared.Return(buffer);
+                if (charCount <= MaxPooledLength)
+                {
+                    ArrayPool<char>.Shared.Return(chars);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Finds a pattern in data, ignoring ASCII case when <paramref name="firstByte"/> holds both cases of its first byte.
+        /// </summary>
+        private static int IndexOf(ReadOnlySpan<byte> data, byte[] pattern, SearchValues<byte>? firstByte)
+        {
+            if (firstByte == null)
+            {
+                return data.IndexOf(pattern);
             }
 
-            return matches;
+            var offset = 0;
+
+            while (true)
+            {
+                var index = data[offset..].IndexOfAny(firstByte);
+
+                if (index < 0)
+                {
+                    return -1;
+                }
+
+                index += offset;
+
+                if (data.Length - index < pattern.Length)
+                {
+                    return -1;
+                }
+
+                if (Ascii.EqualsIgnoreCase(data.Slice(index, pattern.Length), pattern))
+                {
+                    return index;
+                }
+
+                offset = index + 1;
+            }
+        }
+
+        /// <summary>
+        /// Reads entries sorted by offset in runs of nearby entries that fit in the buffer,
+        /// and leaves entries larger than the buffer or read on their own to <paramref name="matchesAlone"/>.
+        /// </summary>
+        private static void ScanEntries(Stream archive, byte[] buffer, List<PackageEntry> archiveEntries, List<PackageEntry> matches,
+            Func<PackageEntry, bool> isReadAlone, Func<PackageEntry, bool> matchesAlone, Func<PackageEntry, ArraySegment<byte>, bool> matchesInBuffer,
+            CancellationToken cancellationToken)
+        {
+            const int MaxReadGap = 64 * 1024;
+
+            bool IsAlone(PackageEntry entry) => entry.Length > buffer.Length || isReadAlone(entry);
+
+            var first = 0;
+
+            while (first < archiveEntries.Count)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (IsAlone(archiveEntries[first]))
+                {
+                    if (matchesAlone(archiveEntries[first]))
+                    {
+                        matches.Add(archiveEntries[first]);
+                    }
+
+                    first++;
+                    continue;
+                }
+
+                var start = (long)archiveEntries[first].Offset;
+                var end = start + archiveEntries[first].Length;
+                var last = first;
+
+                while (last + 1 < archiveEntries.Count)
+                {
+                    var next = archiveEntries[last + 1];
+                    var nextEnd = (long)next.Offset + next.Length;
+
+                    if (next.Offset - end > MaxReadGap || nextEnd - start > buffer.Length || IsAlone(next))
+                    {
+                        break;
+                    }
+
+                    end = Math.Max(end, nextEnd);
+                    last++;
+                }
+
+                archive.Position = start;
+                archive.ReadExactly(buffer, 0, (int)(end - start));
+
+                for (var i = first; i <= last; i++)
+                {
+                    var entry = archiveEntries[i];
+
+                    if (matchesInBuffer(entry, new ArraySegment<byte>(buffer, (int)(entry.Offset - start), (int)entry.Length)))
+                    {
+                        matches.Add(entry);
+                    }
+                }
+
+                first = last + 1;
+            }
+        }
+
+        private static bool ContainsInLargeEntry(Stream archive, long start, long end, byte[] buffer, byte[] pattern, SearchValues<byte>? firstByte, CancellationToken cancellationToken)
+        {
+            for (var position = start; position + pattern.Length <= end;)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var length = (int)Math.Min(buffer.Length, end - position);
+                archive.Position = position;
+                archive.ReadExactly(buffer, 0, length);
+
+                if (IndexOf(buffer.AsSpan(0, length), pattern, firstByte) >= 0)
+                {
+                    return true;
+                }
+
+                position += length - pattern.Length + 1;
+            }
+
+            return false;
         }
 
         public void GenerateIconList(IEnumerable<string> extensions)

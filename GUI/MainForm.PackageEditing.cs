@@ -498,6 +498,7 @@ namespace GUI
             vpkEditSeparator1.Visible = hasItem;
             vpkEditExtractToolStripMenuItem.Visible = hasItem;
             vpkEditDecompileToolStripMenuItem.Visible = hasItem;
+            vpkEditSearchInFolderToolStripMenuItem.Visible = hasItem && isFolderNode && !isRootNode;
 
             vpkEditingContextMenu.Show(control, position);
         }
