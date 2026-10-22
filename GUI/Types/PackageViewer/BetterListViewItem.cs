@@ -27,6 +27,11 @@ namespace GUI.Types.PackageViewer
         /// </summary>
         public VirtualPackageNode? PkgNode { get; init; }
 
+        /// <summary>
+        /// Whether this is a copy of a file in a mounted game that another copy at its path is found before.
+        /// </summary>
+        public bool IsOverridden { get; init; }
+
         public BetterListViewItem(string text) : base(text)
         {
             //

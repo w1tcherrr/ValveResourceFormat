@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -171,23 +172,28 @@ namespace GUI.Types.PackageViewer
             var tooLargeEntries = 0;
             var cancelled = false;
 
-            if (VrfGuiContext?.CurrentPackage is not { } package)
+            if (VrfGuiContext is not { } context)
             {
                 return (results, false, null);
             }
+
+            var packages = candidates
+                .Select(entry => (Entry: entry, Source: context.Resolve(entry)))
+                .GroupBy(static file => file.Source)
+                .ToList();
 
             bool IsSearchedAsCompiled(PackageEntry entry) => !request.HexBytes && entry.TypeName.EndsWith(GameFileLoader.CompiledFileSuffix, StringComparison.Ordinal);
 
             bool Matches(PackageEntry entry, ReadOnlySpan<byte> data)
                 => regex != null ? IsTextMatch(regex, entry, data, ref skippedEntries) : IndexOf(data, pattern, firstByte) >= 0;
 
-            bool IsEntryMatch(PackageEntry entry)
+            bool IsEntryMatch(Package package, PackageEntry entry)
             {
                 package.ReadEntry(entry, out var entryData, validateCrc: false);
                 return Matches(entry, entryData);
             }
 
-            bool IsCompiledMatch(PackageEntry entry, ArraySegment<byte>? stored)
+            bool IsCompiledMatch(Package package, PackageEntry entry, ArraySegment<byte>? stored)
             {
                 try
                 {
@@ -196,8 +202,26 @@ namespace GUI.Types.PackageViewer
                 }
                 catch (Exception e) when (e is UnexpectedMagicException or InvalidDataException or EndOfStreamException or ArgumentOutOfRangeException)
                 {
-                    return stored is { } data ? Matches(entry, data) : IsEntryMatch(entry);
+                    return stored is { } data ? Matches(entry, data) : IsEntryMatch(package, entry);
                 }
+            }
+
+            bool IsFileOnDiskMatch(PackageEntry entry, string pathOnDisk)
+            {
+                if (IsSearchedAsCompiled(entry))
+                {
+                    try
+                    {
+                        using var stream = File.OpenRead(pathOnDisk);
+                        return Resource.AnySearchableBytes(stream, data => Matches(entry, data));
+                    }
+                    catch (Exception e) when (e is UnexpectedMagicException or InvalidDataException or EndOfStreamException or ArgumentOutOfRangeException)
+                    {
+                        return Matches(entry, File.ReadAllBytes(pathOnDisk));
+                    }
+                }
+
+                return Matches(entry, File.ReadAllBytes(pathOnDisk));
             }
 
             using var progressDialog = new GenericProgressForm
@@ -223,6 +247,34 @@ namespace GUI.Types.PackageViewer
             {
                 Log.Info(nameof(BetterTreeView), "Pattern search");
 
+                foreach (var files in packages)
+                {
+                    if (files.Key.PathOnDisk is { } pathOnDisk)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+
+                        var entry = files.First().Entry;
+
+                        if (entry.Length > 0 && (regex == null || entry.Length <= MaxTextSearchLength || IsSearchedAsCompiled(entry)) && IsFileOnDiskMatch(entry, pathOnDisk))
+                        {
+                            results.Add(entry);
+                        }
+                    }
+                    else if (files.Key.Package is { } package)
+                    {
+                        SearchPackage(package, [.. files.Select(static file => file.Entry)], cancellationToken);
+                    }
+                }
+
+                var found = string.Create(CultureInfo.InvariantCulture, $"Found {results.Count} matches");
+                Log.Info(nameof(BetterTreeView), found);
+                progressDialog.SetProgress(found);
+
+                return Task.CompletedTask;
+            }
+
+            void SearchPackage(Package package, List<PackageEntry> candidates, CancellationToken cancellationToken)
+            {
                 var maxArchiveIndex = -1;
                 var sortedEntriesPerArchive = new Dictionary<int, List<PackageEntry>>();
 
@@ -251,7 +303,7 @@ namespace GUI.Types.PackageViewer
                             continue;
                         }
 
-                        if (IsSearchedAsCompiled(entry) ? IsCompiledMatch(entry, null) : IsEntryMatch(entry))
+                        if (IsSearchedAsCompiled(entry) ? IsCompiledMatch(package, entry, null) : IsEntryMatch(package, entry))
                         {
                             results.Add(entry);
                         }
@@ -320,10 +372,10 @@ namespace GUI.Types.PackageViewer
                                         archiveEntries,
                                         archiveMatches,
                                         entry => IsSearchedAsCompiled(entry) && entry.Length > MaxWholeCompiledLength,
-                                        entry => IsSearchedAsCompiled(entry) ? IsCompiledMatch(entry, null)
-                                            : regex != null ? IsEntryMatch(entry)
+                                        entry => IsSearchedAsCompiled(entry) ? IsCompiledMatch(package, entry, null)
+                                            : regex != null ? IsEntryMatch(package, entry)
                                             : ContainsInLargeEntry(archive, entry.Offset, entry.Offset + entry.Length, buffer, pattern, firstByte, cancellationToken),
-                                        (entry, data) => IsSearchedAsCompiled(entry) ? IsCompiledMatch(entry, data) : Matches(entry, data),
+                                        (entry, data) => IsSearchedAsCompiled(entry) ? IsCompiledMatch(package, entry, data) : Matches(entry, data),
                                         cancellationToken);
                                 }
                                 finally
@@ -349,12 +401,6 @@ namespace GUI.Types.PackageViewer
                         }
                     );
                 }
-
-                var found = string.Create(CultureInfo.InvariantCulture, $"Found {results.Count} matches");
-                Log.Info(nameof(BetterTreeView), found);
-                progressDialog.SetProgress(found);
-
-                return Task.CompletedTask;
             }
 
             progressDialog.ShowDialog();

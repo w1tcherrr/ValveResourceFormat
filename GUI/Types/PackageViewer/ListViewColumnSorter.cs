@@ -61,6 +61,11 @@ public class ListViewColumnSorter : IComparer
                 break;
         }
 
+        if (compareResult == 0)
+        {
+            return tX.IsOverridden.CompareTo(tY.IsOverridden);
+        }
+
         if (Order == SortOrder.Ascending)
         {
             return compareResult;

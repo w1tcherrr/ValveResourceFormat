@@ -12,6 +12,13 @@ static class ViewerFactory
     {
         await Task.Yield();
 
+        if (entry == null && PackageViewer.PackageViewer.IsGameInfo(vrfGuiContext.FileName))
+        {
+            var gameViewer = new PackageViewer.PackageViewer(vrfGuiContext);
+            gameViewer.LoadGame();
+            return gameViewer;
+        }
+
         Stream? stream = null;
         Span<byte> magicData = stackalloc byte[6];
 

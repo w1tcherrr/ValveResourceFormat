@@ -717,7 +717,7 @@ namespace GUI
 
             Log.Info(nameof(MainForm), $"Opening {vrfGuiContext.DisplayPath}");
 
-            var tab = OpenFile(vrfGuiContext, null, loadSearchPaths: true);
+            var tab = OpenFile(vrfGuiContext, null, loadSearchPaths: !PackageViewer.IsGameInfo(fileName));
 
             Settings.TrackRecentFile(fileName);
 
@@ -771,13 +771,14 @@ namespace GUI
 
                 var extension = Path.GetExtension(vrfGuiContext.FileName.AsSpan());
 
-                if (MemoryExtensions.Equals(extension, ".vpk", StringComparison.OrdinalIgnoreCase))
+                if (file == null && PackageViewer.IsGameInfo(vrfGuiContext.FileName))
                 {
-                    if (GameFolderLocator.FindSteamGameContainingPath(vrfGuiContext.FileName, InstalledSteamGames.Games) is { } game
-                        && AppIcons.GameIcons.TryGetValue(game.AppID, out var imageIndexGame))
-                    {
-                        tab.ImageIndex = imageIndexGame;
-                    }
+                    tab.Text = PackageViewer.GetGameName(vrfGuiContext.FileName);
+                    tab.ImageIndex = PackageViewer.GetGameImage(vrfGuiContext.FileName) ?? -1;
+                }
+                else if (MemoryExtensions.Equals(extension, ".vpk", StringComparison.OrdinalIgnoreCase))
+                {
+                    tab.ImageIndex = PackageViewer.GetGameImage(vrfGuiContext.FileName) ?? -1;
                 }
 
                 if (tab.ImageIndex < 0)
@@ -1081,7 +1082,7 @@ namespace GUI
         {
             searchForm ??= new();
             searchForm.SetSearchableUserDataKeys(package.GetSearchDataKeysAsync());
-            searchForm.SetExtensions(package.mainTreeView.VrfGuiContext?.CurrentPackage?.Entries);
+            searchForm.SetExtensions(package.Viewer.Entries);
             searchForm.SetFolder(folder, onlyInFolder);
 
             var result = searchForm.ShowDialog();

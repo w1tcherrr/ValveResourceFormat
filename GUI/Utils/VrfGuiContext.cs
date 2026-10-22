@@ -44,6 +44,61 @@ namespace GUI.Utils
         public ToolsAssetInfo? ToolsAssetInfo { get; private set; }
 
         /// <summary>
+        /// Where each file comes from when this context lists all the files of a mounted game, rather than one package.
+        /// </summary>
+        public Dictionary<PackageEntry, (Package? Package, string? PathOnDisk)>? MountedFiles { get; private set; }
+
+        /// <summary>
+        /// Mounts the game of the gameinfo.gi this context is for as the engine does, and lists its files, see
+        /// <see cref="GameFileLoader.EnumerateMountedFiles"/>. Each file is added to <see cref="MountedFiles"/> as it is listed.
+        /// </summary>
+        public IEnumerable<(PackageEntry Entry, PackageEntry? OverriddenBy)> MountGame()
+        {
+            FindAndLoadSearchPaths(FileName);
+            MountedFiles = new(ReferenceEqualityComparer.Instance);
+
+            foreach (var (entry, package, pathOnDisk, overriddenBy) in EnumerateMountedFiles())
+            {
+                MountedFiles.Add(entry, (package, pathOnDisk));
+                yield return (entry, overriddenBy);
+            }
+        }
+
+        /// <summary>
+        /// Finds the package an entry is in, or for a loose file of a mounted game, its path on disk.
+        /// </summary>
+        public (Package? Package, string? PathOnDisk) Resolve(PackageEntry entry)
+            => MountedFiles != null && MountedFiles.TryGetValue(entry, out var source) ? source : (CurrentPackage, null);
+
+        /// <summary>
+        /// Opens the data of an entry from the package or the file on disk it is in, see <see cref="Resolve"/>.
+        /// </summary>
+        public Stream OpenEntryStream(PackageEntry entry)
+        {
+            var (package, pathOnDisk) = Resolve(entry);
+
+            return pathOnDisk != null
+                ? File.OpenRead(pathOnDisk)
+                : (package ?? throw new InvalidOperationException("The package is not available.")).GetMemoryMappedStreamIfPossible(entry);
+        }
+
+        /// <summary>
+        /// Creates the context to open an entry with: under the context of the package it is in, or for its file on disk.
+        /// </summary>
+        /// <returns>The context, and the entry to read from its package, or <see langword="null"/> for a file on disk.</returns>
+        public (VrfGuiContext Context, PackageEntry? Entry) CreateEntryContext(PackageEntry entry)
+        {
+            var (package, pathOnDisk) = Resolve(entry);
+
+            if (pathOnDisk != null)
+            {
+                return (new VrfGuiContext(pathOnDisk, this), null);
+            }
+
+            return (new VrfGuiContext(entry.GetFullPath(), package != null ? GetPackageContext(package, this) : this), entry);
+        }
+
+        /// <summary>
         /// Whether this context is for a package, rather than for a file opened from one.
         /// </summary>
         public bool IsPackage => base.CurrentPackage != null;

@@ -9,6 +9,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using GUI.Types.PackageViewer;
 using GUI.Utils;
 using ValveKeyValue;
 using ValvePak;
@@ -44,6 +45,7 @@ namespace GUI.Controls
             filterTextBox.BackColor = Themer.CurrentThemeColors.AppMiddle;
 
             treeView.ImageList = AppIcons.ImageList;
+            treeView.ShowNodeToolTips = true;
 
             Scan();
         }
@@ -324,7 +326,6 @@ namespace GUI.Controls
 
                 // Sort the files and create the nodes
                 foundFiles.Sort(SortFileNodes);
-                var foundFilesArray = foundFiles.ToArray();
 
                 var treeNodeImage = await GetOrLoadAppImage(appID, libraryAssetsKv, libraryCachePath).ConfigureAwait(false);
 
@@ -332,6 +333,18 @@ namespace GUI.Controls
                 {
                     treeNodeImage = folderImage;
                 }
+
+                var gameInfos = GameFileLoader.FindModGameInfos(gamePath);
+
+                foundFiles.InsertRange(0, gameInfos.Select(gameInfo => new TreeNode(gameInfos.Count > 1 ? $"All files ({Path.GetFileName(Path.GetDirectoryName(gameInfo))})" : "All files")
+                {
+                    Tag = gameInfo,
+                    ImageIndex = treeNodeImage,
+                    SelectedImageIndex = treeNodeImage,
+                    ToolTipText = "Every file the game loads, from all of its VPKs and folders, as the game mounts them",
+                }));
+
+                var foundFilesArray = foundFiles.ToArray();
 
                 var treeNodeName = $"[{appID}] {appName} - {gamePath.Replace(Path.DirectorySeparatorChar, '/')}";
                 var treeNode = new TreeNode(treeNodeName)
@@ -594,7 +607,7 @@ namespace GUI.Controls
                 {
                     pathDisplay = $"[{game.AppName}] {pathDisplay.AsSpan(Math.Min(game.GamePath.Length, pathDisplay.Length))}";
 
-                    if (isVpk && !AppIcons.GameIcons.TryGetValue(game.AppID, out imageIndexGame))
+                    if ((isVpk || PackageViewer.IsGameInfo(path)) && !AppIcons.GameIcons.TryGetValue(game.AppID, out imageIndexGame))
                     {
                         imageIndexGame = -1;
                     }

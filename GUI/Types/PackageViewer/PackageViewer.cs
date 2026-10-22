@@ -76,6 +76,32 @@ namespace GUI.Types.PackageViewer
 
         public bool IsSigned => vrfGuiContext.CurrentPackage?.IsSigned == true;
 
+        /// <summary>
+        /// Whether this lists all the files of a mounted game, see <see cref="LoadGame"/>.
+        /// </summary>
+        public bool IsMountedGame => vrfGuiContext.MountedFiles != null;
+
+        /// <summary>
+        /// The files listed, by extension.
+        /// </summary>
+        public Dictionary<string, List<PackageEntry>>? Entries => mountedEntries ?? vrfGuiContext.CurrentPackage?.Entries;
+
+        /// <summary>
+        /// Copies of a path in a mounted game that the listed file is found before, by the listed file.
+        /// </summary>
+        public Dictionary<PackageEntry, List<PackageEntry>> OverriddenFiles { get; } = new(ReferenceEqualityComparer.Instance);
+
+        private Dictionary<string, List<PackageEntry>>? mountedEntries;
+        private string? gameFolder;
+
+        public static bool IsGameInfo(string path) => Path.GetFileName(path).Equals("gameinfo.gi", StringComparison.OrdinalIgnoreCase);
+
+        public static string GetGameName(string gameInfoPath)
+            => GameFolderLocator.FindSteamGameContainingPath(gameInfoPath, InstalledSteamGames.Games)?.AppName ?? Path.GetFileName(Path.GetDirectoryName(gameInfoPath))!;
+
+        public static int? GetGameImage(string path)
+            => GameFolderLocator.FindSteamGameContainingPath(path, InstalledSteamGames.Games) is { } game && AppIcons.GameIcons.TryGetValue(game.AppID, out var image) ? image : null;
+
         public static bool IsAccepted(uint magic)
         {
             return magic == Package.MAGIC;
@@ -122,6 +148,49 @@ namespace GUI.Types.PackageViewer
             vrfGuiContext.CurrentPackage = package;
 
             BuildVirtualRoot(package);
+        }
+
+        /// <summary>
+        /// Mounts the game of a gameinfo.gi as the engine does, and lists every file it can load from its packages and
+        /// folders: at each path, the file that is found first.
+        /// </summary>
+        public void LoadGame()
+        {
+            gameFolder = Path.GetDirectoryName(Path.GetDirectoryName(vrfGuiContext.FileName));
+            VirtualRoot = new VirtualPackageNode("root", 0, null);
+            mountedEntries = [];
+
+            foreach (var (entry, overriddenBy) in vrfGuiContext.MountGame())
+            {
+                if (overriddenBy != null)
+                {
+                    OverriddenFiles.TryAdd(overriddenBy, []);
+                    OverriddenFiles[overriddenBy].Add(entry);
+                    continue;
+                }
+
+                BetterTreeView.AddFileNode(VirtualRoot, entry);
+                VirtualRoot.TotalSize += entry.TotalLength;
+
+                mountedEntries.TryAdd(entry.TypeName, []);
+                mountedEntries[entry.TypeName].Add(entry);
+            }
+        }
+
+        /// <summary>
+        /// Describes the package or folder of a mounted game that a file is in, such as csgo/pak01 or csgo.
+        /// </summary>
+        public string? GetSource(PackageEntry entry)
+        {
+            if (!IsMountedGame)
+            {
+                return null;
+            }
+
+            var (package, pathOnDisk) = vrfGuiContext.Resolve(entry);
+            var path = Path.GetRelativePath(gameFolder!, pathOnDisk ?? PackageFileNames.GetPackageName(package!.FilePath!));
+
+            return (pathOnDisk != null ? path[..^(entry.GetFullPath().Length + 1)] : path).Replace('\\', '/');
         }
 
         private void BuildVirtualRoot(Package package)
@@ -874,8 +943,8 @@ namespace GUI.Types.PackageViewer
         /// <param name="entry">The package entry to open.</param>
         private void VPK_OpenFile(object? sender, PackageEntry entry)
         {
-            var newVrfGuiContext = new VrfGuiContext(entry.GetFullPath(), vrfGuiContext);
-            Program.MainForm.OpenFile(newVrfGuiContext, entry);
+            var (newVrfGuiContext, packageEntry) = vrfGuiContext.CreateEntryContext(entry);
+            Program.MainForm.OpenFile(newVrfGuiContext, packageEntry);
         }
 
         private void VPK_PreviewCleared(object? sender, EventArgs e)
@@ -906,8 +975,8 @@ namespace GUI.Types.PackageViewer
                 return;
             }
 
-            var newVrfGuiContext = new VrfGuiContext(entry.GetFullPath(), vrfGuiContext);
-            Program.MainForm.OpenFile(newVrfGuiContext, entry, TreeView);
+            var (newVrfGuiContext, packageEntry) = vrfGuiContext.CreateEntryContext(entry);
+            Program.MainForm.OpenFile(newVrfGuiContext, packageEntry, TreeView);
         }
 
         /// <summary>
@@ -965,7 +1034,7 @@ namespace GUI.Types.PackageViewer
                 return;
             }
 
-            Program.MainForm.ShowVpkContextMenu(control, e.Location, isRoot, isFolder, TreeView.DeletedFilesRecovered, CanEdit);
+            Program.MainForm.ShowVpkContextMenu(control, e.Location, isRoot, isFolder, TreeView.DeletedFilesRecovered, CanEdit, canVerify: !IsMountedGame);
         }
 
         public void Dispose()

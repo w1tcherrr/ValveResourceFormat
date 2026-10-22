@@ -18,7 +18,7 @@ namespace GUI
 {
     partial class MainForm
     {
-        public void ShowVpkContextMenu(Control control, Point position, bool isRootNode, bool isFolderNode, bool deletedFilesRecovered, bool canEdit)
+        public void ShowVpkContextMenu(Control control, Point position, bool isRootNode, bool isFolderNode, bool deletedFilesRecovered, bool canEdit, bool canVerify)
         {
             copyFileNameToolStripMenuItem.Visible = !isRootNode;
             openWithDefaultAppToolStripMenuItem.Visible = !isRootNode && !isFolderNode;
@@ -26,7 +26,7 @@ namespace GUI
             viewAssetInfoToolStripMenuItem.Visible = !isRootNode && !isFolderNode;
             searchInFolderToolStripMenuItem.Visible = isFolderNode && !isRootNode;
 
-            verifyPackageContentsToolStripMenuItem.Visible = isRootNode;
+            verifyPackageContentsToolStripMenuItem.Visible = isRootNode && canVerify;
             recoverDeletedToolStripMenuItem.Visible = isRootNode && !deletedFilesRecovered;
             editThisVpkToolStripMenuItem.Visible = isRootNode && canEdit;
 
@@ -134,7 +134,7 @@ namespace GUI
                 return;
             }
 
-            var packageLink = wantsFullPath ? context.GetVpkLink() : null;
+            var packageLink = wantsFullPath && context.MountedFiles == null ? context.GetVpkLink() : null;
             var sb = new StringBuilder();
 
             foreach (var selectedNode in selectedNodes)
@@ -151,12 +151,22 @@ namespace GUI
 
                 if (!selectedNode.IsFolder)
                 {
+                    var packageEntry = selectedNode.PackageEntry;
+
+                    if (wantsFullPath && context.MountedFiles != null && packageEntry != null)
+                    {
+                        var (package, pathOnDisk) = context.Resolve(packageEntry);
+                        sb.Append(pathOnDisk != null
+                            ? VrfGuiContext.GetDisplayPath(pathOnDisk)
+                            : VpkLink.Create([VrfGuiContext.GetDisplayPath(package!.FilePath!), packageEntry.GetFullPath()]));
+                        continue;
+                    }
+
                     if (wantsFullPath)
                     {
                         sb.Append(':');
                     }
 
-                    var packageEntry = selectedNode.PackageEntry;
                     if (packageEntry != null)
                     {
                         var entryPath = packageEntry.GetFullPath();
@@ -173,7 +183,7 @@ namespace GUI
                         continue;
                     }
 
-                    if (wantsFullPath && node.Parent != null)
+                    if (packageLink != null && node.Parent != null)
                     {
                         sb.Append(':');
                     }
@@ -212,8 +222,8 @@ namespace GUI
                 return;
             }
 
-            var newContext = new VrfGuiContext(selectedNode.PackageEntry.GetFullPath(), guiContext);
-            OpenFile(newContext, selectedNode.PackageEntry, null, withoutViewer: true);
+            var (newContext, entry) = guiContext.CreateEntryContext(selectedNode.PackageEntry);
+            OpenFile(newContext, entry, null, withoutViewer: true);
         }
 
         private async void OpenWithDefaultAppToolStripMenuItem_Click(object sender, EventArgs e)
@@ -291,16 +301,27 @@ namespace GUI
 
             foreach (var file in selectedFiles)
             {
-                if (context.CurrentPackage == null)
+                var (package, pathOnDisk) = context.Resolve(file);
+
+                if (package == null && pathOnDisk == null)
                 {
                     continue;
                 }
 
                 try
                 {
-                    context.CurrentPackage.ReadEntry(file, out var output, validateCrc: file.CRC32 > 0);
+                    byte[] output;
 
-                    var tempPath = $"{Path.GetTempPath()}Source 2 Viewer - {Path.GetFileName(context.CurrentPackage.FileName)} - {file.GetFileName()}";
+                    if (pathOnDisk != null)
+                    {
+                        output = await File.ReadAllBytesAsync(pathOnDisk).ConfigureAwait(true);
+                    }
+                    else
+                    {
+                        package!.ReadEntry(file, out output, validateCrc: file.CRC32 > 0);
+                    }
+
+                    var tempPath = $"{Path.GetTempPath()}Source 2 Viewer - {Path.GetFileName(package?.FileName ?? Path.GetDirectoryName(pathOnDisk))} - {file.GetFileName()}";
                     using (var stream = new FileStream(tempPath, FileMode.Create))
                     {
                         stream.Write(output, 0, output.Length);

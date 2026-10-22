@@ -320,13 +320,6 @@ namespace GUI.Types.Exporter
             progress.SetBarMax(filesToExtract.Count);
 
             var outputPath = OutputPath;
-            var currentPackage = exportData.VrfGuiContext.CurrentPackage;
-
-            if (currentPackage == null)
-            {
-                ReportFailure(exportData.VrfGuiContext.FileName, new InvalidOperationException("The package is not available, cannot extract files"));
-                return;
-            }
 
             // Within each type, read the package in storage order to avoid seeking back and forth between entries
             var files = filesToExtract
@@ -373,7 +366,9 @@ namespace GUI.Types.Exporter
                 {
                     EnsureDirectoryExists(outFilePath);
 
-                    using var stream = currentPackage.GetMemoryMappedStreamIfPossible(packageFile);
+#pragma warning disable CA2000 // Disposed by the using declaration
+                    using var stream = exportData.VrfGuiContext.OpenEntryStream(packageFile);
+#pragma warning restore CA2000
 
                     if (!decompile || !packageFile.TypeName.EndsWith(GameFileLoader.CompiledFileSuffix, StringComparison.Ordinal))
                     {

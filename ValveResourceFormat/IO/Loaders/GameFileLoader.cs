@@ -473,7 +473,9 @@ namespace ValveResourceFormat.IO
             return resourceToReturn;
         }
 
-        private KVObject? ReadGameInfo(string gameinfoPath)
+        private KVObject? ReadGameInfo(string gameinfoPath) => ReadGameInfo(gameinfoPath, Logger);
+
+        private static KVObject? ReadGameInfo(string gameinfoPath, ILogger logger)
         {
             try
             {
@@ -482,7 +484,7 @@ namespace ValveResourceFormat.IO
             }
             catch (Exception e)
             {
-                Logger.LogError(e, "Failed to read \"{GameInfo}\"", gameinfoPath);
+                logger.LogError(e, "Failed to read \"{GameInfo}\"", gameinfoPath);
                 return null;
             }
         }
@@ -760,6 +762,129 @@ namespace ValveResourceFormat.IO
             {
                 yield return package;
             }
+        }
+
+        /// <summary>
+        /// Returns the packages and loose folders in the order <see cref="FindFile"/> searches them, so a file is loaded
+        /// from the first one that has its path. Exactly one of the two is set.
+        /// </summary>
+        public IEnumerable<(Package? Package, string? Folder)> EnumerateSearchOrder()
+        {
+            if (CurrentPackage != null)
+            {
+                yield return (CurrentPackage, null);
+            }
+
+            foreach (var mapPackage in CurrentMapPackages)
+            {
+                yield return (mapPackage.Package, null);
+            }
+
+            foreach (var (package, folder) in CurrentAddonSearchPaths)
+            {
+                yield return (package, folder);
+            }
+
+            foreach (var package in CurrentGamePackages)
+            {
+                yield return (package, null);
+            }
+
+            foreach (var folder in CurrentGameSearchPaths)
+            {
+                yield return (null, folder);
+            }
+        }
+
+        /// <summary>
+        /// Lists every file in the packages and loose folders of <see cref="EnumerateSearchOrder"/>, in that order. A loose
+        /// file gets an entry without data, named by its path in the folder. The game's <c>bin</c> folders and the archives of
+        /// mounted packages are left out of loose folders.
+        /// </summary>
+        /// <returns>
+        /// Each file with the package or path on disk it is in, and the file that is found first at its path instead,
+        /// or <see langword="null"/> when it is found itself.
+        /// </returns>
+        public IEnumerable<(PackageEntry Entry, Package? Package, string? PathOnDisk, PackageEntry? OverriddenBy)> EnumerateMountedFiles()
+        {
+            var searched = new List<(Package? Package, Dictionary<string, PackageEntry>? LooseFiles)>();
+
+            PackageEntry? FindFirst(string path)
+            {
+                foreach (var (package, looseFiles) in searched)
+                {
+                    if ((package != null ? package.FindEntry(path) : looseFiles!.GetValueOrDefault(path)) is { } entry)
+                    {
+                        return entry;
+                    }
+                }
+
+                return null;
+            }
+
+            foreach (var (package, folder) in EnumerateSearchOrder().ToList())
+            {
+                if (package != null)
+                {
+                    foreach (var entry in package.Entries?.Values.SelectMany(static entries => entries) ?? [])
+                    {
+                        yield return (entry, package, null, searched.Count > 0 ? FindFirst(entry.GetFullPath()) : null);
+                    }
+
+                    searched.Add((package, null));
+                    continue;
+                }
+
+                var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder!));
+                var archives = searched
+                    .Where(source => source.Package?.FilePath != null && string.Equals(Path.GetDirectoryName(source.Package.FilePath), root, StringComparison.OrdinalIgnoreCase))
+                    .Select(static source => string.Concat(Path.GetFileName(PackageFileNames.GetPackageName(source.Package!.FilePath!)), "_"))
+                    .ToList();
+                var looseFiles = new Dictionary<string, PackageEntry>(StringComparer.OrdinalIgnoreCase);
+                var files = new FileSystemEnumerable<(string Path, long Length)>(
+                    root,
+                    static (ref entry) => (entry.ToFullPath(), entry.Length),
+                    new EnumerationOptions { RecurseSubdirectories = true })
+                {
+                    ShouldIncludePredicate = (ref entry) => !entry.IsDirectory && !(entry.Directory.Length == root.Length && IsArchive(entry.FileName, archives)),
+                    ShouldRecursePredicate = (ref entry) => !(entry.Directory.Length == root.Length && entry.FileName.Equals("bin", StringComparison.OrdinalIgnoreCase)),
+                };
+
+                foreach (var (pathOnDisk, length) in files)
+                {
+                    var path = pathOnDisk[(root.Length + 1)..].Replace(Path.DirectorySeparatorChar, Package.DirectorySeparatorChar);
+                    var directory = Path.GetDirectoryName(path)?.Replace(Path.DirectorySeparatorChar, Package.DirectorySeparatorChar);
+                    var extension = Path.GetExtension(path);
+                    var entry = new PackageEntry
+                    {
+                        FileName = Path.GetFileNameWithoutExtension(path),
+                        DirectoryName = string.IsNullOrEmpty(directory) ? " " : directory,
+                        TypeName = extension.Length > 1 ? extension[1..] : " ",
+                        CRC32 = 0,
+                        SmallData = [],
+                        ArchiveIndex = Package.DirectoryArchiveIndex,
+                        Length = (uint)Math.Min(length, uint.MaxValue),
+                    };
+
+                    looseFiles[path] = entry;
+                    yield return (entry, null, pathOnDisk, FindFirst(path));
+                }
+
+                searched.Add((null, looseFiles));
+            }
+        }
+
+        private static bool IsArchive(ReadOnlySpan<char> fileName, List<string> archivePrefixes)
+        {
+            foreach (var prefix in archivePrefixes)
+            {
+                if (fileName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private IEnumerable<Package> EnumerateMountedPackages()
@@ -1347,6 +1472,22 @@ namespace ValveResourceFormat.IO
                 return;
             }
 
+            foreach (var (gameRoot, gameInfoPath, gameInfo) in FindMods(gamePath, Logger))
+            {
+                HandleGameInfo(folders, gameRoot, gameInfoPath, gameInfo);
+            }
+        }
+
+        /// <summary>
+        /// Finds the <c>gameinfo.gi</c> of each mod in an installed game, such as <c>game/csgo/gameinfo.gi</c>. Core, and
+        /// folders the game only mounts through another mod, such as language and low violence folders, are not mods.
+        /// </summary>
+        /// <param name="gamePath">The folder the game is installed in.</param>
+        public static List<string> FindModGameInfos(string gamePath)
+            => [.. FindMods(gamePath, NullLogger.Instance).Select(static mod => mod.GameInfoPath)];
+
+        private static List<(string GameRoot, string GameInfoPath, KVObject GameInfo)> FindMods(string gamePath, ILogger logger)
+        {
             // Find all the gameinfo.gi files, open them to get game paths
             var gameInfos = new FileSystemEnumerable<string>(
                 gamePath,
@@ -1375,7 +1516,7 @@ namespace ValveResourceFormat.IO
                     continue;
                 }
 
-                if (ReadGameInfo(gameInfoPath) is not { } gameInfo)
+                if (ReadGameInfo(gameInfoPath, logger) is not { } gameInfo)
                 {
                     continue;
                 }
@@ -1395,17 +1536,11 @@ namespace ValveResourceFormat.IO
                 }
             }
 
-            foreach (var (gameRoot, modFolder, gameInfoPath, gameInfo) in mods)
-            {
-                // Low violence and language folders have a gameinfo of their own, but are only mounted through the main game's
-                var modName = Path.GetFileName(modFolder);
-
-                if (!conditionalFolders.Exists(folder => string.Equals(folder.GameRoot, gameRoot, StringComparison.OrdinalIgnoreCase)
-                    && FileSystemName.MatchesSimpleExpression(folder.FolderName, modName)))
-                {
-                    HandleGameInfo(folders, gameRoot, gameInfoPath, gameInfo);
-                }
-            }
+            // Low violence and language folders have a gameinfo of their own, but are only mounted through the main game's
+            return [.. mods
+                .Where(mod => !conditionalFolders.Exists(folder => string.Equals(folder.GameRoot, mod.GameRoot, StringComparison.OrdinalIgnoreCase)
+                    && FileSystemName.MatchesSimpleExpression(folder.FolderName, Path.GetFileName(mod.ModFolder))))
+                .Select(static mod => (mod.GameRoot, mod.GameInfoPath, mod.GameInfo))];
         }
 
         private string? FindFileOnDisk(string file)

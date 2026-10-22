@@ -15,13 +15,6 @@ namespace GUI.Types.Exporter
     {
         public static async Task ExtractFileFromPackageEntry(PackageEntry file, VrfGuiContext vrfGuiContext, bool decompile)
         {
-            var currentPackage = vrfGuiContext.CurrentPackage;
-            if (currentPackage == null)
-            {
-                ErrorReport.ShowError(new InvalidOperationException("The package is not available, cannot extract file"), file.GetFullPath());
-                return;
-            }
-
             var fileName = file.GetFullPath();
 
             var errorContext = vrfGuiContext.GetEntryDisplayPath(fileName);
@@ -30,7 +23,9 @@ namespace GUI.Types.Exporter
 
             try
             {
-                stream = currentPackage.GetMemoryMappedStreamIfPossible(file);
+#pragma warning disable CA2000 // Disposed by ExtractFileFromStream
+                stream = vrfGuiContext.OpenEntryStream(file);
+#pragma warning restore CA2000
             }
             catch (Exception e)
             {

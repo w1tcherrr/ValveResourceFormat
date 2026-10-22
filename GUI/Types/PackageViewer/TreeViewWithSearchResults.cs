@@ -384,6 +384,14 @@ namespace GUI.Types.PackageViewer
             foreach (var file in pkgNode.Files)
             {
                 AddFileToListView(file);
+
+                if (DisplayedFolder != null && Viewer.OverriddenFiles.TryGetValue(file, out var overriddenFiles))
+                {
+                    foreach (var overriddenFile in overriddenFiles)
+                    {
+                        AddFileToListView(overriddenFile, overriddenBy: file);
+                    }
+                }
             }
 
             mainListView.BeginUpdate();
@@ -1110,10 +1118,12 @@ namespace GUI.Types.PackageViewer
             control.BeforeExpand += Control_BeforeExpand;
             control.ShowRootLines = false;
 
-            if (vrfGuiContext.CurrentPackage?.Entries != null)
+            if (Viewer.Entries != null)
             {
-                control.GenerateIconList([.. vrfGuiContext.CurrentPackage.Entries.Keys]);
+                control.GenerateIconList([.. Viewer.Entries.Keys]);
             }
+
+            control.ShowNodeToolTips = Viewer.IsMountedGame;
 
             if (!Viewer.HasChunkFiles)
             {
@@ -1126,6 +1136,12 @@ namespace GUI.Types.PackageViewer
             var parentFolder = Path.GetFileName(Path.GetDirectoryName(fullFilePath));
             var name = parentFolder.Length > 0 ? $"{parentFolder}/{fileName}" : fileName.ToString();
             var vpkImage = AppIcons.ExtensionIcons["vpk"];
+
+            if (Viewer.IsMountedGame)
+            {
+                name = PackageViewer.GetGameName(vrfGuiContext.FileName);
+                vpkImage = PackageViewer.GetGameImage(vrfGuiContext.FileName) ?? vpkImage;
+            }
 
             var root = new BetterTreeNode(name, rootVirtual)
             {
@@ -1227,6 +1243,7 @@ namespace GUI.Types.PackageViewer
             {
                 ImageIndex = image,
                 SelectedImageIndex = image,
+                ToolTipText = Viewer.IsMountedGame ? DescribeFile(file) : string.Empty,
             };
 
             realNode.Nodes.Add(newNode);
@@ -1477,7 +1494,7 @@ namespace GUI.Types.PackageViewer
         /// </summary>
         private void ShowSearchResultsState(string? description, string? emptyText = null)
         {
-            const int FolderColumn = 3;
+            var folderColumn = Viewer.IsMountedGame ? Columns.Length + 1 : Columns.Length;
 
             searchStatus = description;
             searchStatusLabel.Invalidate();
@@ -1489,17 +1506,17 @@ namespace GUI.Types.PackageViewer
                 searchStatusLabel.AccessibilityObject.RaiseAutomationNotification(AutomationNotificationKind.Other, AutomationNotificationProcessing.MostRecent, description);
             }
             mainListView.EmptyText = emptyText;
-            mainListView.SharedFlexibleColumn = description != null ? FolderColumn : -1;
+            mainListView.SharedFlexibleColumn = description != null ? folderColumn : Viewer.IsMountedGame ? Columns.Length : -1;
 
-            if (description != null && mainListView.Columns.Count == FolderColumn)
+            if (description != null && mainListView.Columns.Count == folderColumn)
             {
                 mainListView.Columns.Add("Folder").DisplayIndex = 1;
             }
-            else if (description == null && mainListView.Columns.Count > FolderColumn)
+            else if (description == null && mainListView.Columns.Count > folderColumn)
             {
-                mainListView.Columns.RemoveAt(FolderColumn);
+                mainListView.Columns.RemoveAt(folderColumn);
 
-                if (mainListView.ListViewItemSorter is ListViewColumnSorter { SortColumn: >= FolderColumn } sorter)
+                if (mainListView.ListViewItemSorter is ListViewColumnSorter sorter && sorter.SortColumn >= folderColumn)
                 {
                     sorter.SortColumn = 0;
                 }
@@ -1752,6 +1769,12 @@ namespace GUI.Types.PackageViewer
                 mainListView.Columns.Add(Columns[i]);
             }
 
+            if (Viewer.IsMountedGame)
+            {
+                mainListView.Columns.Add("Source");
+                mainListView.SharedFlexibleColumn = Columns.Length;
+            }
+
             if (PendingInitialDisplayNode != null)
             {
                 var node = PendingInitialDisplayNode;
@@ -1774,6 +1797,11 @@ namespace GUI.Types.PackageViewer
             item.SubItems.Add(HumanReadableByteSizeFormatter.Format(parentNode.TotalSize));
             item.SubItems.Add(string.Empty);
 
+            if (Viewer.IsMountedGame)
+            {
+                item.SubItems.Add(string.Empty);
+            }
+
             ListViewItems.Add(item);
         }
 
@@ -1788,10 +1816,15 @@ namespace GUI.Types.PackageViewer
             item.SubItems.Add(HumanReadableByteSizeFormatter.Format(node.TotalSize));
             item.SubItems.Add(string.Empty);
 
+            if (Viewer.IsMountedGame)
+            {
+                item.SubItems.Add(string.Empty);
+            }
+
             ListViewItems.Add(item);
         }
 
-        private void AddFileToListView(PackageEntry file)
+        private void AddFileToListView(PackageEntry file, PackageEntry? overriddenBy = null)
         {
             if (!mainTreeView.ExtensionIconList.TryGetValue(file.TypeName, out var image))
             {
@@ -1802,14 +1835,47 @@ namespace GUI.Types.PackageViewer
             {
                 ImageIndex = image,
                 PackageEntry = file,
+                IsOverridden = overriddenBy != null,
             };
 
             item.SubItems.Add(HumanReadableByteSizeFormatter.Format(file.TotalLength));
             item.SubItems.Add(file.TypeName);
+
+            if (Viewer.IsMountedGame)
+            {
+                item.SubItems.Add(Viewer.GetSource(file));
+                item.ToolTipText = DescribeFile(file, overriddenBy);
+
+                if (overriddenBy != null)
+                {
+                    item.ForeColor = Themer.CurrentThemeColors.ContrastSoft;
+                }
+            }
+            else
+            {
+                item.ToolTipText = file.GetFullPath();
+            }
+
             item.SubItems.Add(file.GetDirectoryPath());
-            item.ToolTipText = file.GetFullPath();
 
             ListViewItems.Add(item);
+        }
+
+        /// <summary>
+        /// Describes a file of a mounted game: its path, where it is, and which copies at its path it overrides or is overridden by.
+        /// </summary>
+        private string DescribeFile(PackageEntry file, PackageEntry? overriddenBy = null)
+        {
+            var description = $"{file.GetFullPath()}\nFrom {Viewer.GetSource(file)}";
+
+            if (overriddenBy != null)
+            {
+                return $"{description}, overridden by {Viewer.GetSource(overriddenBy)}";
+            }
+
+            return Viewer.OverriddenFiles.TryGetValue(file, out var overriddenFiles)
+                ? $"{description}, overrides {string.Join(", ", overriddenFiles.Select(Viewer.GetSource))}"
+                : description;
         }
 
         // The file type currently shown in the preview area, so a same-type preview can keep the previous view frozen
@@ -2147,7 +2213,10 @@ namespace GUI.Types.PackageViewer
         private Dictionary<string, (int Count, Dictionary<string, int> Values)>? GetSearchDataKeys()
         {
             var vrfGuiContext = mainTreeView?.VrfGuiContext;
-            if (vrfGuiContext?.CurrentPackage is not { } package)
+            var package = vrfGuiContext?.CurrentPackage;
+
+            // The tools asset info covers the whole game, as a mounted game does
+            if (vrfGuiContext == null || (package == null && vrfGuiContext.MountedFiles == null))
             {
                 return null;
             }
@@ -2164,7 +2233,7 @@ namespace GUI.Types.PackageViewer
             foreach (var (filePath, file) in toolsAssetInfo.Files)
             {
                 if (file.SearchableUserData.Count == 0
-                    || (package.FindEntry(filePath) == null && package.FindEntry(string.Concat(filePath, GameFileLoader.CompiledFileSuffix)) == null))
+                    || (package != null && package.FindEntry(filePath) == null && package.FindEntry(string.Concat(filePath, GameFileLoader.CompiledFileSuffix)) == null))
                 {
                     continue;
                 }
