@@ -80,7 +80,7 @@ public class ThemedComboBox : ComboBox
 
         using var graphics = Graphics.FromHwnd(Handle);
         var borderColor = HasError ? Themer.CurrentThemeColors.Attention
-            : Focused && DropDownStyle == ComboBoxStyle.DropDownList ? Themer.CurrentThemeColors.Accent
+            : ContainsFocus ? Themer.CurrentThemeColors.Accent
             : Themer.CurrentThemeColors.ControlBorder;
 
         using var borderPen = new Pen(borderColor);
@@ -89,15 +89,15 @@ public class ThemedComboBox : ComboBox
         graphics.DrawRectangle(innerPen, 1, 1, Width - 3, Height - 3);
     }
 
-    protected override void OnGotFocus(EventArgs e)
+    protected override void OnEnter(EventArgs e)
     {
-        base.OnGotFocus(e);
+        base.OnEnter(e);
         Invalidate();
     }
 
-    protected override void OnLostFocus(EventArgs e)
+    protected override void OnLeave(EventArgs e)
     {
-        base.OnLostFocus(e);
+        base.OnLeave(e);
         Invalidate();
     }
 
@@ -162,7 +162,10 @@ public class ThemedComboBox : ComboBox
             TextRenderer.DrawText(e.Graphics, text, e.Font, bounds, foreColor, Color.Transparent, flags);
         }
 
-        e.DrawFocusRectangle();
+        if ((e.State & DrawItemState.ComboBoxEdit) == 0)
+        {
+            e.DrawFocusRectangle();
+        }
     }
 
     internal static string TrimStartToFit(Graphics graphics, string text, Font font, int width, TextFormatFlags drawFlags)

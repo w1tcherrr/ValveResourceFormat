@@ -79,11 +79,20 @@ namespace GUI.Forms
             hexBytesToggle.Toggled += _ => UpdateState();
             filterKeyComboBox.TextChanged += (_, _) =>
             {
+                toolTip.SetToolTip(filterKeyComboBox, filterKeyComboBox.Text);
                 UpdateFilterValues();
                 UpdateState();
             };
-            filterValueComboBox.TextChanged += (_, _) => UpdateState();
-            onlyInFolderCheckBox.CheckedChanged += (_, _) => UpdateExtensions();
+            filterValueComboBox.TextChanged += (_, _) =>
+            {
+                toolTip.SetToolTip(filterValueComboBox, filterValueComboBox.Text);
+                UpdateState();
+            };
+            onlyInFolderCheckBox.CheckedChanged += (_, _) =>
+            {
+                folderPathLabel.Invalidate();
+                UpdateExtensions();
+            };
 
             UpdateState();
         }
@@ -103,6 +112,12 @@ namespace GUI.Forms
 
             var (hint, isError, canSearch) = filterError != null ? (filterError, true, false) : GetHint(request);
             hasInputError = isError && filterError == null;
+
+            if (!isError && SelectedFilterKey is { Values.Count: >= TreeViewWithSearchResults.MaxSearchDataValues })
+            {
+                hint = string.Create(CultureInfo.InvariantCulture, $"First {TreeViewWithSearchResults.MaxSearchDataValues} values listed, type others");
+            }
+
             hintLabel.Text = hint;
             hintLabel.ForeColor = isError ? Themer.CurrentThemeColors.Attention : Themer.CurrentThemeColors.ContrastSoft;
             toolTip.SetToolTip(hintLabel, hint);
@@ -193,6 +208,7 @@ namespace GUI.Forms
                 (SearchTarget.Contents, false) => "Text in the file contents",
                 (SearchTarget.Path, true) => "A regular expression over the full path, ^path$ matches it exactly",
                 (SearchTarget.Path, false) => "Part of the full path, such as materials/dev",
+                (SearchTarget.Name, false) when request.Text.AsSpan().IndexOfAny('/', '\\') >= 0 => "Has a /, so it matches the full path",
                 (_, true) => "A regular expression over the file name, ^name$ matches it exactly",
                 _ => "Part of the file name",
             };
@@ -366,7 +382,8 @@ namespace GUI.Forms
             var bounds = folderPathLabel.ClientRectangle;
             var path = ThemedComboBox.TrimStartToFit(e.Graphics, PackageViewer.GetFolderPath(folder), folderPathLabel.Font, bounds.Width, Flags);
 
-            TextRenderer.DrawText(e.Graphics, path, folderPathLabel.Font, bounds, folderPathLabel.ForeColor, Flags);
+            var color = onlyInFolderCheckBox.Checked ? folderPathLabel.ForeColor : Themer.CurrentThemeColors.ContrastSoft;
+            TextRenderer.DrawText(e.Graphics, path, folderPathLabel.Font, bounds, color, Flags);
         }
 
         private void FolderPathLabel_Resize(object? sender, EventArgs e) => folderPathLabel.Invalidate();
@@ -487,8 +504,11 @@ namespace GUI.Forms
         {
             base.OnLoad(e);
 
-            MinimumSize = Size;
-            MaximumSize = new Size(short.MaxValue, Height);
+            if (MinimumSize.IsEmpty)
+            {
+                MinimumSize = Size;
+                MaximumSize = new Size(short.MaxValue, Height);
+            }
         }
 
         protected override void OnVisibleChanged(EventArgs e)

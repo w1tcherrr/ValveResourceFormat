@@ -195,7 +195,7 @@ namespace GUI.Forms
             //
             onlyInFolderTable.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right;
             onlyInFolderTable.ColumnCount = 2;
-            onlyInFolderTable.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle());
+            onlyInFolderTable.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Absolute, 98F));
             onlyInFolderTable.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Percent, 100F));
             onlyInFolderTable.Controls.Add(onlyInFolderCheckBox, 0, 0);
             onlyInFolderTable.Controls.Add(folderPathLabel, 1, 0);
@@ -253,8 +253,8 @@ namespace GUI.Forms
             //
             filterTable.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right;
             filterTable.ColumnCount = 2;
-            filterTable.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Percent, 50F));
-            filterTable.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Percent, 50F));
+            filterTable.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Percent, 60F));
+            filterTable.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Percent, 40F));
             filterTable.Controls.Add(filterKeyComboBox, 0, 0);
             filterTable.Controls.Add(filterValueComboBox, 1, 0);
             filterTable.Location = new System.Drawing.Point(110, 173);

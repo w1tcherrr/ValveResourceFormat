@@ -62,9 +62,17 @@ namespace GUI.Types.PackageViewer
             {
                 using var graphics = CreateGraphics();
                 var top = this.AdjustForDPI(View == View.Details ? 40 : 16);
+                const TextFormatFlags Flags = TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix;
                 var bounds = new Rectangle(0, top, ClientSize.Width, ClientSize.Height - top);
-                TextRenderer.DrawText(graphics, EmptyText, Font, bounds, Themer.CurrentThemeColors.ContrastSoft,
-                    TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
+                var size = TextRenderer.MeasureText(graphics, EmptyText, Font, bounds.Size, Flags);
+                var padding = this.AdjustForDPI(8);
+
+                using (var background = new SolidBrush(BackColor))
+                {
+                    graphics.FillRectangle(background, (bounds.Width - size.Width) / 2 - padding, top - padding, size.Width + padding * 2, size.Height + padding * 2);
+                }
+
+                TextRenderer.DrawText(graphics, EmptyText, Font, bounds, Themer.CurrentThemeColors.ContrastSoft, Flags);
             }
 
             if (m.Msg == PInvoke.WM_VSCROLL)

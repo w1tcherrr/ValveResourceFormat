@@ -1482,6 +1482,7 @@ namespace GUI.Types.PackageViewer
             searchStatus = description;
             searchStatusLabel.Invalidate();
             searchStatusLabel.AccessibleName = description;
+            toolTip.SetToolTip(searchStatusLabel, description);
 
             if (description != null)
             {
@@ -1515,12 +1516,29 @@ namespace GUI.Types.PackageViewer
 
         private static string DescribeSearch(SearchRequest request, int count, bool cancelled, string? unsearched)
         {
-            var description = new StringBuilder(count switch
+            var description = new StringBuilder(cancelled ? "Search cancelled, " : null);
+            description.Append(count switch
             {
-                0 => cancelled ? "Search cancelled, no files" : "No files",
-                1 => cancelled ? "Search cancelled, 1 file" : "1 file",
-                _ => string.Create(CultureInfo.InvariantCulture, $"{(cancelled ? "Search cancelled, " : "")}{count:N0} files"),
+                0 => cancelled ? "no" : "No",
+                _ => count.ToString("N0", CultureInfo.InvariantCulture),
             });
+
+            if (request.Extension is { } extension && extension != " ")
+            {
+                description.Append(' ').Append(extension);
+            }
+
+            description.Append(count == 1 ? " file" : " files");
+
+            if (request.Extension == " ")
+            {
+                description.Append(" without an extension");
+            }
+
+            if (request.Folder != null)
+            {
+                description.Append(" in ").Append(PackageViewer.GetFolderPath(request.Folder));
+            }
 
             if (request.Text.Length > 0)
             {
@@ -1532,13 +1550,9 @@ namespace GUI.Types.PackageViewer
                     { Target: SearchTarget.Path, UseRegex: true } => $" with a path matching {request.Text}",
                     { Target: SearchTarget.Path } => $" with \"{request.Text}\" in the path",
                     { UseRegex: true } => $" with a name matching {request.Text}",
+                    _ when request.Text.AsSpan().IndexOfAny('/', '\\') >= 0 => $" with \"{request.Text}\" in the path",
                     _ => $" with \"{request.Text}\" in the name",
                 });
-            }
-
-            if (request.Extension != null)
-            {
-                description.Append(" of type ").Append(request.Extension);
             }
 
             if (request.FilterKey != null)
@@ -1549,11 +1563,6 @@ namespace GUI.Types.PackageViewer
                 {
                     description.Append(" = ").Append(request.FilterValue);
                 }
-            }
-
-            if (request.Folder != null)
-            {
-                description.Append(" in ").Append(PackageViewer.GetFolderPath(request.Folder));
             }
 
             if (cancelled)

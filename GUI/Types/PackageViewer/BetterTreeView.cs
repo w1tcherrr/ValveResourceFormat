@@ -266,6 +266,7 @@ namespace GUI.Types.PackageViewer
                 {
                     var matches = new HashSet<PackageEntry>();
                     var archivesScanned = 0;
+                    progressDialog.SetBarMax(maxArchiveIndex + 1);
 
                     Parallel.For(
                         0,
@@ -304,7 +305,8 @@ namespace GUI.Types.PackageViewer
                             }
 
                             var scanned = Interlocked.Increment(ref archivesScanned);
-                            progressDialog.SetProgress(string.Create(CultureInfo.InvariantCulture, $"Searched {scanned} vpks out of {maxArchiveIndex + 1}, found {results.Count} matches so far"));
+                            progressDialog.SetBarValue(scanned);
+                            progressDialog.SetProgress(string.Create(CultureInfo.InvariantCulture, $"Searched {scanned:N0} of {maxArchiveIndex + 1:N0} archives, found {results.Count:N0} matches so far"));
                         }
                     );
                 }
