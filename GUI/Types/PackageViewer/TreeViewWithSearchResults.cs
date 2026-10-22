@@ -2141,7 +2141,7 @@ namespace GUI.Types.PackageViewer
 
         /// <summary>
         /// Lazily loads the tools asset info and builds the <see cref="ValveResourceFormat.ToolsAssetInfo.ToolsAssetInfo.File.SearchableUserData"/> index.
-        /// Returns the filter keys of the files in the package with how many files have each, and their values with how many files have each, or null if no data.
+        /// Returns the filter keys of the files in the package with how many files have each, and their values with how many files have each, or null if no data. Values that differ only in case count as one, under the first spelling found, as the filter ignores case.
         /// The tools asset info sits next to the package and covers the whole game, so files that are not in this package are left out.
         /// </summary>
         private Dictionary<string, (int Count, Dictionary<string, int> Values)>? GetSearchDataKeys()
@@ -2176,7 +2176,12 @@ namespace GUI.Types.PackageViewer
                     var stringValue = Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty;
                     converted[key] = stringValue;
 
-                    var (count, values) = searchDataKeys.GetValueOrDefault(key, (0, []));
+                    if (!searchDataKeys.TryGetValue(key, out var data))
+                    {
+                        data = (0, new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase));
+                    }
+
+                    var (count, values) = data;
 
                     if (values.Count < MaxSearchDataValues || values.ContainsKey(stringValue))
                     {
