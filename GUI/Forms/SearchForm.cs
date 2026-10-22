@@ -88,6 +88,9 @@ namespace GUI.Forms
                 toolTip.SetToolTip(filterValueComboBox, filterValueComboBox.Text);
                 UpdateState();
             };
+            extensionComboBox.DropDown += FitDropDownWidth;
+            filterKeyComboBox.DropDown += FitDropDownWidth;
+            filterValueComboBox.DropDown += FitDropDownWidth;
             onlyInFolderCheckBox.CheckedChanged += (_, _) =>
             {
                 folderPathLabel.Invalidate();
@@ -507,6 +510,15 @@ namespace GUI.Forms
             UpdateState();
         }
 
+        private void FitDropDownWidth(object? sender, EventArgs e)
+        {
+            var comboBox = (ComboBox)sender!;
+            var widest = comboBox.Items.Cast<object>().Max(item => TextRenderer.MeasureText(comboBox.GetItemText(item), comboBox.Font).Width);
+            var width = widest + SystemInformation.GetVerticalScrollBarWidthForDpi(DeviceDpi) + LogicalToDeviceUnits(8);
+
+            comboBox.DropDownWidth = Math.Clamp(width, comboBox.Width, Screen.FromControl(this).WorkingArea.Width);
+        }
+
         protected override void OnLoad(EventArgs e)
         {
             base.OnLoad(e);
@@ -515,6 +527,7 @@ namespace GUI.Forms
             {
                 MinimumSize = Size;
                 MaximumSize = new Size(short.MaxValue, Height);
+                Width = Math.Max(Width, LogicalToDeviceUnits(600));
             }
         }
 
