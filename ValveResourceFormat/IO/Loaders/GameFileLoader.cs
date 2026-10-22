@@ -571,6 +571,31 @@ namespace ValveResourceFormat.IO
                 Path.GetFullPath(pathOnDisk).StartsWith(Path.GetFullPath(folder).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase));
         }
 
+        /// <summary>
+        /// Gets the path that a file on disk has in the addon folder or game folder that holds it, which is the path
+        /// <see cref="FindFile"/> finds it by.
+        /// </summary>
+        /// <param name="pathOnDisk">The path of the file on disk.</param>
+        /// <returns>The path with forward slashes, or null when no addon folder or game folder holds the file.</returns>
+        public string? GetSearchPath(string pathOnDisk)
+        {
+            LoadPendingAddonDependencies();
+
+            var fullPath = Path.GetFullPath(pathOnDisk);
+
+            foreach (var folder in CurrentAddonSearchPaths.Select(static searchPath => searchPath.Folder).OfType<string>().Concat(CurrentGameSearchPaths))
+            {
+                var relative = Path.GetRelativePath(folder, fullPath);
+
+                if (!relative.StartsWith("..", StringComparison.Ordinal) && !Path.IsPathRooted(relative))
+                {
+                    return relative.Replace(Path.DirectorySeparatorChar, '/');
+                }
+            }
+
+            return null;
+        }
+
         private static Resource? ReadFoundFile(string file, (string? PathOnDisk, Package? Package, PackageEntry? PackageEntry) foundFile)
         {
             var resource = new Resource
