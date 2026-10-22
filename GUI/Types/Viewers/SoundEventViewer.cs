@@ -30,7 +30,7 @@ namespace GUI.Types.Viewers
         private const string PreviewChannel = "sound_event_viewer";
         private const TextFormatFlags SegmentFlags = TextFormatFlags.NoPadding | TextFormatFlags.SingleLine | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix;
 
-        private sealed class EventRow(string name, int definition, string file, KVObject data, string type, float duration, bool duplicate, bool hasProblems, bool rejected, bool missingBase)
+        private sealed class EventRow(string name, int definition, string file, KVObject data, string type, float duration, bool duplicate, bool rejected, bool missingBase)
         {
             public string Name { get; } = name;
 
@@ -41,18 +41,18 @@ namespace GUI.Types.Viewers
             public string Type { get; } = type;
             public float Duration { get; } = duration;
             public bool Duplicate { get; } = duplicate;
-            public bool HasProblems { get; } = hasProblems;
             public bool MissingBase { get; } = missingBase;
             public bool Rejected { get; } = rejected;
             public bool Playable => !Rejected && SoundEvent.IsSupportedType(Type);
             public bool MissingSound { get; set; }
-            public bool HasWarning => HasProblems || MissingBase || MissingSound;
+            public bool HasWarning => Rejected || MissingBase || MissingSound;
         }
 
         private enum ValueSource
         {
             Own,
             Inherited,
+            Overridden,
             Default,
             Group,
         }
@@ -171,7 +171,7 @@ namespace GUI.Types.Viewers
 
             scopeBox = CreateFilterBox("Scope", ["This file", "All files"]);
             typeBox = CreateFilterBox("Type", ["All types"]);
-            statusBox = CreateFilterBox("Status", ["All events", "Duplicate names", "Rejected or skipped bases", "Missing base events", "Missing sounds", "Not playable here"]);
+            statusBox = CreateFilterBox("Status", ["All events", "Duplicate names", "Rejected", "Missing base events", "Missing sounds", "Not playable here"]);
             scopeBox.SelectedIndexChanged += (_, _) => OnScopeChanged();
             typeBox.SelectedIndexChanged += (_, _) => ApplyFilter();
             statusBox.SelectedIndexChanged += (_, _) => ApplyFilter();
@@ -829,13 +829,13 @@ namespace GUI.Types.Viewers
 
         private static EventRow CreateRow(SoundEventIndex loadedIndex, string name, int definition, string file, KVObject data, bool duplicate)
         {
-            var (resolved, problems, rejected) = loadedIndex.Resolve(data);
+            var (resolved, _, rejected) = loadedIndex.Resolve(data);
             var duration = resolved.FirstOrDefault(static r => r.Key == "vsnd_duration").Value is { } durationValue && IsNumber(durationValue)
                 ? durationValue.ToSingle(CultureInfo.InvariantCulture)
                 : -1f;
             var missingBase = SoundEventIndex.GetBases(data).Any(b => loadedIndex.Find(b.Name) == null);
 
-            return new EventRow(name, definition, file, data, GetString(resolved, "type"), duration, duplicate, problems.Count > 0, rejected, missingBase);
+            return new EventRow(name, definition, file, data, GetString(resolved, "type"), duration, duplicate, rejected, missingBase);
         }
 
         private bool SoundExists(string sound)
@@ -948,7 +948,7 @@ namespace GUI.Types.Viewers
                 && status switch
                 {
                     1 => row.Duplicate,
-                    2 => row.HasProblems,
+                    2 => row.Rejected,
                     3 => row.MissingBase,
                     4 => row.MissingSound,
                     5 => !row.Playable,
@@ -1099,7 +1099,7 @@ namespace GUI.Types.Viewers
 
             return string.Join(Environment.NewLine, new[]
             {
-                row.Rejected ? "The engine does not play this event." : row.HasProblems ? "The engine skips some of its bases." : null,
+                row.Rejected ? "The engine does not play this event." : null,
                 row.MissingBase ? "A base event is not loaded." : null,
                 row.MissingSound ? "A sound it names is not shipped." : null,
             }.OfType<string>());
@@ -1268,8 +1268,7 @@ namespace GUI.Types.Viewers
 
             foreach (var (_, field) in SoundEventIndex.GetBases(row.Data))
             {
-                foreach (var collision in collisions.Where(c => field != null
-                    && (c.Block.Equals(field, StringComparison.OrdinalIgnoreCase) || c.Block.EndsWith($".{field}", StringComparison.OrdinalIgnoreCase))))
+                foreach (var collision in collisions.Where(c => field != null && IsInBlock(c.Blocks, field)))
                 {
                     lines.Add($"{collision.Stack} field {collision.Name} collides with the stack's own field, so the engine shifts this base's later values by one field.");
                 }
@@ -1337,6 +1336,10 @@ namespace GUI.Types.Viewers
             ShowProperties();
             ShowLinks();
         }
+
+        /// <summary>Gets whether a field is in the block of a <c>public_opvar</c> field, given the blocks it is in.</summary>
+        private static bool IsInBlock(IReadOnlyList<string> blocks, string field)
+            => blocks.Any(block => block.Equals(field, StringComparison.OrdinalIgnoreCase) || block.EndsWith($".{field}", StringComparison.OrdinalIgnoreCase));
 
         /// <summary>Lists the sounds and events that the event's resolved keys name, and its bases.</summary>
         private void CollectLinks(EventRow row, List<(string Key, KVObject Value, string? Source, string? Field)> resolved)
@@ -1499,29 +1502,35 @@ namespace GUI.Types.Viewers
             var fields = current.Type.Length > 0 ? index.GetStackFields(current.Type) : [];
             var groups = new List<(string Name, List<(string Key, KVObject? Value, string Source, ValueSource Kind, bool Curve)> Rows)>();
             var shown = new HashSet<int>();
-            var fieldKeys = new Dictionary<int, int>();
+            var fieldKeys = new Dictionary<int, List<int>>();
             var captionLine = resolved.FindIndex(r => r.Key.Equals("line_text", StringComparison.OrdinalIgnoreCase) && r.Field == null
                 && r.Value.ValueType == KVValueType.String && StripCaptionMarkup((string)r.Value) == captionText);
 
-            // Keys come in the order they win, so the first key to reach a field sets it
+            // Keys come in the order they win, so the first key to reach a field sets it and the later ones are overridden
             for (var i = 0; i < resolved.Count; i++)
             {
                 var (key, _, _, block) = resolved[i];
 
-                if (FindTargetField(key, block) is var target and >= 0 && fieldKeys.TryAdd(target, i))
+                if (FindTargetField(key, block) is var target and >= 0)
                 {
+                    if (!fieldKeys.TryGetValue(target, out var keys))
+                    {
+                        keys = [];
+                        fieldKeys.Add(target, keys);
+                    }
+
+                    keys.Add(i);
                     shown.Add(i);
                 }
             }
 
-            // A key of a block sets the field of that name in the block, an event's own key the one field of that name
+            // A key of a block sets the field of that name anywhere in the block, an event's own key the one field of that name
             int FindTargetField(string key, string? block) => block == null
                 ? FindField(f => f.Name.Equals(key, StringComparison.OrdinalIgnoreCase))
-                : FindField(f => f.Block != null
-                    && (f.Block.Equals(block, StringComparison.OrdinalIgnoreCase) || f.Block.EndsWith($".{block}", StringComparison.OrdinalIgnoreCase))
+                : FindField(f => IsInBlock(f.Blocks, block)
                     && (f.Name.Equals(key, StringComparison.OrdinalIgnoreCase) || f.Name.EndsWith($".{key}", StringComparison.OrdinalIgnoreCase)));
 
-            int FindField(Func<(string Name, KVObject Field, string Stack, string? Block), bool> match)
+            int FindField(Func<(string Name, KVObject Field, string Stack, IReadOnlyList<string> Blocks), bool> match)
             {
                 for (var i = 0; i < fields.Count; i++)
                 {
@@ -1547,11 +1556,14 @@ namespace GUI.Types.Viewers
                 return group;
             }
 
-            (string Key, KVObject? Value, string Source, ValueSource Kind, bool Curve) Row(int i, string name, bool curve)
+            (string Key, KVObject? Value, string Source, ValueSource Kind, bool Curve) Row(int i, string name, bool curve, bool overridden = false)
             {
                 var (_, value, source, block) = resolved[i];
                 var origin = source == null ? string.Empty : block == null ? source : $"{source} via {block}";
-                return (name, value, origin, source == null ? ValueSource.Own : ValueSource.Inherited, curve);
+
+                return overridden
+                    ? (name, value, origin.Length == 0 ? "own, overridden" : $"{origin}, overridden", ValueSource.Overridden, curve)
+                    : (name, value, origin, source == null ? ValueSource.Own : ValueSource.Inherited, curve);
             }
 
             for (var f = 0; f < fields.Count; f++)
@@ -1561,11 +1573,16 @@ namespace GUI.Types.Viewers
                 var dataType = field.GetStringProperty("data_type");
                 var curve = dataType == "float6";
 
-                if (fieldKeys.TryGetValue(f, out var i))
+                if (fieldKeys.TryGetValue(f, out var keys))
                 {
-                    if (i != captionLine)
+                    if (keys[0] != captionLine)
                     {
-                        group.Add(Row(i, name, curve));
+                        group.Add(Row(keys[0], name, curve));
+                    }
+
+                    foreach (var i in keys.Skip(1))
+                    {
+                        group.Add(Row(i, name, curve, overridden: true));
                     }
                 }
                 else if (defaultsBox.Checked && dataType != "public_opvar")
@@ -1639,6 +1656,10 @@ namespace GUI.Types.Viewers
                         case ValueSource.Default:
                             gridRow.DefaultCellStyle.Font = italicFont;
                             gridRow.DefaultCellStyle.ForeColor = Themer.CurrentThemeColors.ContrastSoft;
+                            break;
+                        case ValueSource.Overridden:
+                            gridRow.DefaultCellStyle.ForeColor = Themer.CurrentThemeColors.ContrastSoft;
+                            gridRow.Cells[2].ToolTipText = "A key that takes precedence sets this field";
                             break;
                     }
                 }
@@ -2685,6 +2706,19 @@ namespace GUI.Types.Viewers
                 CurrentCell = null;
             }
 
+            protected override void OnEnter(EventArgs e)
+            {
+                var hadCurrentCell = CurrentCell != null;
+
+                base.OnEnter(e);
+
+                // Entering makes the first row current, which is kept for the arrow keys but not shown as selected
+                if (!hadCurrentCell)
+                {
+                    ClearSelection();
+                }
+            }
+
             protected override void OnCellPainting(DataGridViewCellPaintingEventArgs e)
             {
                 if (e.RowIndex < 0 && e.CellStyle != null)
@@ -2762,17 +2796,6 @@ namespace GUI.Types.Viewers
                 }
 
                 return base.ProcessDataGridViewKey(e);
-            }
-
-            protected override bool ProcessDialogKey(Keys keyData)
-            {
-                if (keyData == Keys.Enter && CurrentRow != null)
-                {
-                    Activated?.Invoke(this, CurrentRow.Index);
-                    return true;
-                }
-
-                return base.ProcessDialogKey(keyData);
             }
 
             protected override void OnMouseUp(MouseEventArgs e)

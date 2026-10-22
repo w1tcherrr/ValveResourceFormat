@@ -77,6 +77,7 @@ internal sealed partial class McpTools
             return new { Window = form.Text, Focused = new { Kind = KindOf(focused), focused.Name, focused.Text } };
         }, cancellationToken).ConfigureAwait(false);
     }
+
     [Tool("Capture an open window as the screen shows it, frame included, even while other windows cover it. Returns a JPEG. 'path' also writes a PNG.")]
     private static ImageReply ScreenshotWindow(
         [Description("Title or control name of the window, such as Find. Defaults to the topmost dialog, or the main window when none is open.")] string? window = null,

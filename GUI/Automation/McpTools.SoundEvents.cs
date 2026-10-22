@@ -198,9 +198,14 @@ internal sealed partial class McpTools
                 return grid.Loading ? null : GridRows(grid);
             }, cancellationToken).ConfigureAwait(false);
 
-            if (users != null || waited > LoadTimeout)
+            if (users != null)
             {
                 return new { Events = users };
+            }
+
+            if (waited > LoadTimeout)
+            {
+                throw new ToolException("The sound events that use this sound are still being found.");
             }
 
             await Task.Delay(100, cancellationToken).ConfigureAwait(false);
