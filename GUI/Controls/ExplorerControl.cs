@@ -33,6 +33,9 @@ namespace GUI.Controls
         private readonly List<TreeDataNode> TreeData = [];
         private static readonly ConcurrentDictionary<string, string> WorkshopAddons = new();
 
+        // The Game Mount label of a gameinfo.gi, with its mod when the game has several
+        private static readonly ConcurrentDictionary<string, string> GameMounts = new(StringComparer.OrdinalIgnoreCase);
+
         public ExplorerControl()
         {
             InitializeComponent();
@@ -336,12 +339,18 @@ namespace GUI.Controls
 
                 var gameInfos = GameFileLoader.FindModGameInfos(gamePath);
 
-                foundFiles.InsertRange(0, gameInfos.Select(gameInfo => new TreeNode(gameInfos.Count > 1 ? $"All files ({Path.GetFileName(Path.GetDirectoryName(gameInfo))})" : "All files")
+                foundFiles.InsertRange(0, gameInfos.Select(gameInfo =>
                 {
-                    Tag = gameInfo,
-                    ImageIndex = treeNodeImage,
-                    SelectedImageIndex = treeNodeImage,
-                    ToolTipText = "Every file the game loads, from all of its VPKs and folders, as the game mounts them",
+                    var mod = gameInfos.Count > 1 ? $" ({Path.GetFileName(Path.GetDirectoryName(gameInfo))})" : string.Empty;
+                    GameMounts[gameInfo] = $"Game Mount{mod}";
+
+                    return new TreeNode($"Game Mount via gameinfo.gi{mod}")
+                    {
+                        Tag = gameInfo,
+                        ImageIndex = treeNodeImage,
+                        SelectedImageIndex = treeNodeImage,
+                        ToolTipText = $"Every file the game loads from its VPKs and folders, merged as {gameInfo[gamePath.Length..].Replace(Path.DirectorySeparatorChar, '/').TrimStart('/')} mounts them",
+                    };
                 }));
 
                 var foundFilesArray = foundFiles.ToArray();
@@ -605,7 +614,9 @@ namespace GUI.Controls
 
                 if (GameFolderLocator.FindSteamGameContainingPath(path, InstalledSteamGames.Games) is { } game)
                 {
-                    pathDisplay = $"[{game.AppName}] {pathDisplay.AsSpan(Math.Min(game.GamePath.Length, pathDisplay.Length))}";
+                    pathDisplay = PackageViewer.IsGameInfo(path)
+                        ? $"[{game.AppName}] {GameMounts.GetValueOrDefault(path, "Game Mount")}"
+                        : $"[{game.AppName}] {pathDisplay.AsSpan(Math.Min(game.GamePath.Length, pathDisplay.Length))}";
 
                     if ((isVpk || PackageViewer.IsGameInfo(path)) && !AppIcons.GameIcons.TryGetValue(game.AppID, out imageIndexGame))
                     {
@@ -619,6 +630,7 @@ namespace GUI.Controls
                     Tag = path,
                     ImageIndex = image,
                     SelectedImageIndex = image,
+                    ToolTipText = PackageViewer.IsGameInfo(path) ? path : string.Empty,
                 };
             }
 

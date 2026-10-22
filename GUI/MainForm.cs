@@ -771,7 +771,7 @@ namespace GUI
 
                 var extension = Path.GetExtension(vrfGuiContext.FileName.AsSpan());
 
-                if (file == null && PackageViewer.IsGameInfo(vrfGuiContext.FileName))
+                if (file == null && vrfGuiContext.ParentGuiContext == null && PackageViewer.IsGameInfo(vrfGuiContext.FileName))
                 {
                     tab.Text = PackageViewer.GetGameName(vrfGuiContext.FileName);
                     tab.ImageIndex = PackageViewer.GetGameImage(vrfGuiContext.FileName) ?? -1;

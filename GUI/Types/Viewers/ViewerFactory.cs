@@ -12,7 +12,7 @@ static class ViewerFactory
     {
         await Task.Yield();
 
-        if (entry == null && PackageViewer.PackageViewer.IsGameInfo(vrfGuiContext.FileName))
+        if (entry == null && vrfGuiContext.ParentGuiContext == null && PackageViewer.PackageViewer.IsGameInfo(vrfGuiContext.FileName))
         {
             var gameViewer = new PackageViewer.PackageViewer(vrfGuiContext);
             gameViewer.LoadGame();

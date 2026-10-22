@@ -25,6 +25,7 @@ The Explorer also shows:
 
 - **Recent files** at the top, so you can quickly reopen files you've worked with before
 - **Bookmarks** for files you've saved for later. Right-click any file and choose **Add to Bookmarks** to add it
+- **Game Mount via gameinfo.gi** as the first entry of each game, which lists every file the game loads from all of its VPKs and folders in one tree, the way the game mounts them from its `gameinfo.gi`. Where several of them have a file at the same path, the tree shows the one the game loads, and the others show grayed out next to it. Search covers the whole game. Opening a `gameinfo.gi` with **File → Open** or from the command line does the same
 
 ![Explorer showing detected Steam games](./images/getting-started-game-explorer.png)
 
