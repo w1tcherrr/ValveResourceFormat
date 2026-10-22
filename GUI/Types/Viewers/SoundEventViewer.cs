@@ -57,6 +57,8 @@ namespace GUI.Types.Viewers
         // Held by the event outside of its stack: read by the engine when it parses the event, or written by the compiler
         private static readonly HashSet<string> EventKeys = new(["groups", "preload_vsnds", "memory_type", "vsnd_duration"], StringComparer.OrdinalIgnoreCase);
 
+        private static readonly object SoundsTabLink = new();
+
         private static Color LinkColor => Themer.CurrentThemeColors.ColorMode == SystemColorMode.Dark ? Color.FromArgb(99, 161, 255) : Color.FromArgb(0, 102, 204);
 
         private static readonly Dictionary<string, (Task<(SoundEventIndex Index, List<ValveResourceFormat.ClosedCaptions.ClosedCaptions> Captions)> Task, HashSet<VrfGuiContext> Roots)> GameIndexes
@@ -76,6 +78,9 @@ namespace GUI.Types.Viewers
         private List<EventRow> filteredRows = [];
         private bool? soundsChecked;
         private EventRow? current;
+        private readonly List<(string Key, string Sound, string? Source, bool Exists)> eventSounds = [];
+        private readonly List<(string Key, string Event, string? Source)> eventReferences = [];
+        private readonly HashSet<string> missingSounds = new(StringComparer.OrdinalIgnoreCase);
         private string captionText = string.Empty;
         private readonly List<(string Name, string File)> backHistory = [];
         private readonly List<(string Name, string File)> forwardHistory = [];
@@ -99,6 +104,7 @@ namespace GUI.Types.Viewers
         private readonly Font boldFont;
         private readonly Font italicFont;
         private readonly Font groupFont;
+        private readonly Font smallFont;
         private readonly ToolTip toolTip = new();
 
 #pragma warning disable CA2213 // Added to Controls, which disposes them
@@ -147,6 +153,7 @@ namespace GUI.Types.Viewers
             boldFont = new Font(Font, FontStyle.Bold);
             italicFont = new Font(Font, FontStyle.Italic);
             groupFont = new Font("Segoe UI Semibold", Font.Size);
+            smallFont = new Font(Font.FontFamily, Font.Size * 0.85f);
 
             searchBox = new SearchBox
             {
@@ -189,8 +196,6 @@ namespace GUI.Types.Viewers
             };
 
             noMatchLink = CreateLink("No events match");
-            noMatchLink.Dock = DockStyle.Top;
-            noMatchLink.Padding = new Padding(4, 8, 0, 8);
             noMatchLink.Text = "No events match. Clear filters";
             noMatchLink.LinkArea = new LinkArea("No events match. ".Length, "Clear filters".Length);
             noMatchLink.Visible = false;
@@ -204,8 +209,6 @@ namespace GUI.Types.Viewers
             eventGrid.Columns.Add(CreateColumn("File", 35));
             eventGrid.Columns[0].AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
             eventGrid.Columns[0].Width = this.AdjustForDPI(22);
-            eventGrid.Columns[0].DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
-            eventGrid.Columns[0].DefaultCellStyle.ForeColor = Themer.CurrentThemeColors.Attention;
             eventGrid.Columns[3].DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleRight;
             eventGrid.Columns[3].DefaultCellStyle.Padding = new Padding(0, 0, this.AdjustForDPI(16), 0);
             eventGrid.Columns[4].Visible = false;
@@ -220,18 +223,23 @@ namespace GUI.Types.Viewers
             eventGrid.CellToolTipTextNeeded += OnEventCellToolTipTextNeeded;
             eventGrid.SelectionChanged += OnEventSelectionChanged;
             eventGrid.ColumnHeaderMouseClick += OnEventColumnHeaderClick;
+            eventGrid.CellPainting += OnEventCellPainting;
             eventGrid.Activated += (_, _) => PlayEvent();
+            eventGrid.Controls.Add(noMatchLink);
+            noMatchLink.Location = new Point(this.AdjustForDPI(6), eventGrid.ColumnHeadersHeight + this.AdjustForDPI(6));
 
             var leftPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(4) };
             leftPanel.Controls.Add(eventGrid);
-            leftPanel.Controls.Add(noMatchLink);
             leftPanel.Controls.Add(countLabel);
             leftPanel.Controls.Add(filters);
             leftPanel.Controls.Add(searchBox);
+            searchBox.TabIndex = 0;
+            filters.TabIndex = 1;
+            eventGrid.TabIndex = 2;
 
             backButton = CreateToolButton("NavigateBack", "Back", "Back (Alt+Left)", (_, _) => GoBack());
             forwardButton = CreateToolButton("NavigateForward", "Forward", "Forward (Alt+Right)", (_, _) => GoForward());
-            playButton = CreateToolButton("AudioPlay", "Play event", "Play event (Space)", (_, _) => PlayEvent());
+            playButton = CreateToolButton("RendererPlay", "Play event", "Play event (Space)", (_, _) => PlayEvent());
             stopButton = CreateToolButton("RendererStop", "Stop", "Stop (Esc)", (_, _) => StopPlayback());
             copyButton = CreateToolButton("CopyName", "Copy name", "Copy name (Ctrl+C in the list)", (_, _) => CopyName());
             openButton = CreateToolButton("Open", "Open file", "Open the file that defines this event", (_, _) => OpenDefiningFile());
@@ -316,7 +324,8 @@ namespace GUI.Types.Viewers
                 Dock = DockStyle.Top,
                 AutoSize = true,
                 MaximumSize = new Size(4000, 0),
-                Padding = new Padding(this.AdjustForDPI(12), this.AdjustForDPI(4), 0, this.AdjustForDPI(4)),
+                Padding = new Padding(this.AdjustForDPI(12), this.AdjustForDPI(4) + smallFont.Height, 0, this.AdjustForDPI(4)),
+                MinimumSize = new Size(this.AdjustForDPI(16) + System.Windows.Forms.TextRenderer.MeasureText("Caption", smallFont).Width, 0),
                 UseMnemonic = false,
                 AccessibleName = "Caption",
             };
@@ -324,6 +333,8 @@ namespace GUI.Types.Viewers
             {
                 using var bar = new SolidBrush(Themer.CurrentThemeColors.Accent);
                 e.Graphics.FillRectangle(bar, 0, this.AdjustForDPI(2), this.AdjustForDPI(3), captionLabel.Height - this.AdjustForDPI(4));
+                System.Windows.Forms.TextRenderer.DrawText(e.Graphics, "Caption", smallFont, new Point(this.AdjustForDPI(12), this.AdjustForDPI(2)),
+                    Themer.CurrentThemeColors.ContrastSoft, TextFormatFlags.NoPadding);
             };
 
             propertyGrid = new Grid("Properties") { EmptyText = "This event has no keys" };
@@ -335,15 +346,17 @@ namespace GUI.Types.Viewers
             propertyGrid.CellPainting += OnPropertyCellPainting;
             propertyGrid.FindLink = FindPropertyLink;
 
-            soundGrid = new Grid("Sounds") { LinkColumn = 0, EmptyText = "This event names no sounds" };
+            soundGrid = new Grid("Sounds") { LinkColumn = 0, EmptyText = "This event plays no sounds" };
             soundGrid.Columns.Add(CreateColumn("Sound", 70));
-            soundGrid.Columns.Add(CreateColumn("Key", 30));
+            soundGrid.Columns.Add(CreateColumn("Key", 20));
+            soundGrid.Columns.Add(CreateColumn("Source", 20));
             soundGrid.Columns.Add(CreateColumn("Status", 10));
             soundGrid.SelectionChanged += OnSoundSelectionChanged;
 
             referenceGrid = new Grid("References") { LinkColumn = 0, EmptyText = "This event names no other events" };
             referenceGrid.Columns.Add(CreateColumn("Event", 70));
-            referenceGrid.Columns.Add(CreateColumn("Key", 30));
+            referenceGrid.Columns.Add(CreateColumn("Key", 20));
+            referenceGrid.Columns.Add(CreateColumn("Source", 20));
             referenceGrid.Columns.Add(CreateColumn("Status", 10));
 
             usedByGrid = new Grid("Used by") { LinkColumn = 0, EmptyText = "No event names this event" };
@@ -357,7 +370,7 @@ namespace GUI.Types.Viewers
 
                 foreach (DataGridViewColumn column in grid.Columns)
                 {
-                    if (column.HeaderText is "Key" or "Status")
+                    if (column.HeaderText is "Key" or "Source" or "Status")
                     {
                         column.AutoSizeMode = DataGridViewAutoSizeColumnMode.AllCells;
                         column.MinimumWidth = this.AdjustForDPI(60);
@@ -975,12 +988,31 @@ namespace GUI.Types.Viewers
 
             e.Value = e.ColumnIndex switch
             {
-                0 => row.HasWarning ? "\u26A0" : string.Empty,
+                0 => string.Empty,
                 1 => row.Name,
                 2 => row.Type.Length > 0 ? row.Type : "(no type)",
                 3 => row.Duration >= 0f ? row.Duration.ToString("0.00 s", CultureInfo.InvariantCulture) : string.Empty,
                 _ => ShortFileName(row.File),
             };
+        }
+
+        private void OnEventCellPainting(object? sender, DataGridViewCellPaintingEventArgs e)
+        {
+            if (e.ColumnIndex != 0 || e.RowIndex < 0 || e.RowIndex >= filteredRows.Count || e.Graphics == null)
+            {
+                return;
+            }
+
+            e.Paint(e.CellBounds, DataGridViewPaintParts.Background | DataGridViewPaintParts.SelectionBackground);
+
+            if (filteredRows[e.RowIndex].HasWarning)
+            {
+                var size = this.AdjustForDPI(16);
+                var bounds = new Rectangle(e.CellBounds.Left + (e.CellBounds.Width - size) / 2, e.CellBounds.Top + (e.CellBounds.Height - size) / 2, size, size);
+                e.Graphics.DrawIcon(SystemIcons.Warning, bounds);
+            }
+
+            e.Handled = true;
         }
 
         private void OnEventCellFormatting(object? sender, DataGridViewCellFormattingEventArgs e)
@@ -992,7 +1024,7 @@ namespace GUI.Types.Viewers
 
             var row = filteredRows[e.RowIndex];
 
-            if ((e.ColumnIndex == 1 && !row.Playable) || (e.ColumnIndex == 2 && row.Type.Length == 0))
+            if (e.ColumnIndex == 2 && row.Type.Length == 0)
             {
                 e.CellStyle.ForeColor = Themer.CurrentThemeColors.ContrastSoft;
             }
@@ -1009,16 +1041,23 @@ namespace GUI.Types.Viewers
 
             e.ToolTipText = e.ColumnIndex switch
             {
-                0 => string.Join(Environment.NewLine, new[]
-                {
-                    row.Rejected ? "The engine does not play this event." : row.HasProblems ? "The engine skips some of its bases." : null,
-                    row.MissingBase ? "A base event is not loaded." : null,
-                    row.MissingSound ? "A sound it names is not shipped." : null,
-                }.OfType<string>()),
-                1 when !row.Playable => row.Rejected ? "The engine does not play this event" : "This event cannot be played here",
+                0 => GetWarning(e.RowIndex),
                 4 => row.File,
                 _ => string.Empty,
             };
+        }
+
+        /// <summary>Gets what the status column of a row in the event list warns about, or an empty string.</summary>
+        public string GetWarning(int rowIndex)
+        {
+            var row = filteredRows[rowIndex];
+
+            return string.Join(Environment.NewLine, new[]
+            {
+                row.Rejected ? "The engine does not play this event." : row.HasProblems ? "The engine skips some of its bases." : null,
+                row.MissingBase ? "A base event is not loaded." : null,
+                row.MissingSound ? "A sound it names is not shipped." : null,
+            }.OfType<string>());
         }
 
         private void OnEventSelectionChanged(object? sender, EventArgs e)
@@ -1133,13 +1172,18 @@ namespace GUI.Types.Viewers
                 scopeBox.SelectedIndex = 1;
             }
 
+            var ownFile = row.File.Equals(fileName, StringComparison.OrdinalIgnoreCase);
+
             titleLabel.Text = row.Name;
             toolTip.SetToolTip(titleLabel, row.Name);
             SetLink(typeLink, "Stack: ", row.Type.Length > 0 ? row.Type : "(no type)", index!.GetStackFile(row.Type) != null);
-            SetLink(fileLink, "File: ", row.File, enabled: true);
+            SetLink(fileLink, "File: ", ShortFileName(row.File), enabled: !ownFile);
+            toolTip.SetToolTip(fileLink, row.File);
             ShowBases(row);
 
             var (resolved, problems, _) = index.Resolve(row.Data);
+            CollectLinks(row, resolved);
+
             var notice = new StringBuilder();
             var noticeLinks = new List<(int Start, int Length, string File)>();
             List<string> definitionFiles = [.. index.GetDefinitions(row.Name).Select(static d => d.File)];
@@ -1150,14 +1194,15 @@ namespace GUI.Types.Viewers
 
                 foreach (var file in definitionFiles.Where(f => f != row.File))
                 {
+                    var shortName = ShortFileName(file);
                     notice.Append(noticeLinks.Count > 0 ? ", " : string.Empty);
-                    noticeLinks.Add((notice.Length, file.Length, file));
-                    notice.Append(file);
+                    noticeLinks.Add((notice.Length, shortName.Length, file));
+                    notice.Append(shortName);
                 }
 
                 notice.Append(definitionFiles[^1] == row.File
                     ? ". This definition is used, as it loads last."
-                    : $". The definition in {definitionFiles[^1]} is used, as it loads last.");
+                    : $". The definition in {ShortFileName(definitionFiles[^1])} is used, as it loads last.");
             }
 
             List<string> lines = [.. problems];
@@ -1171,18 +1216,24 @@ namespace GUI.Types.Viewers
                     lines.Add($"{collision.Stack} field {collision.Name} collides with the stack's own field, so the engine shifts this base's later values by one field.");
                 }
             }
+
             lines.AddRange(SoundEventIndex.GetBases(row.Data).Where(b => index.Find(b.Name) == null)
                 .Select(static b => $"Base {b.Name} is not loaded, so the keys it would give are missing."));
+
+            var firstSound = eventSounds.FindIndex(static s => s.Exists);
+            var playsEvents = eventReferences.Any(static r => r.Key != "base");
+
+            if (eventSounds.Count > 0 && firstSound < 0)
+            {
+                lines.Add("None of the sounds this event names are shipped.");
+            }
+
             var hasProblems = lines.Count > 0;
-            var playsSounds = resolved.Any(r => GetLinks(r.Key, r.Value).Count > 0);
 
             if (!row.Playable && !row.Rejected)
             {
-                lines.Add(row.Type.Length == 0
-                    ? "Has no type, so it cannot be played as an event."
-                    : index.GetSoundReferences(row.Data).Count > 0
-                        ? $"Events of type {row.Type} cannot be played here. Play its sounds below."
-                        : $"Events of type {row.Type} cannot be played here.");
+                var reason = row.Type.Length == 0 ? "Source 2 Viewer cannot play events without a type" : $"Source 2 Viewer cannot play {row.Type} events";
+                lines.Add(firstSound >= 0 ? $"{reason}, so Play plays its first sound." : $"{reason}.");
             }
 
             foreach (var line in lines)
@@ -1209,15 +1260,59 @@ namespace GUI.Types.Viewers
             captionLabel.Visible = captionText.Length > 0;
             captionLabel.ForeColor = Themer.CurrentThemeColors.Contrast;
 
-            playButton.Enabled = row.Playable && playsSounds;
-            toolTip.SetToolTip(playButton, !row.Playable ? "This event cannot be played here" : !playsSounds ? "This event plays no sounds" : "Play event (Space)");
+            var (canPlay, playTip) = row.Playable
+                ? firstSound >= 0 || playsEvents ? (true, "Play event (Space)")
+                    : eventSounds.Count > 0 ? (false, "None of this event's sounds are shipped")
+                    : (false, "This event plays no sounds")
+                : firstSound >= 0 ? (true, "Play its first sound (Space)")
+                : row.Rejected ? (false, "The engine does not play this event")
+                : (false, row.Type.Length == 0 ? "Source 2 Viewer cannot play events without a type" : $"Source 2 Viewer cannot play {row.Type} events");
+
+            playButton.Enabled = canPlay;
+            toolTip.SetToolTip(playButton, playTip);
             backButton.Enabled = backHistory.Count > 0;
             forwardButton.Enabled = forwardHistory.Count > 0;
             copyButton.Enabled = true;
-            openButton.Enabled = true;
+            openButton.Enabled = !ownFile;
+            toolTip.SetToolTip(openButton, ownFile ? "The event is in this file" : $"Open {row.File}");
 
             ShowProperties();
-            ShowLinks(row);
+            ShowLinks();
+        }
+
+        /// <summary>Lists the sounds and events that the event's resolved keys name, and its bases.</summary>
+        private void CollectLinks(EventRow row, List<(string Key, KVObject Value, string? Source, string? Field)> resolved)
+        {
+            eventSounds.Clear();
+            eventReferences.Clear();
+            missingSounds.Clear();
+
+            foreach (var (name, _) in SoundEventIndex.GetBases(row.Data))
+            {
+                eventReferences.Add(("base", name, null));
+            }
+
+            foreach (var (key, value, source, _) in resolved)
+            {
+                var holder = KVObject.Collection();
+                holder.Add(key, value);
+
+                foreach (var (_, sound) in index!.GetSoundReferences(holder))
+                {
+                    var exists = SoundExists(sound);
+                    eventSounds.Add((key, sound, source, exists));
+
+                    if (!exists)
+                    {
+                        missingSounds.Add(sound);
+                    }
+                }
+
+                foreach (var (_, target) in index.GetEventReferences(row.Name, holder))
+                {
+                    eventReferences.Add((key, target, source));
+                }
+            }
         }
 
         private static void SetLink(LinkLabel label, string prefix, string text, bool enabled)
@@ -1228,19 +1323,20 @@ namespace GUI.Types.Viewers
         }
 
         /// <summary>
-        /// Shows the chain of bases, following a single string base down to its own bases. Fragments of an array base are
-        /// listed with the field they apply to, and end the chain.
+        /// Shows the chain of bases, following a string base down to its own bases. The fragments of an array base are
+        /// listed in brackets with the field they apply to, and end the chain.
         /// </summary>
         private void ShowBases(EventRow row)
         {
             var text = new StringBuilder("Base: ");
             var links = new List<(int Start, int Length, string Name, bool Loaded)>();
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { row.Name };
-            var bases = SoundEventIndex.GetBases(row.Data);
+            var data = row.Data;
 
-            while (bases.Count > 0)
+            while (SoundEventIndex.GetBases(data) is { Count: > 0 } bases)
             {
-                text.Append(links.Count > 0 ? " > " : string.Empty);
+                var array = data.TryGetValue("base", out var baseValue) && baseValue.ValueType == KVValueType.Array;
+                text.Append(links.Count > 0 ? " > " : string.Empty).Append(array ? "[" : string.Empty);
 
                 for (var i = 0; i < bases.Count; i++)
                 {
@@ -1255,12 +1351,14 @@ namespace GUI.Types.Viewers
                     }
                 }
 
-                if (bases.Count > 1 || bases[0].Field != null || !seen.Add(bases[0].Name) || index!.Find(bases[0].Name) is not { } baseEvent)
+                text.Append(array ? "]" : string.Empty);
+
+                if (array || !seen.Add(bases[0].Name) || index!.Find(bases[0].Name) is not { } baseEvent)
                 {
                     break;
                 }
 
-                bases = SoundEventIndex.GetBases(baseEvent);
+                data = baseEvent;
             }
 
             baseLink.Text = text.ToString();
@@ -1285,34 +1383,36 @@ namespace GUI.Types.Viewers
 
         private void FollowLink(object target)
         {
-            switch (target)
+            if (target == SoundsTabLink)
             {
-                case string sound when sound.EndsWith(".vsnd", StringComparison.OrdinalIgnoreCase):
-                    var soundRow = soundGrid.Rows.Cast<DataGridViewRow>().FirstOrDefault(r => sound.Equals(r.Tag as string, StringComparison.OrdinalIgnoreCase));
-
-                    if (soundRow == null)
-                    {
-                        Resource.OpenExternalReference(guiContext, sound);
-                        break;
-                    }
-
-                    linkTabs.SelectedTab = soundsPage;
-
-                    if (soundGrid.CurrentRow != soundRow)
-                    {
-                        soundGrid.CurrentCell = soundRow.Cells[0];
-                    }
-                    else if (audioPanel == null)
-                    {
-                        PlaySound(soundRow.Index, autoPlay: false);
-                    }
-
-                    break;
-
-                case string name:
-                    ShowEvent(name);
-                    break;
+                linkTabs.SelectedTab = soundsPage;
+                return;
             }
+
+            if (target is not string name)
+            {
+                return;
+            }
+
+            if (!name.EndsWith(".vsnd", StringComparison.OrdinalIgnoreCase))
+            {
+                ShowEvent(name);
+                return;
+            }
+
+            var soundRow = soundGrid.Rows.Cast<DataGridViewRow>().FirstOrDefault(r => name.Equals(r.Tag as string, StringComparison.OrdinalIgnoreCase));
+
+            if (soundRow == null)
+            {
+                Resource.OpenExternalReference(guiContext, name);
+                return;
+            }
+
+            linkTabs.SelectedTab = soundsPage;
+            updating = true;
+            soundGrid.CurrentCell = soundRow.Cells[0];
+            updating = false;
+            PlaySound(soundRow.Index, autoPlay: true);
         }
 
         private void ShowEmptyDetails()
@@ -1453,12 +1553,19 @@ namespace GUI.Types.Viewers
 
                     if (isCurve && value != null && ParseCurve(value) is var (curve, keyPoints))
                     {
-                        gridRow.Cells[1].Tag = (curve, keyPoints);
-                        gridRow.Height = this.AdjustForDPI(44);
+                        if (GetConstantValue(curve, keyPoints) is { } constant)
+                        {
+                            gridRow.Cells[1].Value = $"constant {FormatNumber(constant, "G2")}";
+                        }
+                        else
+                        {
+                            gridRow.Cells[1].Tag = (curve, keyPoints, kind == ValueSource.Default);
+                            gridRow.Height = this.AdjustForDPI(44);
+                        }
                     }
                     else if (value != null && kind != ValueSource.Default && GetLinks(key, value) is { Count: > 0 } links)
                     {
-                        gridRow.Cells[1].Tag = GetSegments(value, links);
+                        gridRow.Cells[1].Tag = GetSegments(value, links, missingSounds);
                     }
 
                     switch (kind)
@@ -1488,54 +1595,68 @@ namespace GUI.Types.Viewers
                 ? number.ToString("0.######", CultureInfo.InvariantCulture)
                 : FormatValue(value);
 
-        /// <summary>Splits a value that names sounds or events into its text and the names to link.</summary>
-        private static List<(string Text, bool Link)> GetSegments(KVObject value, List<string> links)
+        /// <summary>
+        /// Splits a value that names sounds or events into its text and what each part links to. A list of more than three
+        /// sounds is shortened to their count, linking to the sounds tab. Sounds that are not shipped do not link.
+        /// </summary>
+        private static List<(string Text, object? Target, bool Missing)> GetSegments(KVObject value, List<string> links, HashSet<string> missingSounds)
         {
-            var segments = new List<(string Text, bool Link)>();
-            var items = value.ValueType == KVValueType.Array ? value.Values.ToList() : [value];
+            var segments = new List<(string Text, object? Target, bool Missing)>();
+            List<KVObject> items = value.ValueType == KVValueType.Array ? [.. value.Values] : [value];
+
+            if (items.Count > 3 && items.All(static item => item.ValueType == KVValueType.String && ((string)item).EndsWith(".vsnd", StringComparison.OrdinalIgnoreCase)))
+            {
+                return [("[", null, false), (string.Create(CultureInfo.InvariantCulture, $"{items.Count} sounds"), SoundsTabLink, false), ("]", null, false)];
+            }
 
             if (value.ValueType == KVValueType.Array)
             {
-                segments.Add(("[", false));
+                segments.Add(("[", null, false));
             }
 
             for (var i = 0; i < items.Count; i++)
             {
                 if (i > 0)
                 {
-                    segments.Add((", ", false));
+                    segments.Add((", ", null, false));
                 }
 
                 var text = FormatValue(items[i]);
-                segments.Add((text, items[i].ValueType == KVValueType.String && links.Contains(text)));
+                var missing = missingSounds.Contains(text);
+                segments.Add((text, !missing && items[i].ValueType == KVValueType.String && links.Contains(text) ? text : null, missing));
             }
 
             if (value.ValueType == KVValueType.Array)
             {
-                segments.Add(("]", false));
+                segments.Add(("]", null, false));
             }
 
             return segments;
         }
 
-        private IEnumerable<(Rectangle Bounds, string Text, bool Link)> LayoutSegments(List<(string Text, bool Link)> segments, Rectangle cell, Font font)
+        /// <summary>Lays out the parts of a value from the left of its cell, cutting the part that reaches its right edge.</summary>
+        private IEnumerable<(Rectangle Bounds, string Text, object? Target, bool Missing, bool Cut)> LayoutSegments(
+            List<(string Text, object? Target, bool Missing)> segments, Rectangle cell, Font font)
         {
             var x = cell.Left + this.AdjustForDPI(2);
+            var right = cell.Right - this.AdjustForDPI(2);
 
-            foreach (var (text, link) in segments)
+            foreach (var (text, target, missing) in segments)
             {
-                if (x >= cell.Right)
+                var width = System.Windows.Forms.TextRenderer.MeasureText(text, font, Size.Empty, SegmentFlags).Width;
+
+                if (x + width > right)
                 {
+                    yield return (new Rectangle(x, cell.Top, Math.Max(0, right - x), cell.Height), text, target, missing, true);
                     yield break;
                 }
 
-                var width = System.Windows.Forms.TextRenderer.MeasureText(text, font, Size.Empty, SegmentFlags).Width;
-                yield return (new Rectangle(x, cell.Top, Math.Min(width, cell.Right - x), cell.Height), text, link);
+                yield return (new Rectangle(x, cell.Top, width, cell.Height), text, target, missing, false);
                 x += width;
             }
         }
 
-        private string? FindPropertyLink(int rowIndex, int columnIndex, Point location)
+        private object? FindPropertyLink(int rowIndex, int columnIndex, Point location)
         {
             var row = propertyGrid.Rows[rowIndex];
 
@@ -1544,7 +1665,7 @@ namespace GUI.Types.Viewers
                 return ((string)row.Cells[2].Value!).Split(" via ")[0];
             }
 
-            if (columnIndex != 1 || row.Cells[1].Tag is not List<(string Text, bool Link)> segments)
+            if (columnIndex != 1 || row.Cells[1].Tag is not List<(string Text, object? Target, bool Missing)> segments)
             {
                 return null;
             }
@@ -1552,7 +1673,7 @@ namespace GUI.Types.Viewers
             var cell = propertyGrid.GetCellDisplayRectangle(1, rowIndex, cutOverflow: false);
             var font = row.Cells[1].InheritedStyle.Font ?? propertyGrid.Font;
 
-            return LayoutSegments(segments, new Rectangle(Point.Empty, cell.Size), font).FirstOrDefault(s => s.Link && s.Bounds.Contains(location)).Text;
+            return LayoutSegments(segments, new Rectangle(Point.Empty, cell.Size), font).FirstOrDefault(s => s.Target != null && s.Bounds.Contains(location)).Target;
         }
 
         [GeneratedRegex("<[^<>]*>")]
@@ -1722,60 +1843,77 @@ namespace GUI.Types.Viewers
 
             switch (row.Cells[1].Tag)
             {
-                case List<(string Text, bool Link)> segments:
+                case List<(string Text, object? Target, bool Missing)> segments:
                     e.Paint(e.CellBounds, DataGridViewPaintParts.Background | DataGridViewPaintParts.SelectionBackground);
 
-                    foreach (var (bounds, text, link) in LayoutSegments(segments, e.CellBounds, font))
+                    foreach (var (bounds, text, target, missing, cut) in LayoutSegments(segments, e.CellBounds, font))
                     {
-                        var color = selected ? e.CellStyle.SelectionForeColor : link ? LinkColor : e.CellStyle.ForeColor;
-                        System.Windows.Forms.TextRenderer.DrawText(e.Graphics, text, font, bounds, color, SegmentFlags);
+                        var color = selected ? e.CellStyle.SelectionForeColor
+                            : missing ? Themer.CurrentThemeColors.Attention
+                            : target != null ? LinkColor
+                            : e.CellStyle.ForeColor;
+                        System.Windows.Forms.TextRenderer.DrawText(e.Graphics, text, font, bounds, color, cut ? SegmentFlags | TextFormatFlags.EndEllipsis : SegmentFlags);
                     }
 
                     e.Handled = true;
                     break;
 
-                case (SoundEventCurve curve, PointF[] keys):
+                case (SoundEventCurve curve, PointF[] keys, bool dimmed):
                     e.Paint(e.CellBounds, DataGridViewPaintParts.Background | DataGridViewPaintParts.SelectionBackground);
-                    DrawCurve(e.Graphics, e.CellBounds, curve, keys, font);
+                    DrawCurve(e.Graphics, e.CellBounds, curve, keys, dimmed, font);
                     e.Handled = true;
                     break;
             }
         }
 
-        private void DrawCurve(Graphics graphics, Rectangle cell, SoundEventCurve curve, PointF[] keys, Font font)
+        /// <summary>Gets the value of a curve that stays within 1% of one value, or null when it changes more.</summary>
+        private static float? GetConstantValue(SoundEventCurve curve, PointF[] keys)
         {
-            var padding = this.AdjustForDPI(4);
-            var plot = Rectangle.Inflate(cell, -padding, -padding);
-            var labelWidth = Math.Min(plot.Width / 2, this.AdjustForDPI(150));
-            var labelArea = new Rectangle(plot.Right - labelWidth, plot.Top, labelWidth, plot.Height);
-            plot.Width -= labelWidth + padding;
+            var (minY, maxY) = GetRange(curve, keys, samples: 64, out _);
+            return maxY - minY <= MathF.Max(0.0001f, 0.01f * MathF.Max(MathF.Abs(minY), MathF.Abs(maxY))) ? (minY + maxY) / 2f : null;
+        }
 
-            var samples = Math.Max(2, plot.Width / 2);
+        private static (float Min, float Max) GetRange(SoundEventCurve curve, PointF[] keys, int samples, out float[] values)
+        {
             var minX = curve.MinX;
             var maxX = Math.Max(curve.MaxX, minX + 0.0001f);
-            var values = new float[samples];
+            values = new float[samples];
 
             for (var i = 0; i < samples; i++)
             {
                 values[i] = curve.Evaluate(float.Lerp(minX, maxX, i / (samples - 1f)));
             }
 
-            var minY = MathF.Min(values.Min(), keys.Min(static k => k.Y));
-            var maxY = MathF.Max(values.Max(), keys.Max(static k => k.Y));
-            var constant = maxY - minY <= MathF.Max(0.0001f, 0.01f * MathF.Max(MathF.Abs(minY), MathF.Abs(maxY)));
+            return (MathF.Min(values.Min(), keys.Min(static k => k.Y)), MathF.Max(values.Max(), keys.Max(static k => k.Y)));
+        }
+
+        private void DrawCurve(Graphics graphics, Rectangle cell, SoundEventCurve curve, PointF[] keys, bool dimmed, Font font)
+        {
+            var padding = this.AdjustForDPI(4);
+            var frame = Rectangle.Inflate(cell, -padding, -padding);
+            var labelWidth = Math.Min(frame.Width / 2, this.AdjustForDPI(150));
+            var labelArea = new Rectangle(frame.Right - labelWidth, frame.Top, labelWidth, frame.Height);
+            frame.Width -= labelWidth + padding;
+            var plot = Rectangle.Inflate(frame, 0, -this.AdjustForDPI(3));
+
+            var samples = Math.Max(2, plot.Width / 2);
+            var (minY, maxY) = GetRange(curve, keys, samples, out var values);
+            var minX = curve.MinX;
+            var maxX = Math.Max(curve.MaxX, minX + 0.0001f);
+            var color = dimmed ? Themer.CurrentThemeColors.ContrastSoft : Themer.CurrentThemeColors.Accent;
 
             float ToX(float x) => plot.Left + (x - minX) / (maxX - minX) * plot.Width;
-            float ToY(float y) => constant ? plot.Top + plot.Height / 2f : plot.Bottom - (y - minY) / (maxY - minY) * plot.Height;
+            float ToY(float y) => plot.Bottom - (y - minY) / (maxY - minY) * plot.Height;
 
             using var framePen = new Pen(Themer.CurrentThemeColors.Border);
-            using var curvePen = new Pen(Themer.CurrentThemeColors.Accent, this.AdjustForDPI(2));
-            using var dotBrush = new SolidBrush(Themer.CurrentThemeColors.Accent);
+            using var curvePen = new Pen(color, this.AdjustForDPI(2));
+            using var dotBrush = new SolidBrush(color);
 
             var state = graphics.Save();
             graphics.SmoothingMode = SmoothingMode.AntiAlias;
-            graphics.DrawRectangle(framePen, plot);
+            graphics.DrawRectangle(framePen, frame);
 
-            if (!constant && minY < 0f && maxY > 0f)
+            if (minY < 0f && maxY > 0f)
             {
                 using var baselinePen = new Pen(Themer.CurrentThemeColors.Border) { DashStyle = DashStyle.Dash };
                 graphics.DrawLine(baselinePen, plot.Left, ToY(0f), plot.Right, ToY(0f));
@@ -1790,10 +1928,9 @@ namespace GUI.Types.Viewers
                 graphics.FillEllipse(dotBrush, ToX(key.X) - radius, ToY(key.Y) - radius, radius * 2, radius * 2);
             }
 
-            var range = constant
-                ? $"constant {FormatNumber((minY + maxY) / 2f, "G2")}"
-                : $"x {FormatNumber(minX)} to {FormatNumber(maxX)}{Environment.NewLine}y {FormatNumber(minY)} to {FormatNumber(maxY)}";
             graphics.Restore(state);
+
+            var range = $"x {FormatNumber(minX)} to {FormatNumber(maxX)}{Environment.NewLine}y {FormatNumber(minY)} to {FormatNumber(maxY)}";
             System.Windows.Forms.TextRenderer.DrawText(graphics, range, font, labelArea, Themer.CurrentThemeColors.ContrastSoft,
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
         }
@@ -1801,15 +1938,14 @@ namespace GUI.Types.Viewers
         private static string FormatNumber(float value, string format = "G3")
             => value.ToString(MathF.Abs(value) >= 1000f ? "0" : format, CultureInfo.InvariantCulture);
 
-        private void ShowLinks(EventRow row)
+        private void ShowLinks()
         {
             updating = true;
             soundGrid.Rows.Clear();
 
-            foreach (var (key, sound) in index!.GetSoundReferences(row.Data))
+            foreach (var (key, sound, source, exists) in eventSounds)
             {
-                var exists = SoundExists(sound);
-                var soundRow = soundGrid.Rows[soundGrid.Rows.Add(sound, key, exists ? string.Empty : "Not shipped")];
+                var soundRow = soundGrid.Rows[soundGrid.Rows.Add(sound, key, source == null ? "own" : $"from {source}", exists ? string.Empty : "Not shipped")];
                 soundRow.Tag = exists ? sound : null;
 
                 if (!exists)
@@ -1820,10 +1956,10 @@ namespace GUI.Types.Viewers
 
             referenceGrid.Rows.Clear();
 
-            foreach (var (key, target) in index.GetEventReferences(row.Name, row.Data))
+            foreach (var (key, target, source) in eventReferences)
             {
-                var exists = index.Find(target) != null;
-                var referenceRow = referenceGrid.Rows[referenceGrid.Rows.Add(target, key, exists ? string.Empty : "Not loaded")];
+                var exists = index!.Find(target) != null;
+                var referenceRow = referenceGrid.Rows[referenceGrid.Rows.Add(target, key, source == null ? "own" : $"from {source}", exists ? string.Empty : "Not loaded")];
                 referenceRow.Tag = exists ? target : null;
 
                 if (!exists)
@@ -1832,9 +1968,12 @@ namespace GUI.Types.Viewers
                 }
             }
 
+            soundGrid.Columns[3].Visible = eventSounds.Any(static s => !s.Exists);
+            referenceGrid.Columns[3].Visible = referenceGrid.Rows.Cast<DataGridViewRow>().Any(static r => r.Tag == null);
+
             usedByGrid.Rows.Clear();
 
-            foreach (var (user, key) in index.GetReferencedBy(row.Name).OrderBy(static u => u.Event, StringComparer.OrdinalIgnoreCase))
+            foreach (var (user, key) in index!.GetReferencedBy(current!.Name).OrderBy(static u => u.Event, StringComparer.OrdinalIgnoreCase))
             {
                 var file = index.GetDefinitions(user)[^1].File;
                 var userRow = usedByGrid.Rows[usedByGrid.Rows.Add(user, key, ShortFileName(file))];
@@ -1951,6 +2090,12 @@ namespace GUI.Types.Viewers
         /// <summary>Plays the shown event through the renderer's sound event player, without spatialization.</summary>
         public void PlayEvent()
         {
+            if (current is { Playable: false } && eventSounds.FindIndex(static s => s.Exists) is var first and >= 0)
+            {
+                FollowLink(eventSounds[first].Sound);
+                return;
+            }
+
             if (current is not { Playable: true } row || index == null)
             {
                 return;
@@ -2166,6 +2311,7 @@ namespace GUI.Types.Viewers
             if (e.KeyCode is Keys.Down or Keys.Enter && filteredRows.Count > 0)
             {
                 eventGrid.Focus();
+                eventGrid.CurrentCell = eventGrid.Rows[0].Cells[1];
                 e.Handled = true;
                 e.SuppressKeyPress = true;
             }
@@ -2255,6 +2401,7 @@ namespace GUI.Types.Viewers
                 boldFont.Dispose();
                 italicFont.Dispose();
                 groupFont.Dispose();
+                smallFont.Dispose();
             }
 
             base.Dispose(disposing);
@@ -2417,6 +2564,17 @@ namespace GUI.Types.Viewers
                 }
 
                 return base.ProcessCmdKey(ref msg, keyData);
+            }
+
+            protected override bool ProcessDataGridViewKey(KeyEventArgs e)
+            {
+                if (e.KeyData == Keys.Enter && CurrentRow != null)
+                {
+                    Activated?.Invoke(this, CurrentRow.Index);
+                    return true;
+                }
+
+                return base.ProcessDataGridViewKey(e);
             }
 
             protected override bool ProcessDialogKey(Keys keyData)

@@ -139,9 +139,9 @@ namespace GUI.Utils
             [ViewerType.SoundEventViewer] =
             [
                 new("Ctrl+F", "Search"),
-                new("Space", "Play event"),
+                new("Space", "Play"),
+                new("Enter", "Play or follow link"),
                 new("Esc", "Stop"),
-                new("Enter", "Follow link"),
                 new("Alt+←→", "Back/Forward"),
                 new("Ctrl+C", "Copy name"),
             ],

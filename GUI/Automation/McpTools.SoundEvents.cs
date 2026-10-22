@@ -87,7 +87,7 @@ internal sealed partial class McpTools
                     Type = cells[2].Value,
                     Duration = cells[3].Value is string { Length: > 0 } duration ? duration : null,
                     File = cells[4].ToolTipText is { Length: > 0 } file ? file : null,
-                    Warning = cells[0].Value is string { Length: > 0 } ? cells[0].ToolTipText : null,
+                    Warning = viewer.GetWarning(i) is { Length: > 0 } warning ? warning : null,
                 });
             }
 
@@ -160,7 +160,7 @@ internal sealed partial class McpTools
 
                     if (!viewer.PlaySound(sound, autoPlay: true))
                     {
-                        throw new ToolException(string.Create(CultureInfo.InvariantCulture, $"Sound {sound} cannot be played. {sounds.Rows[sound].Cells[2].Value}"));
+                        throw new ToolException(string.Create(CultureInfo.InvariantCulture, $"Sound {sound} cannot be played. {sounds.Rows[sound].Cells[3].Value}"));
                     }
 
                     break;
