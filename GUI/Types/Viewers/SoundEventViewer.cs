@@ -633,28 +633,11 @@ namespace GUI.Types.Viewers
         }
 
         /// <summary>
-        /// The path a file has in the index: its path in its package, or for a file on disk, its path in the game folder
-        /// that holds it. A file outside every game folder keeps its full path.
+        /// The path a file has in the index: its path in its package, or for a file on disk, its path in the addon folder
+        /// or game folder that holds it. A file outside of those keeps its full path.
         /// </summary>
         private static string GetIndexPath(VrfGuiContext context)
-        {
-            if (!Path.IsPathRooted(context.FileName))
-            {
-                return context.FileName;
-            }
-
-            foreach (var folder in context.RootContext.GameSearchPaths)
-            {
-                var relative = Path.GetRelativePath(folder, context.FileName);
-
-                if (!relative.StartsWith("..", StringComparison.Ordinal) && !Path.IsPathRooted(relative))
-                {
-                    return relative.Replace(Path.DirectorySeparatorChar, '/');
-                }
-            }
-
-            return context.FileName;
-        }
+            => Path.IsPathRooted(context.FileName) ? context.RootContext.GetSearchPath(context.FileName) ?? context.FileName : context.FileName;
 
         /// <summary>
         /// Creates a list of the sound events that play a sound, filled once the index is built. Double-clicking an event
@@ -1191,7 +1174,9 @@ namespace GUI.Types.Viewers
             noticeLabel.ForeColor = hasProblems ? Themer.CurrentThemeColors.Attention : Themer.CurrentThemeColors.ContrastSoft;
 
             var closedCaption = captions.Select(c => c[row.Name.ToLowerInvariant()]).FirstOrDefault(static c => c != null);
-            captionText = CaptionMarkupRegex().Replace(closedCaption?.Text ?? GetString(resolved, "line_text"), string.Empty).Trim();
+            captionText = new[] { closedCaption?.Text, GetString(resolved, "line_text") }
+                .Select(static text => CaptionMarkupRegex().Replace(text ?? string.Empty, string.Empty).Trim())
+                .FirstOrDefault(static text => text.Length > 0) ?? string.Empty;
             captionLabel.Text = captionText;
             captionLabel.Visible = captionText.Length > 0;
             captionLabel.ForeColor = Themer.CurrentThemeColors.Contrast;
@@ -1327,36 +1312,56 @@ namespace GUI.Types.Viewers
             var resolved = index.Resolve(current.Data).Keys;
             var fields = current.Type.Length > 0 ? index.GetStackFields(current.Type) : [];
             var groups = new List<(string Name, List<(string Key, KVObject? Value, string Source, ValueSource Kind, bool Curve)> Rows)>();
-            var fieldNames = new Dictionary<string, KVObject>(StringComparer.OrdinalIgnoreCase);
-            var byFieldName = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-
-            foreach (var (name, field, _) in fields)
-            {
-                fieldNames[name] = field;
-            }
-
-            // Keys of a scoped sub-stack are named after its field, keys of an unscoped one keep their own names
-            for (var i = 0; i < resolved.Count; i++)
-            {
-                var (key, _, _, subStack) = resolved[i];
-
-                if (subStack == null)
-                {
-                    byFieldName.TryAdd(key, i);
-                }
-                else if (fieldNames.TryGetValue(subStack, out var opvar) && opvar.GetBooleanProperty("use_public_opvar_scope"))
-                {
-                    byFieldName.TryAdd($"{subStack}.{key}", i);
-                }
-            }
-
             var shown = new HashSet<int>();
+            var fieldKeys = new Dictionary<int, int>();
             var captionLine = resolved.FindIndex(r => r.Key.Equals("line_text", StringComparison.OrdinalIgnoreCase) && r.Field == null
                 && r.Value.ValueType == KVValueType.String && CaptionMarkupRegex().Replace((string)r.Value, string.Empty).Trim() == captionText);
 
             if (captionLine >= 0)
             {
                 shown.Add(captionLine);
+            }
+
+            // Keys come in the order they win. Each sets the field of that name in its block, or else the stack's own field
+            // of that name, or else the first field of that name
+            for (var i = 0; i < resolved.Count; i++)
+            {
+                var (key, _, _, block) = resolved[i];
+
+                if (shown.Contains(i))
+                {
+                    continue;
+                }
+
+                var target = block == null ? -1 : FindField(f => f.Block != null
+                    && (f.Block.Equals(block, StringComparison.OrdinalIgnoreCase) || f.Block.EndsWith($".{block}", StringComparison.OrdinalIgnoreCase))
+                    && (f.Name.Equals(key, StringComparison.OrdinalIgnoreCase) || f.Name.EndsWith($".{key}", StringComparison.OrdinalIgnoreCase)));
+
+                if (target < 0)
+                {
+                    target = FindField(f => f.Block == null && f.Name.Equals(key, StringComparison.OrdinalIgnoreCase)) is var own and >= 0
+                        ? own
+                        : FindField(f => f.Name.Equals(key, StringComparison.OrdinalIgnoreCase));
+                }
+
+                if (target >= 0)
+                {
+                    shown.Add(i);
+                    fieldKeys.TryAdd(target, i);
+                }
+            }
+
+            int FindField(Func<(string Name, KVObject Field, string Stack, string? Block), bool> match)
+            {
+                for (var i = 0; i < fields.Count; i++)
+                {
+                    if (match(fields[i]))
+                    {
+                        return i;
+                    }
+                }
+
+                return -1;
             }
 
             List<(string Key, KVObject? Value, string Source, ValueSource Kind, bool Curve)> Group(string name)
@@ -1374,23 +1379,21 @@ namespace GUI.Types.Viewers
 
             (string Key, KVObject? Value, string Source, ValueSource Kind, bool Curve) Row(int i, string name, bool curve)
             {
-                var (_, value, source, subStack) = resolved[i];
-                var origin = source == null ? string.Empty : subStack == null ? source : $"{source} via {subStack}";
+                var (_, value, source, block) = resolved[i];
+                var origin = source == null ? string.Empty : block == null ? source : $"{source} via {block}";
                 return (name, value, origin, source == null ? ValueSource.Own : ValueSource.Inherited, curve);
             }
 
-            foreach (var (name, field, stack) in fields)
+            for (var f = 0; f < fields.Count; f++)
             {
+                var (name, field, stack, _) = fields[f];
                 var group = Group(field.GetSubCollection("_system_properties")?.GetStringProperty("property_group") is { Length: > 0 } propertyGroup ? propertyGroup : "General");
                 var dataType = field.GetStringProperty("data_type");
                 var curve = dataType == "float6";
 
-                if (byFieldName.TryGetValue(name, out var i))
+                if (fieldKeys.TryGetValue(f, out var i))
                 {
-                    if (shown.Add(i))
-                    {
-                        group.Add(Row(i, name, curve));
-                    }
+                    group.Add(Row(i, name, curve));
                 }
                 else if (defaultsBox.Checked && dataType != "public_opvar")
                 {
@@ -1401,18 +1404,15 @@ namespace GUI.Types.Viewers
 
             for (var i = 0; i < resolved.Count; i++)
             {
-                var (key, _, _, subStack) = resolved[i];
+                var key = resolved[i].Key;
 
                 if (shown.Contains(i) || key.Equals("type", StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
                 }
 
-                var groupName = subStack != null && fieldNames.ContainsKey(subStack) ? subStack
-                    : EventKeys.Contains(key) ? "Event"
-                    : fields.Count > 0 ? "Not read by this stack" : "Keys";
-                var curve = subStack != null && fieldNames.TryGetValue(key, out var field) && field.GetStringProperty("data_type") == "float6";
-                Group(groupName).Add(Row(i, key, curve));
+                var groupName = EventKeys.Contains(key) ? "Event" : fields.Count > 0 ? "Not read by this stack" : "Keys";
+                Group(groupName).Add(Row(i, key, curve: false));
             }
 
             var values = groups.SelectMany(static g => g.Rows).Where(static r => r.Value != null)
